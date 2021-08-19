@@ -1,9 +1,5 @@
-[package]
-name = "snesulator"
-version = "0.1.0"
-edition = "2018"
-description = "a siple SNES emulator"
-keywords = ["emulator", "snes", "famicom"]
-categories = ["emulators"]
-
-[dependencies]
+[workspace]
+members = [
+    "snesulate",
+    "snesulate-native"
+]

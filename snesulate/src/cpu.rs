@@ -5,6 +5,23 @@
 //! - the [super famicom wiki page](https://wiki.superfamicom.org/65816-reference)
 //! - <https://apprize.best/programming/65816/>
 
+/// The 24-bit address type used
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Addr24 {
+    pub bank: u8,
+    pub addr: u16,
+}
+
+impl Addr24 {
+    pub const fn new(bank: u8, addr: u16) -> Self {
+        Self { bank, addr }
+    }
+
+    pub const fn is_lower_half(&self) -> bool {
+        self.addr < 0x8000
+    }
+}
+
 /// Structure containing the processor registers
 #[derive(Debug, Clone)]
 pub struct Regs {
@@ -16,14 +33,12 @@ pub struct Regs {
     pub y: u16,
     /// The stack pointer
     pub sp: u16,
-    /// The direct page register
+    /// The direct page register (the direct page is limited to bank zero)
     pub dp: u16,
-    /// The program counter
-    pub pc: u16,
+    /// The program counter with the program bank register.
+    pub pc: Addr24,
     /// The data bank register
     pub db: u8,
-    /// The program bank register
-    pub pb: u8,
     /// The processor status
     pub status: Status,
     /// 6502 emulation mode

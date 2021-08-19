@@ -1,1 +1,3 @@
-/target
+**/target
+/snesulate/Cargo.lock
+Cargo.lock
