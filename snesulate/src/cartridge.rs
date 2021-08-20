@@ -86,6 +86,7 @@ pub struct Header {
     rom_size: u32,
     ram_size: u32,
     country: u8,
+    checksum: u16,
     version: u8,
 }
 
@@ -166,6 +167,7 @@ impl Header {
                 rom_size,
                 ram_size,
                 country,
+                checksum,
                 version,
             },
             score,
@@ -211,6 +213,12 @@ impl Cartridge {
         for chunk in rom.chunks_mut(bytes.len()) {
             chunk.copy_from_slice(&bytes[..chunk.len()])
         }
+
+        let checksum = rom.iter().fold(0u16, |b, i| b.wrapping_add((*i).into()));
+        if checksum != header.checksum {
+            println!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
+        }
+
         let ram_size = header.ram_size;
 
         Ok(Self {

@@ -4,6 +4,8 @@
 //!
 //! - the [super famicom wiki page](https://wiki.superfamicom.org/65816-reference)
 //! - <https://apprize.best/programming/65816/>
+//! - <https://www.westerndesigncenter.com/wdc/documentation/w65c816s.pdf>
+//! - <https://wiki.superfamicom.org/uploads/assembly-programming-manual-for-w65c816.pdf>
 
 use crate::device::Addr24;
 use core::ops::{BitAnd, BitOr, Not};

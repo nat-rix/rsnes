@@ -100,6 +100,11 @@ impl Device {
         self.cpu.regs.pc = Addr24::new(0, self.read_u16(Addr24::new(0, 0xfffc)));
     }
 
+    pub fn fetch_instr(&mut self) {
+        let opcode = self.access(ReadAccessU8, self.cpu.regs.pc);
+        todo!()
+    }
+
     pub fn read_u8(&mut self, addr: Addr24) -> u8 {
         let val = self.access(ReadAccessU8, addr);
         self.open_bus = val;
