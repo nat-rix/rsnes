@@ -44,4 +44,6 @@ fn main() {
         "[info] Cartridge header information: {:#?}",
         cartridge.header()
     );
+    let mut device = snesulate::device::Device::new();
+    device.load_cartridge(cartridge);
 }

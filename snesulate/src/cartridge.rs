@@ -7,7 +7,7 @@
 
 use std::convert::TryInto;
 
-use crate::cpu::Addr24;
+use crate::device::{Access, Addr24};
 
 const MINIMUM_SIZE: usize = 0x8000;
 
@@ -173,6 +173,7 @@ impl Header {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Cartridge {
     header: Header,
     is_lorom: bool,
@@ -224,47 +225,39 @@ impl Cartridge {
         &self.header
     }
 
-    fn read_ram(&self, index: usize) -> u8 {
-        // this is safe, because `n & (len - 1) < len` for all n
-        *unsafe { self.ram.get_unchecked(index & (self.ram.len() - 1)) }
+    fn access_ram<A: Access>(&self, access: A, index: usize) -> A::Output {
+        access.access_slice(&self.ram, index & (self.ram.len() - 1))
     }
 
-    fn read_rom(&self, index: usize) -> u8 {
-        // this is safe, because `n & (len - 1) < len` for all n
-        *unsafe { self.rom.get_unchecked(index & (self.rom.len() - 1)) }
+    fn access_rom<A: Access>(&self, access: A, index: usize) -> A::Output {
+        access.access_slice(&self.rom, index & (self.rom.len() - 1))
     }
 
-    /// Read byte from cartridge
-    pub fn read_byte_unchecked(&self, addr: Addr24) -> Option<u8> {
+    /// Read from cartridge
+    pub fn access<A: Access>(&self, access: A, addr: Addr24) -> Option<A::Output> {
         if self.is_lorom {
-            if addr.is_lower_half() {
-                if (0x70..0x7e).contains(&addr.bank) || addr.bank >= 0xf0 {
-                    Some(self.read_ram(((addr.bank as usize & 0xf) << 15) | addr.addr as usize))
-                } else {
-                    None
-                }
-            } else if addr.bank >= 0x40 {
-                Some(self.read_rom(
-                    (((addr.bank as usize) << 15) | addr.addr as usize) & (self.rom.len() - 1),
-                ))
-            } else {
-                None
+            match (addr.bank, addr.addr) {
+                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(self.access_ram(
+                    access,
+                    ((addr.bank as usize & 0xf) << 15) | addr.addr as usize,
+                )),
+                (0x40.., _) | (_, 0x8000..) => Some(self.access_rom(
+                    access,
+                    ((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize,
+                )),
+                _ => None,
             }
         } else {
-            if !addr.is_lower_half() {
-                if addr.bank >= 0x40 {
-                    Some(self.read_rom(((addr.bank as usize & 0x3f) << 16) | addr.addr as usize))
-                } else {
-                    None
-                }
-            } else if addr.bank & 0x7f < 0x40 && addr.is_lower_half() && addr.addr >= 0x6000 {
-                Some(
-                    self.read_ram(
-                        ((addr.bank as usize & 0x3f) << 13) | (addr.addr as usize & 0x1fff),
-                    ),
-                )
-            } else {
-                None
+            match (addr.bank & 0x7f, addr.addr) {
+                (0..=0x3f, 0x6000..=0x7fff) => Some(self.access_ram(
+                    access,
+                    ((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize,
+                )),
+                (0x40.., _) | (_, 0x8000..) => Some(self.access_rom(
+                    access,
+                    ((addr.bank as usize & 0x3f) << 16) | addr.addr as usize,
+                )),
+                _ => None,
             }
         }
     }

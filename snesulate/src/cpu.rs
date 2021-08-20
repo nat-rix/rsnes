@@ -5,22 +5,8 @@
 //! - the [super famicom wiki page](https://wiki.superfamicom.org/65816-reference)
 //! - <https://apprize.best/programming/65816/>
 
-/// The 24-bit address type used
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Addr24 {
-    pub bank: u8,
-    pub addr: u16,
-}
-
-impl Addr24 {
-    pub const fn new(bank: u8, addr: u16) -> Self {
-        Self { bank, addr }
-    }
-
-    pub const fn is_lower_half(&self) -> bool {
-        self.addr < 0x8000
-    }
-}
+use crate::device::Addr24;
+use core::ops::{BitAnd, BitOr, Not};
 
 /// Structure containing the processor registers
 #[derive(Debug, Clone)]
@@ -42,8 +28,10 @@ pub struct Regs {
     /// The processor status
     pub status: Status,
     /// 6502 emulation mode
-    is_emulation: bool,
+    pub is_emulation: bool,
 }
+
+impl Regs {}
 
 /// Processor status flags
 #[repr(transparent)]
@@ -79,8 +67,47 @@ impl Status {
     pub const BREAK: Self = Self(0b0001_0000);
 }
 
+impl BitAnd for Status {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl BitOr for Status {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl Not for Status {
+    type Output = Self;
+    fn not(self) -> Self {
+        Self(!self.0)
+    }
+}
+
 /// Structure for emulating the 65816 Processor
 #[derive(Debug, Clone)]
 pub struct Cpu {
-    regs: Regs,
+    pub regs: Regs,
+}
+
+impl Cpu {
+    pub fn new() -> Self {
+        Self {
+            regs: Regs {
+                a: 0,
+                x: 0,
+                y: 0,
+                sp: 0x100,
+                dp: 0,
+                pc: Addr24::default(),
+                db: 0,
+                status: Status(0),
+                is_emulation: false,
+            },
+        }
+    }
 }
