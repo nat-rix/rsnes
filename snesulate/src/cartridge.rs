@@ -225,16 +225,18 @@ impl Cartridge {
         &self.header
     }
 
-    fn access_ram<A: Access>(&self, access: A, index: usize) -> A::Output {
-        access.access_slice(&self.ram, index & (self.ram.len() - 1))
+    fn access_ram<A: Access>(&mut self, access: A, index: usize) -> A::Output {
+        let mask = self.ram.len() - 1;
+        access.access_slice(&mut self.ram, index & mask)
     }
 
-    fn access_rom<A: Access>(&self, access: A, index: usize) -> A::Output {
-        access.access_slice(&self.rom, index & (self.rom.len() - 1))
+    fn access_rom<A: Access>(&mut self, access: A, index: usize) -> A::Output {
+        let mask = self.rom.len() - 1;
+        access.access_slice(&mut self.rom, index & mask)
     }
 
     /// Read from cartridge
-    pub fn access<A: Access>(&self, access: A, addr: Addr24) -> Option<A::Output> {
+    pub fn access<A: Access>(&mut self, access: A, addr: Addr24) -> Option<A::Output> {
         if self.is_lorom {
             match (addr.bank, addr.addr) {
                 ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(self.access_ram(

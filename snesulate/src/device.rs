@@ -24,16 +24,20 @@ impl Addr24 {
 
 pub trait Access {
     type Output: std::fmt::Debug + Clone + Copy;
-    fn access_slice(&self, slice: &[u8], index: usize) -> Self::Output;
+    fn access_slice(&self, slice: &mut [u8], index: usize) -> Self::Output;
     fn on_err(device: &Device) -> Self::Output;
 }
 
 pub struct ReadAccessU8;
 pub struct ReadAccessU16;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WriteAccessU8(u8);
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WriteAccessU16(u16);
 
 impl Access for ReadAccessU8 {
     type Output = u8;
-    fn access_slice(&self, slice: &[u8], index: usize) -> u8 {
+    fn access_slice(&self, slice: &mut [u8], index: usize) -> u8 {
         slice[index]
     }
     fn on_err(device: &Device) -> u8 {
@@ -43,12 +47,28 @@ impl Access for ReadAccessU8 {
 
 impl Access for ReadAccessU16 {
     type Output = u16;
-    fn access_slice(&self, slice: &[u8], index: usize) -> u16 {
+    fn access_slice(&self, slice: &mut [u8], index: usize) -> u16 {
         u16::from_le_bytes(slice[index..index + 2].try_into().unwrap())
     }
     fn on_err(device: &Device) -> u16 {
         ((device.open_bus as u16) << 8) | (device.open_bus as u16)
     }
+}
+
+impl Access for WriteAccessU8 {
+    type Output = ();
+    fn access_slice(&self, slice: &mut [u8], index: usize) {
+        slice[index] = self.0
+    }
+    fn on_err(_device: &Device) {}
+}
+
+impl Access for WriteAccessU16 {
+    type Output = ();
+    fn access_slice(&self, slice: &mut [u8], index: usize) {
+        slice[index..index + 2].copy_from_slice(&self.0.to_le_bytes())
+    }
+    fn on_err(_device: &Device) {}
 }
 
 #[derive(Debug, Clone)]
@@ -92,18 +112,18 @@ impl Device {
         val
     }
 
-    pub fn access<A: Access>(&self, access: A, addr: Addr24) -> A::Output {
+    pub fn access<A: Access>(&mut self, access: A, addr: Addr24) -> A::Output {
         if (0x7e..=0x7f).contains(&addr.bank) {
             // address bus A + /WRAM
             access.access_slice(
-                &self.ram,
+                &mut self.ram,
                 ((addr.bank as usize & 1) << 16) | addr.addr as usize,
             )
         } else if addr.bank & 0xc0 == 0 || addr.bank & 0xc0 == 0x80 {
             match addr.addr {
                 0x0000..=0x1fff => {
                     // address bus A + /WRAM
-                    access.access_slice(&self.ram, addr.addr as usize)
+                    access.access_slice(&mut self.ram, addr.addr as usize)
                 }
                 (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
                     // address bus A
@@ -121,7 +141,7 @@ impl Device {
                 0x8000..=0xffff => {
                     // cartridge read on region $8000-$FFFF
                     self.cartridge
-                        .as_ref()
+                        .as_mut()
                         .unwrap()
                         .access(access, addr)
                         .unwrap_or_else(|| A::on_err(&self))
