@@ -3,7 +3,7 @@
 //! # Literature
 //!
 //! - the [super famicom wiki page](https://wiki.superfamicom.org/memory-mapping)
-//! - http://patrickjohnston.org/ASM/ROM data/snestek.htm
+//! - <http://patrickjohnston.org/ASM/ROM data/snestek.htm>
 
 use std::convert::TryInto;
 

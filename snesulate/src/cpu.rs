@@ -8,7 +8,7 @@
 //! - <https://wiki.superfamicom.org/uploads/assembly-programming-manual-for-w65c816.pdf>
 
 use crate::device::Addr24;
-use core::ops::{BitAnd, BitOr, Not};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
 /// Structure containing the processor registers
 #[derive(Debug, Clone)]
@@ -40,6 +40,8 @@ impl Regs {}
 #[derive(Debug, Clone, Copy)]
 pub struct Status(u8);
 
+macro_rules! bitor { ($t:ident, $($vs:ident)|*) => { $t($(<$t>::$vs.0)|*) }; }
+
 impl Status {
     /// Negative Flag
     pub const NEGATIVE: Self = Self(0b1000_0000);
@@ -48,11 +50,13 @@ impl Status {
     /// Memory/Accumulator size
     ///  - `0`: 16-bit
     ///  - `1`: 8-bit
+    ///
     /// **native only**
     pub const ACCUMULATION: Self = Self(0b0010_0000);
     /// Index register size
     ///  - `0`: 16-bit
     ///  - `1`: 8-bit
+    ///
     /// **native only**
     pub const INDEX_REGISTER_SIZE: Self = Self(0b0001_0000);
     /// Decimal Flag
@@ -62,11 +66,25 @@ impl Status {
     ///  - `0`: Disabled
     pub const IRQ_DISABLE: Self = Self(0b0000_0100);
     /// Zero Flag
+    ///
+    /// # Note
+    ///
+    /// this is not actually zero, but indicates that
+    /// an operation resulted in writing a zero
     pub const ZERO: Self = Self(0b0000_0010);
     /// Carry Flag
     pub const CARRY: Self = Self(0b0000_0001);
-    /// Break Flag, **6502 emulation mode only**
+    /// Break Flag
+    ///
+    /// **6502 emulation mode only**
     pub const BREAK: Self = Self(0b0001_0000);
+
+    /// The value that the status register gets reset to
+    pub const RESET_DEFAULT: Self = bitor!(Self, ACCUMULATION | INDEX_REGISTER_SIZE | IRQ_DISABLE);
+
+    pub const fn has(&self, flag: Self) -> bool {
+        self.0 & flag.0 > 0
+    }
 }
 
 impl BitAnd for Status {
@@ -80,6 +98,18 @@ impl BitOr for Status {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for Status {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0
+    }
+}
+
+impl BitAndAssign for Status {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0
     }
 }
 
@@ -107,9 +137,13 @@ impl Cpu {
                 dp: 0,
                 pc: Addr24::default(),
                 db: 0,
-                status: Status(0),
-                is_emulation: false,
+                status: Status::RESET_DEFAULT,
+                is_emulation: true,
             },
         }
+    }
+
+    pub const fn get_data_addr(&self, addr: u16) -> Addr24 {
+        Addr24::new(self.regs.db, addr)
     }
 }
