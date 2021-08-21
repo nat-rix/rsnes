@@ -124,6 +124,7 @@ impl Not for Status {
 #[derive(Debug, Clone)]
 pub struct Cpu {
     pub regs: Regs,
+    nmitimen: u8,
 }
 
 impl Cpu {
@@ -140,10 +141,36 @@ impl Cpu {
                 status: Status::RESET_DEFAULT,
                 is_emulation: true,
             },
+            nmitimen: 0,
         }
     }
 
     pub const fn get_data_addr(&self, addr: u16) -> Addr24 {
         Addr24::new(self.regs.db, addr)
+    }
+
+    pub fn read_internal_register(&self, id: u16) -> Option<u8> {
+        match id {
+            _ => todo!("internal register {:04x} accessed", id),
+        }
+    }
+
+    pub fn write_internal_register(&mut self, id: u16, val: u8) {
+        match id {
+            0x4200 => {
+                // NMITIMEN - Interrupt Enable Flags
+                // TODO: implement expected behavior
+                self.nmitimen = val
+            }
+            0x420b => {
+                // MDMAEN - DMA Enable
+                // TODO: implement expected behavior
+            }
+            0x420c => {
+                // HDMAEN - HDMA Enable
+                // TODO: implement expected behavior
+            }
+            _ => todo!("internal register {:04x} accessed", id),
+        }
     }
 }
