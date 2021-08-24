@@ -1,6 +1,6 @@
 //! The SNES/Famicom device
 
-use crate::{cartridge::Cartridge, cpu::Cpu, spc700::Spc700};
+use crate::{cartridge::Cartridge, cpu::Cpu, ppu::Ppu, spc700::Spc700};
 use core::convert::TryInto;
 
 const RAM_SIZE: usize = 0x20000;
@@ -22,116 +22,59 @@ impl Addr24 {
     }
 }
 
-pub trait Access {
-    type Output: std::fmt::Debug + Clone + Copy + OpenBus;
-    type Buf: AsRef<[u8]> + AsMut<[u8]> + Default;
-    fn access_slice(&self, slice: &mut [u8], index: usize) -> Self::Output;
-    fn is_read() -> bool;
-}
+pub trait Data: Sized + Default + Clone + Copy {
+    type Arr: AsRef<[u8]> + AsMut<[u8]> + Default + std::fmt::Debug + Clone + Copy;
+    fn to_bytes(self) -> Self::Arr;
+    fn from_bytes(bytes: &Self::Arr) -> Self;
 
-pub struct ReadAccess<P>(core::marker::PhantomData<P>);
+    fn parse(data: &[u8], index: usize) -> Self;
+    fn write_to(self, data: &mut [u8], index: usize);
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WriteAccess<P>(pub P);
-
-impl<P> ReadAccess<P> {
-    pub const fn new() -> Self {
-        Self(core::marker::PhantomData)
-    }
-}
-
-pub trait OpenBus {
-    fn from_open_bus(value: u8) -> Self;
     fn to_open_bus(self) -> u8;
+    fn from_open_bus(open_bus: u8) -> Self;
 }
 
-impl OpenBus for () {
-    fn from_open_bus(_value: u8) {}
-    fn to_open_bus(self) -> u8 {
-        unimplemented!()
+impl Data for u8 {
+    type Arr = [u8; 1];
+    fn to_bytes(self) -> [u8; 1] {
+        [self]
     }
-}
-
-impl OpenBus for u8 {
-    fn from_open_bus(value: u8) -> u8 {
-        value
+    fn from_bytes(bytes: &[u8; 1]) -> Self {
+        bytes[0]
+    }
+    fn parse(data: &[u8], index: usize) -> Self {
+        data[index]
+    }
+    fn write_to(self, data: &mut [u8], index: usize) {
+        data[index] = self
     }
     fn to_open_bus(self) -> u8 {
         self
     }
+    fn from_open_bus(open_bus: u8) -> Self {
+        open_bus
+    }
 }
 
-impl OpenBus for u16 {
-    fn from_open_bus(value: u8) -> u16 {
-        ((value as u16) << 8) | (value as u16)
+impl Data for u16 {
+    type Arr = [u8; 2];
+    fn to_bytes(self) -> [u8; 2] {
+        self.to_le_bytes()
+    }
+    fn from_bytes(bytes: &[u8; 2]) -> Self {
+        u16::from_le_bytes(*bytes)
+    }
+    fn parse(data: &[u8], index: usize) -> Self {
+        u16::from_le_bytes(data[index..index + 2].try_into().unwrap())
+    }
+    fn write_to(self, data: &mut [u8], index: usize) {
+        data[index..index + 2].copy_from_slice(&self.to_le_bytes())
     }
     fn to_open_bus(self) -> u8 {
         (self >> 8) as u8
     }
-}
-
-impl OpenBus for Addr24 {
-    fn from_open_bus(value: u8) -> Addr24 {
-        Addr24::new(value, ((value as u16) << 8) | (value as u16))
-    }
-    fn to_open_bus(self) -> u8 {
-        (self.addr >> 8) as u8
-    }
-}
-
-impl Access for ReadAccess<u8> {
-    type Output = u8;
-    type Buf = [u8; 1];
-    fn access_slice(&self, slice: &mut [u8], index: usize) -> u8 {
-        slice[index]
-    }
-    fn is_read() -> bool {
-        true
-    }
-}
-
-impl Access for ReadAccess<u16> {
-    type Output = u16;
-    type Buf = [u8; 2];
-    fn access_slice(&self, slice: &mut [u8], index: usize) -> u16 {
-        u16::from_le_bytes(slice[index..index + 2].try_into().unwrap())
-    }
-    fn is_read() -> bool {
-        true
-    }
-}
-
-impl Access for ReadAccess<Addr24> {
-    type Output = Addr24;
-    type Buf = [u8; 3];
-    fn access_slice(&self, slice: &mut [u8], index: usize) -> Addr24 {
-        let [bank, addr @ ..]: [u8; 3] = slice[index..index + 3].try_into().unwrap();
-        Addr24::new(bank, u16::from_le_bytes(addr))
-    }
-    fn is_read() -> bool {
-        true
-    }
-}
-
-impl Access for WriteAccess<u8> {
-    type Output = ();
-    type Buf = [u8; 1];
-    fn access_slice(&self, slice: &mut [u8], index: usize) {
-        slice[index] = self.0
-    }
-    fn is_read() -> bool {
-        false
-    }
-}
-
-impl Access for WriteAccess<u16> {
-    type Output = ();
-    type Buf = [u8; 2];
-    fn access_slice(&self, slice: &mut [u8], index: usize) {
-        slice[index..index + 2].copy_from_slice(&self.0.to_le_bytes())
-    }
-    fn is_read() -> bool {
-        false
+    fn from_open_bus(open_bus: u8) -> Self {
+        open_bus as u16 | ((open_bus as u16) << 8)
     }
 }
 
@@ -139,6 +82,7 @@ impl Access for WriteAccess<u16> {
 pub struct Device {
     pub(crate) cpu: Cpu,
     pub(crate) spc: Spc700,
+    pub(crate) ppu: Ppu,
     cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
     open_bus: u8,
@@ -150,6 +94,7 @@ impl Device {
         Self {
             cpu: Cpu::new(),
             spc: Spc700::new(),
+            ppu: Ppu::new(),
             cartridge: None,
             open_bus: 0,
             ram: [0; RAM_SIZE],
@@ -159,20 +104,19 @@ impl Device {
     pub fn load_cartridge(&mut self, cartridge: Cartridge) {
         self.cartridge = Some(cartridge);
         self.cpu = Cpu::new();
-        self.reset_program_counter()
+        self.reset_program_counter();
     }
 
     pub fn reset_program_counter(&mut self) {
+        println!("resetting program counter from {:?}", self.cpu.regs.pc);
         self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(Addr24::new(0, 0xfffc)));
+        println!("to {:?}", self.cpu.regs.pc);
     }
 
     /// Fetch a value from the program counter memory region
-    pub fn load<P>(&mut self) -> <ReadAccess<P> as Access>::Output
-    where
-        ReadAccess<P>: Access,
-    {
-        let val = self.read::<P>(self.cpu.regs.pc);
-        let len = core::mem::size_of::<P>() as u16;
+    pub fn load<D: Data>(&mut self) -> D {
+        let val = self.read::<D>(self.cpu.regs.pc);
+        let len = core::mem::size_of::<D>() as u16;
         // yes, an overflow on addr does not carry the bank
         self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(len);
         val
@@ -180,63 +124,38 @@ impl Device {
 
     /// Read a value from the mapped memory at the specified address.
     /// This method also updates open bus.
-    pub fn read<P>(&mut self, addr: Addr24) -> <ReadAccess<P> as Access>::Output
-    where
-        ReadAccess<P>: Access,
-    {
-        let val = self.access(ReadAccess::<P>::new(), addr);
-        self.open_bus = val.to_open_bus();
-        val
+    pub fn read<D: Data>(&mut self, addr: Addr24) -> D {
+        let value = self.read_data::<D>(addr);
+        self.open_bus = value.to_open_bus();
+        value
     }
 
     /// Write a value to the mapped memory at the specified address.
     /// This method also updates open bus.
-    pub fn write<P: OpenBus + Copy>(
-        &mut self,
-        addr: Addr24,
-        value: P,
-    ) -> <WriteAccess<P> as Access>::Output
-    where
-        WriteAccess<P>: Access,
-    {
+    pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
         self.open_bus = value.to_open_bus();
-        self.access(WriteAccess::<P>(value), addr)
+        self.write_data(addr, value)
     }
+}
 
-    /// Access the mapped memory at the specified address
+impl Device {
+    /// Read the mapped memory at the specified address
     ///
     /// # Note
     ///
     /// This method does not modify open bus
-    pub fn access<A: Access>(&mut self, access: A, addr: Addr24) -> A::Output {
+    pub fn read_data<D: Data>(&self, addr: Addr24) -> D {
         if (0x7e..=0x7f).contains(&addr.bank) {
             // address bus A + /WRAM
-            access.access_slice(
-                &mut self.ram,
+            D::parse(
+                &self.ram,
                 ((addr.bank as usize & 1) << 16) | addr.addr as usize,
             )
         } else if addr.bank & 0xc0 == 0 || addr.bank & 0xc0 == 0x80 {
-            macro_rules! rw {
-                ($read:expr, $write:expr) => {{
-                    let mut buf = A::Buf::default();
-                    if A::is_read() {
-                        for (i, v) in buf.as_mut().iter_mut().enumerate() {
-                            *v = $read(addr.addr.wrapping_add(i as u16))
-                        }
-                        access.access_slice(buf.as_mut(), 0)
-                    } else {
-                        let out = access.access_slice(buf.as_mut(), 0);
-                        for (i, v) in buf.as_ref().iter().enumerate() {
-                            $write(addr.addr.wrapping_add(i as u16), *v)
-                        }
-                        out
-                    }
-                }};
-            }
             match addr.addr {
                 0x0000..=0x1fff => {
                     // address bus A + /WRAM
-                    access.access_slice(&mut self.ram, addr.addr as usize)
+                    D::parse(&self.ram, addr.addr as usize)
                 }
                 (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
                     // address bus A
@@ -245,35 +164,85 @@ impl Device {
                 0x2100..=0x21ff => {
                     // address bus B
                     match addr.addr {
-                        0x2140..=0x2143 => access.access_slice(
-                            if A::is_read() {
-                                &mut self.spc.output
-                            } else {
-                                &mut self.spc.input
-                            },
-                            (addr.addr & 0b11) as usize,
-                        ),
+                        0x2140..=0x2143 => D::parse(&self.spc.output, (addr.addr & 0b11) as usize),
                         _ => todo!("unimplemented address bus B read at 0x{:04x}", addr.addr),
                     }
                 }
                 0x4000..=0x43ff => {
                     // internal CPU registers
                     // see https://wiki.superfamicom.org/registers
-                    rw!(
-                        |addr| self
+                    let mut data = <D::Arr as Default>::default();
+                    for (i, d) in data.as_mut().iter_mut().enumerate() {
+                        *d = self
                             .cpu
-                            .read_internal_register(addr)
-                            .unwrap_or(self.open_bus),
-                        |addr, val| self.cpu.write_internal_register(addr, val)
-                    )
+                            .read_internal_register(addr.addr.wrapping_add(i as u16))
+                            .unwrap_or(self.open_bus)
+                    }
+                    D::from_bytes(&data)
                 }
                 0x8000..=0xffff => {
                     // cartridge read on region $8000-$FFFF
                     self.cartridge
-                        .as_mut()
+                        .as_ref()
                         .unwrap()
-                        .access(access, addr)
-                        .unwrap_or_else(|| A::Output::from_open_bus(self.open_bus))
+                        .read(addr)
+                        .unwrap_or_else(|| D::from_open_bus(self.open_bus))
+                }
+            }
+        } else {
+            // cartridge read of bank $40-$7D or $C0-$FF
+            todo!()
+        }
+    }
+
+    /// Write the mapped memory at the specified address
+    ///
+    /// # Note
+    ///
+    /// This method does not modify open bus
+    pub fn write_data<D: Data>(&mut self, addr: Addr24, value: D) {
+        if (0x7e..=0x7f).contains(&addr.bank) {
+            // address bus A + /WRAM
+            value.write_to(
+                &mut self.ram,
+                ((addr.bank as usize & 1) << 16) | addr.addr as usize,
+            )
+        } else if addr.bank & 0xc0 == 0 || addr.bank & 0xc0 == 0x80 {
+            match addr.addr {
+                0x0000..=0x1fff => {
+                    // address bus A + /WRAM
+                    value.write_to(&mut self.ram, addr.addr as usize)
+                }
+                (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
+                    // address bus A
+                    todo!()
+                }
+                0x2100..=0x21ff => {
+                    // address bus B
+                    match addr.addr {
+                        0x2100..=0x2133 => {
+                            for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
+                                self.ppu
+                                    .write_register((addr.addr & 0xff) as u8 + i as u8, *d)
+                            }
+                        }
+                        0x2140..=0x2143 => {
+                            value.write_to(&mut self.spc.output, (addr.addr & 0b11) as usize)
+                        }
+                        _ => todo!("unimplemented address bus B read at 0x{:04x}", addr.addr),
+                    }
+                }
+                0x4000..=0x43ff => {
+                    // internal CPU registers
+                    // see https://wiki.superfamicom.org/registers
+                    for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
+                        self.cpu
+                            .write_internal_register(addr.addr.wrapping_add(i as u16), *d)
+                    }
+                }
+                0x8000..=0xffff => {
+                    // cartridge read on region $8000-$FFFF
+                    self.cartridge.as_mut().unwrap().write(addr, value)
                 }
             }
         } else {

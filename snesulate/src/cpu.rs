@@ -33,7 +33,15 @@ pub struct Regs {
     pub is_emulation: bool,
 }
 
-impl Regs {}
+impl Regs {
+    pub const fn a8(&self) -> u8 {
+        (self.a & 0xff) as u8
+    }
+
+    pub fn set_a8(&mut self, val: u8) {
+        self.a = (self.a & 0xff00) | val as u16
+    }
+}
 
 /// Processor status flags
 #[repr(transparent)]
@@ -145,8 +153,32 @@ impl Cpu {
         }
     }
 
+    /// Indicate if the A, X, Y registers are in 8-bit mode
+    pub const fn is_reg8(&self) -> bool {
+        self.regs.status.has(Status::ACCUMULATION)
+    }
+
+    /// Build an [`Addr24`] from an 16-bit address with the data bank register
     pub const fn get_data_addr(&self, addr: u16) -> Addr24 {
         Addr24::new(self.regs.db, addr)
+    }
+
+    pub fn update_nz8(&mut self, val: u8) {
+        if val > 0 {
+            self.regs.status = (self.regs.status & !(Status::ZERO | Status::NEGATIVE))
+                | Status(val & Status::NEGATIVE.0);
+        } else {
+            self.regs.status = (self.regs.status & !Status::NEGATIVE) | Status::ZERO
+        }
+    }
+
+    pub fn update_nz16(&mut self, val: u16) {
+        if val > 0 {
+            self.regs.status = (self.regs.status & !(Status::ZERO | Status::NEGATIVE))
+                | Status((val >> 8) as u8 & Status::NEGATIVE.0);
+        } else {
+            self.regs.status = (self.regs.status & !Status::NEGATIVE) | Status::ZERO
+        }
     }
 
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {

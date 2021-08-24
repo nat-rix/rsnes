@@ -7,7 +7,7 @@
 
 use std::convert::TryInto;
 
-use crate::device::{Access, Addr24};
+use crate::device::{Addr24, Data};
 
 const MINIMUM_SIZE: usize = 0x8000;
 
@@ -233,41 +233,60 @@ impl Cartridge {
         &self.header
     }
 
-    fn access_ram<A: Access>(&mut self, access: A, index: usize) -> A::Output {
-        let mask = self.ram.len() - 1;
-        access.access_slice(&mut self.ram, index & mask)
-    }
-
-    fn access_rom<A: Access>(&mut self, access: A, index: usize) -> A::Output {
-        let mask = self.rom.len() - 1;
-        access.access_slice(&mut self.rom, index & mask)
-    }
-
-    /// Read from cartridge
-    pub fn access<A: Access>(&mut self, access: A, addr: Addr24) -> Option<A::Output> {
+    /// Read from the cartridge
+    pub fn read<D: Data>(&self, addr: Addr24) -> Option<D> {
         if self.is_lorom {
             match (addr.bank, addr.addr) {
-                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(self.access_ram(
-                    access,
+                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(D::parse(
+                    &self.ram,
                     ((addr.bank as usize & 0xf) << 15) | addr.addr as usize,
                 )),
-                (0x40.., _) | (_, 0x8000..) => Some(self.access_rom(
-                    access,
+                (0x40.., _) | (_, 0x8000..) => Some(D::parse(
+                    &self.rom,
                     ((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize,
                 )),
                 _ => None,
             }
         } else {
             match (addr.bank & 0x7f, addr.addr) {
-                (0..=0x3f, 0x6000..=0x7fff) => Some(self.access_ram(
-                    access,
+                (0..=0x3f, 0x6000..=0x7fff) => Some(D::parse(
+                    &self.ram,
                     ((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize,
                 )),
-                (0x40.., _) | (_, 0x8000..) => Some(self.access_rom(
-                    access,
+                (0x40.., _) | (_, 0x8000..) => Some(D::parse(
+                    &self.rom,
                     ((addr.bank as usize & 0x3f) << 16) | addr.addr as usize,
                 )),
                 _ => None,
+            }
+        }
+    }
+
+    /// Read from the cartridge
+    pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
+        if self.is_lorom {
+            match (addr.bank, addr.addr) {
+                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => value.write_to(
+                    &mut self.ram,
+                    ((addr.bank as usize & 0xf) << 15) | addr.addr as usize,
+                ),
+                (0x40.., _) | (_, 0x8000..) => value.write_to(
+                    &mut self.rom,
+                    ((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize,
+                ),
+                _ => (),
+            }
+        } else {
+            match (addr.bank & 0x7f, addr.addr) {
+                (0..=0x3f, 0x6000..=0x7fff) => value.write_to(
+                    &mut self.ram,
+                    ((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize,
+                ),
+                (0x40.., _) | (_, 0x8000..) => value.write_to(
+                    &mut self.rom,
+                    ((addr.bank as usize & 0x3f) << 16) | addr.addr as usize,
+                ),
+                _ => (),
             }
         }
     }
