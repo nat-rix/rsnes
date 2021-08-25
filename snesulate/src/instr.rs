@@ -19,7 +19,7 @@ static CYCLES: [u8; 256] = [
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // d^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // e^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // f^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
@@ -58,36 +58,10 @@ impl Device {
                 let addr = self.load_indexed_x(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
-                    let op2 = self.cpu.regs.a8();
-                    let (new, nc) = op1.overflowing_add(op2);
-                    let (new, nc) = if self.cpu.regs.status.has(Status::CARRY) {
-                        let (new, nc2) = new.overflowing_add(1);
-                        (new, nc || nc2)
-                    } else {
-                        (new, nc)
-                    };
-                    self.cpu.regs.status.set_if(Status::CARRY, nc);
-                    let op1v = op1 & 128;
-                    let v = op1v == (op2 & 128) && op1v != (new & 128);
-                    self.cpu.regs.status.set_if(Status::OVERFLOW, v);
-                    self.cpu.update_nz8(new);
-                    self.cpu.regs.set_a8(new);
+                    self.add_carry8(op1);
                 } else {
                     let op1 = self.read::<u16>(addr);
-                    let op2 = self.cpu.regs.a;
-                    let (new, nc) = op1.overflowing_add(op2);
-                    let (new, nc) = if self.cpu.regs.status.has(Status::CARRY) {
-                        let (new, nc2) = new.overflowing_add(1);
-                        (new, nc || nc2)
-                    } else {
-                        (new, nc)
-                    };
-                    self.cpu.regs.status.set_if(Status::CARRY, nc);
-                    let op1v = op1 & 0x8000;
-                    let v = op1v == (op2 & 0x8000) && op1v != (new & 0x8000);
-                    self.cpu.regs.status.set_if(Status::OVERFLOW, v);
-                    self.cpu.update_nz16(new);
-                    self.cpu.regs.a = new;
+                    self.add_carry16(op1);
                     cycles += 1;
                 }
             }
@@ -143,24 +117,55 @@ impl Device {
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
-                match (
-                    self.cpu.regs.is_emulation,
-                    self.cpu.regs.status.has(Status::CARRY),
-                ) {
-                    (true, false) => {
-                        self.cpu.regs.is_emulation = false;
-                        self.cpu.regs.status |= Status::CARRY
-                    }
-                    (false, true) => {
-                        self.cpu.regs.is_emulation = true;
-                        self.cpu.regs.status &= !Status::CARRY
-                    }
-                    _ => (),
+                self.cpu.regs.status.set_if(
+                    Status::CARRY,
+                    core::mem::replace(
+                        &mut self.cpu.regs.is_emulation,
+                        self.cpu.regs.status.has(Status::CARRY),
+                    ),
+                );
+            }
+            0xfd => {
+                // SBC - Subtract with carry
+                let addr = self.load_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = !self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = !self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
                 }
             }
             opcode => todo!("not yet implemented instruction 0x{:02x}", opcode),
         };
         println!("ran '{:02x}' with {} cycles", op, cycles);
+    }
+
+    pub fn add_carry8(&mut self, op1: u8) {
+        let op2 = self.cpu.regs.a8();
+        let (new, nc) = op1.overflowing_add(op2);
+        let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
+        let nc = nc ^ nc2;
+        self.cpu.regs.status.set_if(Status::CARRY, nc);
+        let op1v = op1 & 128;
+        let v = op1v == (op2 & 128) && op1v != (new & 128);
+        self.cpu.regs.status.set_if(Status::OVERFLOW, v);
+        self.cpu.update_nz8(new);
+        self.cpu.regs.set_a8(new);
+    }
+
+    pub fn add_carry16(&mut self, op1: u16) {
+        let op2 = self.cpu.regs.a;
+        let (new, nc) = op1.overflowing_add(op2);
+        let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
+        let nc = nc ^ nc2;
+        self.cpu.regs.status.set_if(Status::CARRY, nc);
+        let op1v = op1 & 0x8000;
+        let v = op1v == (op2 & 0x8000) && op1v != (new & 0x8000);
+        self.cpu.regs.status.set_if(Status::OVERFLOW, v);
+        self.cpu.update_nz16(new);
+        self.cpu.regs.a = new;
     }
 
     pub fn dispatch_instruction(&mut self) {
