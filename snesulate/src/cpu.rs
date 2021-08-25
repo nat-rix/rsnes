@@ -46,7 +46,7 @@ impl Regs {
 /// Processor status flags
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct Status(u8);
+pub struct Status(pub u8);
 
 macro_rules! bitor { ($t:ident, $($vs:ident)|*) => { $t($(<$t>::$vs.0)|*) }; }
 
@@ -92,6 +92,14 @@ impl Status {
 
     pub const fn has(&self, flag: Self) -> bool {
         self.0 & flag.0 > 0
+    }
+
+    pub fn set_if(&mut self, flag: Self, condition: bool) {
+        if condition {
+            *self |= flag
+        } else {
+            *self &= !flag
+        }
     }
 }
 
@@ -183,7 +191,7 @@ impl Cpu {
 
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
-            _ => todo!("internal register {:04x} accessed", id),
+            _ => todo!("internal register 0x{:04x} read", id),
         }
     }
 
@@ -202,7 +210,7 @@ impl Cpu {
                 // HDMAEN - HDMA Enable
                 // TODO: implement expected behavior
             }
-            _ => todo!("internal register {:04x} accessed", id),
+            _ => todo!("internal register 0x{:04x} written", id),
         }
     }
 }

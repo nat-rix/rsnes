@@ -22,7 +22,13 @@ impl Addr24 {
     }
 }
 
-pub trait Data: Sized + Default + Clone + Copy {
+impl std::fmt::Display for Addr24 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:02x}:{:04x}", self.bank, self.addr)
+    }
+}
+
+pub trait Data: std::fmt::Debug + Sized + Default + Clone + Copy {
     type Arr: AsRef<[u8]> + AsMut<[u8]> + Default + std::fmt::Debug + Clone + Copy;
     fn to_bytes(self) -> Self::Arr;
     fn from_bytes(bytes: &Self::Arr) -> Self;
@@ -33,6 +39,10 @@ pub trait Data: Sized + Default + Clone + Copy {
     fn to_open_bus(self) -> u8;
     fn from_open_bus(open_bus: u8) -> Self;
 }
+
+#[repr(transparent)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InverseU16(pub u16);
 
 impl Data for u8 {
     type Arr = [u8; 1];
@@ -71,10 +81,57 @@ impl Data for u16 {
         data[index..index + 2].copy_from_slice(&self.to_le_bytes())
     }
     fn to_open_bus(self) -> u8 {
-        (self >> 8) as u8
+        (self & 0xff) as u8
     }
     fn from_open_bus(open_bus: u8) -> Self {
         open_bus as u16 | ((open_bus as u16) << 8)
+    }
+}
+
+impl Data for InverseU16 {
+    type Arr = [u8; 2];
+    fn to_bytes(self) -> [u8; 2] {
+        self.0.to_be_bytes()
+    }
+    fn from_bytes(bytes: &[u8; 2]) -> Self {
+        Self(u16::from_be_bytes(*bytes))
+    }
+    fn parse(data: &[u8], index: usize) -> Self {
+        Self(u16::from_be_bytes(
+            data[index..index + 2].try_into().unwrap(),
+        ))
+    }
+    fn write_to(self, data: &mut [u8], index: usize) {
+        data[index..index + 2].copy_from_slice(&self.0.to_be_bytes())
+    }
+    fn to_open_bus(self) -> u8 {
+        (self.0 >> 8) as u8
+    }
+    fn from_open_bus(open_bus: u8) -> Self {
+        Self(open_bus as u16 | ((open_bus as u16) << 8))
+    }
+}
+
+impl Data for Addr24 {
+    type Arr = [u8; 3];
+    fn to_bytes(self) -> [u8; 3] {
+        let bytes = self.addr.to_be_bytes();
+        [bytes[0], bytes[1], self.bank]
+    }
+    fn from_bytes(bytes: &[u8; 3]) -> Self {
+        Self::new(bytes[2], u16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+    fn parse(data: &[u8], index: usize) -> Self {
+        Self::from_bytes(data[index..index + 3].try_into().unwrap())
+    }
+    fn write_to(self, data: &mut [u8], index: usize) {
+        data[index..index + 3].copy_from_slice(&self.to_bytes())
+    }
+    fn to_open_bus(self) -> u8 {
+        self.bank
+    }
+    fn from_open_bus(open_bus: u8) -> Self {
+        Self::new(open_bus, open_bus as u16 | ((open_bus as u16) << 8))
     }
 }
 
@@ -108,9 +165,7 @@ impl Device {
     }
 
     pub fn reset_program_counter(&mut self) {
-        println!("resetting program counter from {:?}", self.cpu.regs.pc);
-        self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(Addr24::new(0, 0xfffc)));
-        println!("to {:?}", self.cpu.regs.pc);
+        self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(Addr24::new(0, 0xfffc)))
     }
 
     /// Fetch a value from the program counter memory region
@@ -215,7 +270,11 @@ impl Device {
                 }
                 (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
                     // address bus A
-                    todo!()
+                    todo!(
+                        "writing {:?} to unimplemented address {} at address bus A",
+                        value,
+                        addr
+                    )
                 }
                 0x2100..=0x21ff => {
                     // address bus B
