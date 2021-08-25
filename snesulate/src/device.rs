@@ -115,11 +115,11 @@ impl Data for InverseU16 {
 impl Data for Addr24 {
     type Arr = [u8; 3];
     fn to_bytes(self) -> [u8; 3] {
-        let bytes = self.addr.to_be_bytes();
+        let bytes = self.addr.to_le_bytes();
         [bytes[0], bytes[1], self.bank]
     }
     fn from_bytes(bytes: &[u8; 3]) -> Self {
-        Self::new(bytes[2], u16::from_be_bytes([bytes[0], bytes[1]]))
+        Self::new(bytes[2], u16::from_le_bytes([bytes[0], bytes[1]]))
     }
     fn parse(data: &[u8], index: usize) -> Self {
         Self::from_bytes(data[index..index + 3].try_into().unwrap())
@@ -237,17 +237,21 @@ impl Device {
                 }
                 0x8000..=0xffff => {
                     // cartridge read on region $8000-$FFFF
-                    self.cartridge
-                        .as_ref()
-                        .unwrap()
-                        .read(addr)
-                        .unwrap_or_else(|| D::from_open_bus(self.open_bus))
+                    self.read_cartridge(addr)
                 }
             }
         } else {
             // cartridge read of bank $40-$7D or $C0-$FF
-            todo!()
+            self.read_cartridge(addr)
         }
+    }
+
+    fn read_cartridge<D: Data>(&self, addr: Addr24) -> D {
+        self.cartridge
+            .as_ref()
+            .unwrap()
+            .read(addr)
+            .unwrap_or_else(|| D::from_open_bus(self.open_bus))
     }
 
     /// Write the mapped memory at the specified address
@@ -301,12 +305,16 @@ impl Device {
                 }
                 0x8000..=0xffff => {
                     // cartridge read on region $8000-$FFFF
-                    self.cartridge.as_mut().unwrap().write(addr, value)
+                    self.write_cartridge(addr, value)
                 }
             }
         } else {
             // cartridge read of bank $40-$7D or $C0-$FF
-            todo!()
+            self.write_cartridge(addr, value)
         }
+    }
+
+    fn write_cartridge<D: Data>(&mut self, addr: Addr24, value: D) {
+        self.cartridge.as_mut().unwrap().write(addr, value)
     }
 }

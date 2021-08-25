@@ -4,12 +4,12 @@ use crate::device::{Addr24, Device, InverseU16};
 #[rustfmt::skip]
 static CYCLES: [u8; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
+       0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 0, 0, 0,  // 5^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 4, 0, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 8^
@@ -17,7 +17,7 @@ static CYCLES: [u8; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // d^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
@@ -33,9 +33,16 @@ impl Device {
     }
 
     pub fn dispatch_instruction_with(&mut self, op: u8) {
-        println!("exec '{:02x}'", op);
+        println!("exec '{:02x}' @ {}", op, self.cpu.regs.pc);
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x02 => {
+                // COP - Co-Processor Enable
+                if !self.cpu.regs.is_emulation {
+                    cycles += 1
+                }
+                todo!("COP instruction")
+            }
             0x18 => {
                 // CLC - Clear the Carry Flag
                 self.cpu.regs.status &= !Status::CARRY;
@@ -49,12 +56,18 @@ impl Device {
                 self.cpu.update_nz16(self.cpu.regs.a);
                 self.cpu.regs.dp = self.cpu.regs.a;
             }
+            0x5c => {
+                // JMP/JML - Jump absolute Long
+                self.cpu.regs.pc = self.load::<Addr24>();
+                println!("updating pc to: {}", self.cpu.regs.pc);
+            }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
                 self.cpu.regs.status |= Status::IRQ_DISABLE
             }
             0x7d => {
                 // ADC - Add with Carry
+                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 let addr = self.load_indexed_x(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
@@ -115,6 +128,10 @@ impl Device {
                 let mask = Status(!self.load::<u8>());
                 self.cpu.regs.status &= mask
             }
+            0xd8 => {
+                // CLD - Clear Decimal Flag
+                self.cpu.regs.status &= !Status::DECIMAL
+            }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
                 self.cpu.regs.status.set_if(
@@ -127,6 +144,7 @@ impl Device {
             }
             0xfd => {
                 // SBC - Subtract with carry
+                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 let addr = self.load_indexed_x(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = !self.read::<u8>(addr);

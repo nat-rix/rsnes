@@ -74,6 +74,21 @@ pub enum OptExtendedHeader {
     None,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Coprocessor {
+    Dsp,
+    Gsu,
+    Obc1,
+    Sa1,
+    Sdd1,
+    Srtc,
+    Spc7110,
+    St01x,
+    St018,
+    Cx4,
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct Header {
     name: String,
@@ -81,7 +96,7 @@ pub struct Header {
     rom_type: RomType,
     extended: OptExtendedHeader,
     is_fast: bool,
-    coprocessor: u8,
+    coprocessor: Coprocessor,
     chips: u8,
     rom_size: u32,
     ram_size: u32,
@@ -154,6 +169,27 @@ impl Header {
             }
         } else {
             OptExtendedHeader::None
+        };
+        let coprocessor = match (
+            coprocessor,
+            match extended {
+                OptExtendedHeader::Old { subtype } | OptExtendedHeader::Later { subtype, .. } => {
+                    subtype
+                }
+                _ => 0,
+            },
+        ) {
+            (0, _) => Coprocessor::Dsp,
+            (1, _) => Coprocessor::Gsu,
+            (2, _) => Coprocessor::Obc1,
+            (3, _) => Coprocessor::Sa1,
+            (4, _) => Coprocessor::Sdd1,
+            (5, _) => Coprocessor::Srtc,
+            (15, 0) => Coprocessor::Spc7110,
+            (15, 1) => Coprocessor::St01x,
+            (15, 2) => Coprocessor::St018,
+            (15, 16) => Coprocessor::Cx4,
+            _ => Coprocessor::Unknown,
         };
         Some((
             Self {
