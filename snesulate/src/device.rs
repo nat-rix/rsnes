@@ -191,6 +191,17 @@ impl Device {
         self.open_bus = value.to_open_bus();
         self.write_data(addr, value)
     }
+
+    /// Push data on the stack
+    pub fn push<D: Data>(&mut self, val: D) {
+        for d in val.to_bytes().as_ref().iter().rev() {
+            self.write(Addr24::new(0, self.cpu.regs.sp), *d);
+            self.cpu.regs.sp = self.cpu.regs.sp.wrapping_sub(1);
+            if self.cpu.regs.is_emulation {
+                self.cpu.regs.sp = (self.cpu.regs.sp & 0xff) | 256
+            }
+        }
+    }
 }
 
 impl Device {

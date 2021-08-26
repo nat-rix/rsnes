@@ -1,12 +1,12 @@
 use crate::cpu::Status;
-use crate::device::{Addr24, Device, InverseU16};
+use crate::device::{Addr24, Data, Device, InverseU16};
 
 #[rustfmt::skip]
 static CYCLES: [u8; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
+       6, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 4, 0, 0, 0,  // 5^
@@ -16,9 +16,9 @@ static CYCLES: [u8; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
-       0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 0, 0, 0,  // c^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
+       0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -41,8 +41,8 @@ impl Device {
         Addr24::new(bank, addr)
     }
 
-    pub fn dispatch_instruction_with(&mut self, op: u8) {
-        println!("exec '{:02x}' @ {}", op, self.cpu.regs.pc);
+    pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) {
+        println!("exec '{:02x}' @ {}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
             0x02 => {
@@ -52,22 +52,13 @@ impl Device {
                 }
                 todo!("COP instruction")
             }
+            0x08 => {
+                // PHP - Push Status Register
+                self.push(self.cpu.regs.status.0)
+            }
             0x10 => {
                 // BPL - Branch if Plus
-                let rel = self.load::<u8>();
-                if !self.cpu.regs.status.has(Status::NEGATIVE) {
-                    cycles += 1;
-                    let new = if rel & 0x80 > 0 {
-                        let rel = 128 - (rel & 0x7f);
-                        self.cpu.regs.pc.addr.wrapping_sub(rel.into())
-                    } else {
-                        self.cpu.regs.pc.addr.wrapping_add(rel.into())
-                    };
-                    let old = core::mem::replace(&mut self.cpu.regs.pc.addr, new);
-                    if self.cpu.regs.is_emulation && old & 0xff00 != new & 0xff00 {
-                        cycles += 1
-                    }
-                }
+                self.branch_near(!self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
             }
             0x18 => {
                 // CLC - Clear the Carry Flag
@@ -76,6 +67,12 @@ impl Device {
             0x1b => {
                 // TCS - Transfer A to SP
                 self.cpu.regs.sp = self.cpu.regs.a
+            }
+            0x20 => {
+                // JSR - Jump to Subroutine
+                self.push(start_addr.addr.wrapping_add(2));
+                let new_addr = self.load::<u16>();
+                self.cpu.regs.pc.addr = new_addr;
             }
             0x2a => {
                 // ROL - Rotate A left
@@ -243,9 +240,34 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.x);
                 }
             }
+            0xcd => {
+                // CMP - Compare A with absolute value
+                // this will also work with decimal mode (TODO: check this fact)
+                if self.cpu.is_reg8() {
+                    let val = self.load::<u8>();
+                    let res = self.cpu.regs.a8() as u16 + (!val) as u16 + 1;
+                    self.cpu.regs.status.set_if(Status::CARRY, res > 0xff);
+                    self.cpu.update_nz8((res & 0xff) as u8);
+                } else {
+                    let val = self.load::<u16>();
+                    let res = self.cpu.regs.a as u32 + (!val) as u32 + 1;
+                    self.cpu.regs.status.set_if(Status::CARRY, res > 0xffff);
+                    self.cpu.update_nz16((res & 0xffff) as u16);
+                    cycles += 1
+                }
+            }
+            0xd0 => {
+                // BNE - Branch if Zero Flag Clear
+                self.branch_near(!self.cpu.regs.status.has(Status::ZERO), &mut cycles)
+            }
             0xd8 => {
                 // CLD - Clear Decimal Flag
                 self.cpu.regs.status &= !Status::DECIMAL
+            }
+            0xe2 => {
+                // SEP - Set specified bits in the Status Register
+                let mask = Status(self.load::<u8>());
+                self.cpu.regs.status |= mask
             }
             0xe9 => {
                 // SBC - Subtract with carry
@@ -313,8 +335,26 @@ impl Device {
         self.cpu.regs.a = new;
     }
 
+    pub fn branch_near(&mut self, cond: bool, cycles: &mut u8) {
+        let rel = self.load::<u8>();
+        if cond {
+            *cycles += 1;
+            let new = if rel & 0x80 > 0 {
+                let rel = 128 - (rel & 0x7f);
+                self.cpu.regs.pc.addr.wrapping_sub(rel.into())
+            } else {
+                self.cpu.regs.pc.addr.wrapping_add(rel.into())
+            };
+            let old = core::mem::replace(&mut self.cpu.regs.pc.addr, new);
+            if self.cpu.regs.is_emulation && old & 0xff00 != new & 0xff00 {
+                *cycles += 1
+            }
+        }
+    }
+
     pub fn dispatch_instruction(&mut self) {
+        let pc = self.cpu.regs.pc;
         let op = self.load::<u8>();
-        self.dispatch_instruction_with(op)
+        self.dispatch_instruction_with(pc, op)
     }
 }
