@@ -20,7 +20,7 @@ impl Ppu {
                 self.brightness = val & 0b1111;
                 println!(
                     "setting brightness to {:.0}%",
-                    self.brightness as f32 / 15.0
+                    (self.brightness as f32 * 100.0) / 15.0
                 );
             }
             0x34.. => unreachable!(),

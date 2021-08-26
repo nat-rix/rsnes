@@ -202,6 +202,19 @@ impl Device {
             }
         }
     }
+
+    /// Pull data from the stack
+    pub fn pull<D: Data>(&mut self) -> D {
+        let mut arr = D::Arr::default();
+        for d in arr.as_mut() {
+            self.cpu.regs.sp = self.cpu.regs.sp.wrapping_add(1);
+            if self.cpu.regs.is_emulation {
+                self.cpu.regs.sp = (self.cpu.regs.sp & 0xff) | 256
+            }
+            *d = self.read(Addr24::new(0, self.cpu.regs.sp));
+        }
+        D::from_bytes(&arr)
+    }
 }
 
 impl Device {
