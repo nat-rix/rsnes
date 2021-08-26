@@ -171,7 +171,7 @@ impl Device {
     /// Fetch a value from the program counter memory region
     pub fn load<D: Data>(&mut self) -> D {
         let val = self.read::<D>(self.cpu.regs.pc);
-        let len = core::mem::size_of::<D>() as u16;
+        let len = core::mem::size_of::<D::Arr>() as u16;
         // yes, an overflow on addr does not carry the bank
         self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(len);
         val

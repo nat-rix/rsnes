@@ -96,7 +96,7 @@ pub struct Header {
     rom_type: RomType,
     extended: OptExtendedHeader,
     is_fast: bool,
-    coprocessor: Coprocessor,
+    coprocessor: Option<Coprocessor>,
     chips: u8,
     rom_size: u32,
     ram_size: u32,
@@ -171,6 +171,7 @@ impl Header {
             OptExtendedHeader::None
         };
         let coprocessor = match (
+            chips,
             coprocessor,
             match extended {
                 OptExtendedHeader::Old { subtype } | OptExtendedHeader::Later { subtype, .. } => {
@@ -179,17 +180,18 @@ impl Header {
                 _ => 0,
             },
         ) {
-            (0, _) => Coprocessor::Dsp,
-            (1, _) => Coprocessor::Gsu,
-            (2, _) => Coprocessor::Obc1,
-            (3, _) => Coprocessor::Sa1,
-            (4, _) => Coprocessor::Sdd1,
-            (5, _) => Coprocessor::Srtc,
-            (15, 0) => Coprocessor::Spc7110,
-            (15, 1) => Coprocessor::St01x,
-            (15, 2) => Coprocessor::St018,
-            (15, 16) => Coprocessor::Cx4,
-            _ => Coprocessor::Unknown,
+            (0..=2, 0, _) => None,
+            (3.., 0, _) => Some(Coprocessor::Dsp),
+            (_, 1, _) => Some(Coprocessor::Gsu),
+            (_, 2, _) => Some(Coprocessor::Obc1),
+            (_, 3, _) => Some(Coprocessor::Sa1),
+            (_, 4, _) => Some(Coprocessor::Sdd1),
+            (_, 5, _) => Some(Coprocessor::Srtc),
+            (_, 15, 0) => Some(Coprocessor::Spc7110),
+            (_, 15, 1) => Some(Coprocessor::St01x),
+            (_, 15, 2) => Some(Coprocessor::St018),
+            (_, 15, 16) => Some(Coprocessor::Cx4),
+            _ => Some(Coprocessor::Unknown),
         };
         Some((
             Self {
@@ -208,6 +210,10 @@ impl Header {
             },
             score,
         ))
+    }
+
+    pub const fn has_ram(&self) -> bool {
+        self.chips != 3 && self.chips != 6 && !(self.chips == 0 && self.coprocessor.is_none())
     }
 }
 
