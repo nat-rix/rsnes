@@ -7,18 +7,18 @@ static CYCLES: [u8; 256] = [
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 3^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 4, 0, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 4, 0, 0, 0,  // 9^
-       2, 0, 2, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // a^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
+       2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
-       0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
+       0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 0, 0, 0,  // c^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -30,6 +30,15 @@ impl Device {
             *cycles += 1
         }
         Addr24::new(self.cpu.regs.db, addr)
+    }
+
+    pub fn load_long_indexed_x(&mut self) -> Addr24 {
+        let Addr24 { mut bank, addr } = self.load::<Addr24>();
+        let (addr, ov) = self.cpu.regs.x.overflowing_add(addr);
+        if ov {
+            bank = bank.wrapping_add(1)
+        }
+        Addr24::new(bank, addr)
     }
 
     pub fn dispatch_instruction_with(&mut self, op: u8) {
@@ -68,6 +77,10 @@ impl Device {
                     self.cpu.update_nz16(res);
                     self.cpu.regs.a = res;
                 }
+            }
+            0x38 => {
+                // SEC - Set Carry Flag
+                self.cpu.regs.status |= Status::CARRY
             }
             0x5b => {
                 // TCD - Transfer A to DP
@@ -117,6 +130,16 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x98 => {
+                // TYA - Transfer Y to A
+                if self.cpu.is_reg8() {
+                    self.cpu.regs.set_a8(self.cpu.regs.y8());
+                    self.cpu.update_nz8(self.cpu.regs.a8())
+                } else {
+                    self.cpu.regs.a = self.cpu.regs.y;
+                    self.cpu.update_nz16(self.cpu.regs.a)
+                }
+            }
             0x9c => {
                 // STZ - absolute addressing
                 if self.cpu.is_reg8() {
@@ -125,6 +148,16 @@ impl Device {
                 } else {
                     let addr = self.load::<u16>();
                     self.write(self.cpu.get_data_addr(addr), 0u16);
+                    cycles += 1;
+                }
+            }
+            0x9f => {
+                // STA - Store absolute long indexed A to address
+                let addr = self.load_long_indexed_x();
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
                     cycles += 1;
                 }
             }
@@ -154,6 +187,16 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xa8 => {
+                // TAY - Transfer A to Y
+                if self.cpu.is_reg8() {
+                    self.cpu.regs.set_y8(self.cpu.regs.a8());
+                    self.cpu.update_nz8(self.cpu.regs.a8());
+                } else {
+                    self.cpu.regs.y = self.cpu.regs.a;
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                }
+            }
             0xa9 => {
                 // LDA - Load immediate value to A
                 if self.cpu.is_reg8() {
@@ -172,9 +215,32 @@ impl Device {
                 let mask = Status(!self.load::<u8>());
                 self.cpu.regs.status &= mask
             }
+            0xca => {
+                // DEX - Decrement X
+                if self.cpu.is_idx8() {
+                    let x = self.cpu.regs.x8().wrapping_sub(1);
+                    self.cpu.regs.set_x8(x);
+                    self.cpu.update_nz8(x);
+                } else {
+                    self.cpu.regs.x = self.cpu.regs.x.wrapping_sub(1);
+                    self.cpu.update_nz16(self.cpu.regs.x);
+                }
+            }
             0xd8 => {
                 // CLD - Clear Decimal Flag
                 self.cpu.regs.status &= !Status::DECIMAL
+            }
+            0xe9 => {
+                // SBC - Subtract with carry
+                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
+                if self.cpu.is_reg8() {
+                    let op1 = !self.load::<u8>();
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = !self.load::<u16>();
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
