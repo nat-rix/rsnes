@@ -1,6 +1,6 @@
 //! The SNES/Famicom device
 
-use crate::{cartridge::Cartridge, cpu::Cpu, ppu::Ppu, spc700::Spc700};
+use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700};
 use core::convert::TryInto;
 
 const RAM_SIZE: usize = 0x20000;
@@ -152,6 +152,7 @@ pub struct Device {
     pub(crate) cpu: Cpu,
     pub(crate) spc: Spc700,
     pub(crate) ppu: Ppu,
+    pub(crate) dma: Dma,
     cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
     open_bus: u8,
@@ -164,6 +165,7 @@ impl Device {
             cpu: Cpu::new(),
             spc: Spc700::new(),
             ppu: Ppu::new(),
+            dma: Dma::new(),
             cartridge: None,
             open_bus: 0,
             ram: [0; RAM_SIZE],
@@ -268,7 +270,6 @@ impl Device {
                     let mut data = <D::Arr as Default>::default();
                     for (i, d) in data.as_mut().iter_mut().enumerate() {
                         *d = self
-                            .cpu
                             .read_internal_register(addr.addr.wrapping_add(i as u16))
                             .unwrap_or(self.open_bus)
                     }
@@ -338,8 +339,7 @@ impl Device {
                     // internal CPU registers
                     // see https://wiki.superfamicom.org/registers
                     for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
-                        self.cpu
-                            .write_internal_register(addr.addr.wrapping_add(i as u16), *d)
+                        self.write_internal_register(addr.addr.wrapping_add(i as u16), *d)
                     }
                 }
                 0x6000..=0xffff => {

@@ -156,10 +156,10 @@ impl Not for Status {
 #[derive(Debug, Clone)]
 pub struct Cpu {
     pub regs: Regs,
-    nmitimen: u8,
-    latch_line: bool,
-    pio: u8,
-    access_speed: bool,
+    pub(crate) nmitimen: u8,
+    pub(crate) latch_line: bool,
+    pub(crate) pio: u8,
+    pub(crate) access_speed: bool,
 }
 
 impl Cpu {
@@ -213,46 +213,6 @@ impl Cpu {
                 | Status((val >> 8) as u8 & Status::NEGATIVE.0);
         } else {
             self.regs.status = (self.regs.status & !Status::NEGATIVE) | Status::ZERO
-        }
-    }
-
-    pub fn read_internal_register(&self, id: u16) -> Option<u8> {
-        match id {
-            _ => todo!("internal register 0x{:04x} read", id),
-        }
-    }
-
-    pub fn write_internal_register(&mut self, id: u16, val: u8) {
-        match id {
-            0x4016 => {
-                // JOYSER0 - NES-style Joypad access
-                self.latch_line = val & 1 > 0;
-            }
-            0x4200 => {
-                // NMITIMEN - Interrupt Enable Flags
-                // TODO: implement expected behavior
-                self.nmitimen = val
-            }
-            0x4201 => {
-                // WRIO - Programmable I/O-Port
-                if self.pio & 0x80 > 0 && val & 0x80 == 0 {
-                    // TODO: latch ppu counters
-                }
-                self.pio = val;
-            }
-            0x420b => {
-                // MDMAEN - DMA Enable
-                // TODO: implement expected behavior
-            }
-            0x420c => {
-                // HDMAEN - HDMA Enable
-                // TODO: implement expected behavior
-            }
-            0x420d => {
-                // MEMSEL - ROM access speed
-                self.access_speed = val & 1 > 0
-            }
-            _ => todo!("internal register 0x{:04x} written", id),
         }
     }
 }
