@@ -14,7 +14,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 0, 4, 0, 5,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
@@ -198,8 +198,19 @@ impl Device {
                 // PHB - Push Data Bank
                 self.push(self.cpu.regs.db)
             }
+            0x8c => {
+                // STY - Store Y to absolute address
+                let addr = self.load::<u16>();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_idx8() {
+                    self.write::<u8>(addr, self.cpu.regs.y8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.y);
+                    cycles += 1;
+                }
+            }
             0x8d => {
-                // STA - Store absolute A to address
+                // STA - Store A to absolute address
                 let addr = self.load::<u16>();
                 let addr = self.cpu.get_data_addr(addr);
                 if self.cpu.is_reg8() {
@@ -210,7 +221,7 @@ impl Device {
                 }
             }
             0x8f => {
-                // STA - Store absolute long A to address
+                // STA - Store A to absolute long address
                 let addr = self.load::<Addr24>();
                 if self.cpu.is_reg8() {
                     self.write::<u8>(addr, self.cpu.regs.a8());
