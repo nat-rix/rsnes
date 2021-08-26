@@ -8,7 +8,7 @@ static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
-       6, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
+       6, 0, 8, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 0, 2, 4, 0, 0, 0,  // 5^
@@ -83,6 +83,13 @@ impl Device {
                 self.push(start_addr.addr.wrapping_add(2));
                 let new_addr = self.load::<u16>();
                 self.cpu.regs.pc.addr = new_addr;
+            }
+            0x22 => {
+                // JSR/JSL - Jump to Subroutine Long
+                self.push(start_addr.bank);
+                self.push(start_addr.addr.wrapping_add(3));
+                let new_addr = self.load::<Addr24>();
+                self.cpu.regs.pc = new_addr;
             }
             0x2a => {
                 // ROL - Rotate A left
