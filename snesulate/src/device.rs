@@ -157,6 +157,7 @@ pub struct Device {
     /// <https://wiki.superfamicom.org/open-bus>
     open_bus: u8,
     ram: [u8; RAM_SIZE],
+    wram_addr: Addr24,
 }
 
 impl Device {
@@ -169,6 +170,7 @@ impl Device {
             cartridge: None,
             open_bus: 0,
             ram: [0; RAM_SIZE],
+            wram_addr: Addr24::default(),
         }
     }
 
@@ -322,17 +324,23 @@ impl Device {
                 }
                 0x2100..=0x21ff => {
                     // address bus B
-                    match addr.addr {
-                        0x2100..=0x2133 => {
-                            for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
-                                self.ppu
-                                    .write_register((addr.addr & 0xff) as u8 + i as u8, *d)
+                    for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
+                        let addr = (addr.addr.wrapping_add(i as u16) & 0xff) as u8;
+                        match addr {
+                            0x00..=0x33 => self.ppu.write_register(addr, *d),
+                            0x40..=0x43 => {
+                                value.write_to(&mut self.spc.output, (addr & 0b11) as usize)
                             }
+                            0x81 => {
+                                self.wram_addr.addr = (self.wram_addr.addr & 0xff00) | *d as u16
+                            }
+                            0x82 => {
+                                self.wram_addr.addr =
+                                    (self.wram_addr.addr & 0xff) | ((*d as u16) << 8)
+                            }
+                            0x83 => self.wram_addr.bank = *d,
+                            _ => todo!("unimplemented address bus B read at 0x21{:04x}", addr),
                         }
-                        0x2140..=0x2143 => {
-                            value.write_to(&mut self.spc.output, (addr.addr & 0b11) as usize)
-                        }
-                        _ => todo!("unimplemented address bus B read at 0x{:04x}", addr.addr),
                     }
                 }
                 0x4000..=0x43ff => {
