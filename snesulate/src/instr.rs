@@ -6,20 +6,20 @@ type Cycles = u32;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
+       0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
        6, 0, 8, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 0, 0, 0, 0,  // 4^
-       0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 0, 2, 4, 0, 0, 0,  // 5^
+       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
+       0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 0, 4, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 3, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
@@ -65,6 +65,10 @@ impl Device {
             0x08 => {
                 // PHP - Push Status Register
                 self.push(self.cpu.regs.status.0)
+            }
+            0x0b => {
+                // PHD - Push Direct Page
+                self.push(self.cpu.regs.dp)
             }
             0x10 => {
                 // BPL - Branch if Plus
@@ -113,6 +117,15 @@ impl Device {
                 // SEC - Set Carry Flag
                 self.cpu.regs.status |= Status::CARRY
             }
+            0x48 => {
+                // PHK - Push A
+                if self.cpu.is_reg8() {
+                    self.push(self.cpu.regs.a8())
+                } else {
+                    self.push(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x4b => {
                 // PHK - Push PC Bank
                 self.push(self.cpu.regs.pc.bank)
@@ -138,6 +151,15 @@ impl Device {
                         self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
                         cycles += 7
                     }
+                }
+            }
+            0x5a => {
+                // PHY - Push Y
+                if self.cpu.is_idx8() {
+                    self.push(self.cpu.regs.y8())
+                } else {
+                    self.push(self.cpu.regs.y);
+                    cycles += 1
                 }
             }
             0x5b => {
@@ -171,6 +193,10 @@ impl Device {
                     self.add_carry16(op1);
                     cycles += 1;
                 }
+            }
+            0x8b => {
+                // PHB - Push Data Bank
+                self.push(self.cpu.regs.db)
             }
             0x8d => {
                 // STA - Store absolute A to address
@@ -311,6 +337,15 @@ impl Device {
             0xd8 => {
                 // CLD - Clear Decimal Flag
                 self.cpu.regs.status &= !Status::DECIMAL
+            }
+            0xda => {
+                // PHX - Push X
+                if self.cpu.is_idx8() {
+                    self.push(self.cpu.regs.x8())
+                } else {
+                    self.push(self.cpu.regs.x);
+                    cycles += 1
+                }
             }
             0xe2 => {
                 // SEP - Set specified bits in the Status Register
