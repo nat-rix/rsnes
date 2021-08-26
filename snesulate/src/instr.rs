@@ -14,7 +14,7 @@ static CYCLES: [u8; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 4, 0, 0, 0,  // 9^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // a^
+       2, 0, 2, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
@@ -96,6 +96,17 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x8d => {
+                // STA - Store absolute A to address
+                let addr = self.load::<u16>();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
+                    cycles += 1;
+                }
+            }
             0x8f => {
                 // STA - Store absolute long A to address
                 let addr = self.load::<Addr24>();
@@ -117,6 +128,32 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xa0 => {
+                // LDY - Load immediate into Y
+                if self.cpu.is_idx8() {
+                    let y = self.load::<u8>();
+                    self.cpu.update_nz8(y);
+                    self.cpu.regs.set_y8(y);
+                } else {
+                    let y = self.load::<u16>();
+                    self.cpu.update_nz16(y);
+                    self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
+            0xa2 => {
+                // LDX - Load immediate into X
+                if self.cpu.is_idx8() {
+                    let x = self.load::<u8>();
+                    self.cpu.update_nz8(x);
+                    self.cpu.regs.set_x8(x);
+                } else {
+                    let x = self.load::<u16>();
+                    self.cpu.update_nz16(x);
+                    self.cpu.regs.x = x;
+                    cycles += 1;
+                }
+            }
             0xa9 => {
                 // LDA - Load immediate value to A
                 if self.cpu.is_reg8() {
@@ -127,17 +164,6 @@ impl Device {
                     let val = self.load::<u16>();
                     self.cpu.update_nz16(val);
                     self.cpu.regs.a = val;
-                    cycles += 1;
-                }
-            }
-            0x8d => {
-                // STA - Store absolute A to address
-                let addr = self.load::<u16>();
-                let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_reg8() {
-                    self.write::<u8>(addr, self.cpu.regs.a8());
-                } else {
-                    self.write::<u16>(addr, self.cpu.regs.a);
                     cycles += 1;
                 }
             }

@@ -41,6 +41,22 @@ impl Regs {
     pub fn set_a8(&mut self, val: u8) {
         self.a = (self.a & 0xff00) | val as u16
     }
+
+    pub const fn x8(&self) -> u8 {
+        (self.x & 0xff) as u8
+    }
+
+    pub fn set_x8(&mut self, val: u8) {
+        self.x = (self.x & 0xff00) | val as u16
+    }
+
+    pub const fn y8(&self) -> u8 {
+        (self.y & 0xff) as u8
+    }
+
+    pub fn set_y8(&mut self, val: u8) {
+        self.y = (self.y & 0xff00) | val as u16
+    }
 }
 
 /// Processor status flags
@@ -161,9 +177,14 @@ impl Cpu {
         }
     }
 
-    /// Indicate if the A, X, Y registers are in 8-bit mode
+    /// Indicate if the A register is in 8-bit mode
     pub const fn is_reg8(&self) -> bool {
         self.regs.status.has(Status::ACCUMULATION)
+    }
+
+    /// Indicate if the X and Y registers are in 8-bit mode
+    pub const fn is_idx8(&self) -> bool {
+        self.regs.status.has(Status::INDEX_REGISTER_SIZE)
     }
 
     /// Build an [`Addr24`] from an 16-bit address with the data bank register
