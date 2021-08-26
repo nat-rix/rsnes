@@ -75,10 +75,12 @@ impl Data for u16 {
         u16::from_le_bytes(*bytes)
     }
     fn parse(data: &[u8], index: usize) -> Self {
-        u16::from_le_bytes(data[index..index + 2].try_into().unwrap())
+        u16::from_le_bytes([data[index], data[(index + 1) % data.len()]])
     }
     fn write_to(self, data: &mut [u8], index: usize) {
-        data[index..index + 2].copy_from_slice(&self.to_le_bytes())
+        let [x, y] = self.to_bytes();
+        data[index] = x;
+        data[(index + 1) % data.len()] = y;
     }
     fn to_open_bus(self) -> u8 {
         (self & 0xff) as u8
@@ -97,12 +99,15 @@ impl Data for InverseU16 {
         Self(u16::from_be_bytes(*bytes))
     }
     fn parse(data: &[u8], index: usize) -> Self {
-        Self(u16::from_be_bytes(
-            data[index..index + 2].try_into().unwrap(),
-        ))
+        Self(u16::from_be_bytes([
+            data[index],
+            data[(index + 1) % data.len()],
+        ]))
     }
     fn write_to(self, data: &mut [u8], index: usize) {
-        data[index..index + 2].copy_from_slice(&self.0.to_be_bytes())
+        let [x, y] = self.to_bytes();
+        data[index] = x;
+        data[(index + 1) % data.len()] = y;
     }
     fn to_open_bus(self) -> u8 {
         (self.0 >> 8) as u8
@@ -122,10 +127,17 @@ impl Data for Addr24 {
         Self::new(bytes[2], u16::from_le_bytes([bytes[0], bytes[1]]))
     }
     fn parse(data: &[u8], index: usize) -> Self {
-        Self::from_bytes(data[index..index + 3].try_into().unwrap())
+        Self::from_bytes(&[
+            data[index],
+            data[(index + 1) % data.len()],
+            data[(index + 2) % data.len()],
+        ])
     }
     fn write_to(self, data: &mut [u8], index: usize) {
-        data[index..index + 3].copy_from_slice(&self.to_bytes())
+        let [x, y, z] = self.to_bytes();
+        data[index] = x;
+        data[(index + 1) % data.len()] = y;
+        data[(index + 2) % data.len()] = z;
     }
     fn to_open_bus(self) -> u8 {
         self.bank
