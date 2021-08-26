@@ -157,6 +157,9 @@ impl Not for Status {
 pub struct Cpu {
     pub regs: Regs,
     nmitimen: u8,
+    latch_line: bool,
+    pio: u8,
+    access_speed: bool,
 }
 
 impl Cpu {
@@ -174,6 +177,9 @@ impl Cpu {
                 is_emulation: true,
             },
             nmitimen: 0,
+            latch_line: false,
+            pio: 0,
+            access_speed: false,
         }
     }
 
@@ -218,10 +224,21 @@ impl Cpu {
 
     pub fn write_internal_register(&mut self, id: u16, val: u8) {
         match id {
+            0x4016 => {
+                // JOYSER0 - NES-style Joypad access
+                self.latch_line = val & 1 > 0;
+            }
             0x4200 => {
                 // NMITIMEN - Interrupt Enable Flags
                 // TODO: implement expected behavior
                 self.nmitimen = val
+            }
+            0x4201 => {
+                // WRIO - Programmable I/O-Port
+                if self.pio & 0x80 > 0 && val & 0x80 == 0 {
+                    // TODO: latch ppu counters
+                }
+                self.pio = val;
             }
             0x420b => {
                 // MDMAEN - DMA Enable
@@ -230,6 +247,10 @@ impl Cpu {
             0x420c => {
                 // HDMAEN - HDMA Enable
                 // TODO: implement expected behavior
+            }
+            0x420d => {
+                // MEMSEL - ROM access speed
+                self.access_speed = val & 1 > 0
             }
             _ => todo!("internal register 0x{:04x} written", id),
         }

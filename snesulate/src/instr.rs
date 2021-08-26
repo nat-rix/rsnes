@@ -1,8 +1,10 @@
 use crate::cpu::Status;
 use crate::device::{Addr24, Data, Device, InverseU16};
 
+type Cycles = u16;
+
 #[rustfmt::skip]
-static CYCLES: [u8; 256] = [
+static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
@@ -18,12 +20,12 @@ static CYCLES: [u8; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // d^
-       0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 3, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
-    pub fn load_indexed_x(&mut self, cycles: &mut u8) -> Addr24 {
+    pub fn load_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
         let (addr, ov) = self.cpu.regs.x.overflowing_add(self.load::<InverseU16>().0);
         if ov || self.cpu.regs.x == 0 {
             // TODO: check this criteria (very much not sure)
@@ -39,6 +41,14 @@ impl Device {
             bank = bank.wrapping_add(1)
         }
         Addr24::new(bank, addr)
+    }
+
+    pub fn load_direct(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let val = self.load::<u8>();
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        Addr24::new(0, self.cpu.regs.dp.wrapping_add(val.into()))
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) {
@@ -96,6 +106,29 @@ impl Device {
                 // SEC - Set Carry Flag
                 self.cpu.regs.status |= Status::CARRY
             }
+            0x54 => {
+                // MVN - Block Move Negative
+                let [dst, src] = self.load::<u16>().to_bytes();
+                if self.cpu.is_idx8() || self.cpu.regs.is_emulation {
+                    while self.cpu.regs.a < 0xffff {
+                        let val = self.read::<u8>(Addr24::new(src, self.cpu.regs.x & 0xff));
+                        self.write::<u8>(Addr24::new(dst, self.cpu.regs.y & 0xff), val);
+                        self.cpu.regs.set_x8(self.cpu.regs.x8().wrapping_add(1));
+                        self.cpu.regs.set_y8(self.cpu.regs.y8().wrapping_add(1));
+                        self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
+                        cycles += 7
+                    }
+                } else {
+                    while self.cpu.regs.a < 0xffff {
+                        let val = self.read::<u8>(Addr24::new(src, self.cpu.regs.x));
+                        self.write::<u8>(Addr24::new(dst, self.cpu.regs.y), val);
+                        self.cpu.regs.x = self.cpu.regs.x.wrapping_add(1);
+                        self.cpu.regs.y = self.cpu.regs.y.wrapping_add(1);
+                        self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
+                        cycles += 7
+                    }
+                }
+            }
             0x5b => {
                 // TCD - Transfer A to DP
                 self.cpu.update_nz16(self.cpu.regs.a);
@@ -105,6 +138,11 @@ impl Device {
                 // JMP/JML - Jump absolute Long
                 self.cpu.regs.pc = self.load::<Addr24>();
                 println!("updating pc to: {}", self.cpu.regs.pc);
+            }
+            0x64 => {
+                // STZ - Store Zero to memory
+                let addr = self.load_direct(&mut cycles);
+                self.store_zero(addr, &mut cycles)
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
@@ -156,14 +194,8 @@ impl Device {
             }
             0x9c => {
                 // STZ - absolute addressing
-                if self.cpu.is_reg8() {
-                    let addr = self.load::<u16>();
-                    self.write(self.cpu.get_data_addr(addr), 0u8);
-                } else {
-                    let addr = self.load::<u16>();
-                    self.write(self.cpu.get_data_addr(addr), 0u16);
-                    cycles += 1;
-                }
+                let addr = self.load::<u16>();
+                self.store_zero(self.cpu.get_data_addr(addr), &mut cycles)
             }
             0x9f => {
                 // STA - Store absolute long indexed A to address
@@ -281,6 +313,11 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xeb => {
+                // XBA - Swap the A Register
+                self.cpu.regs.a = self.cpu.regs.a.swap_bytes();
+                self.cpu.update_nz8(self.cpu.regs.a8())
+            }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
                 self.cpu.regs.status.set_if(
@@ -335,7 +372,7 @@ impl Device {
         self.cpu.regs.a = new;
     }
 
-    pub fn branch_near(&mut self, cond: bool, cycles: &mut u8) {
+    pub fn branch_near(&mut self, cond: bool, cycles: &mut Cycles) {
         let rel = self.load::<u8>();
         if cond {
             *cycles += 1;
@@ -349,6 +386,15 @@ impl Device {
             if self.cpu.regs.is_emulation && old & 0xff00 != new & 0xff00 {
                 *cycles += 1
             }
+        }
+    }
+
+    pub fn store_zero(&mut self, addr: Addr24, cycles: &mut Cycles) {
+        if self.cpu.is_reg8() {
+            self.write(addr, 0u8);
+        } else {
+            self.write(addr, 0u16);
+            *cycles += 1;
         }
     }
 
