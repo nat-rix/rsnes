@@ -277,11 +277,12 @@ impl Cartridge {
 
     /// Read from the cartridge
     pub fn read<D: Data>(&self, addr: Addr24) -> Option<D> {
+        let mask = self.ram.len() - 1;
         if self.is_lorom {
             match (addr.bank, addr.addr) {
                 ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(D::parse(
                     &self.ram,
-                    ((addr.bank as usize & 0xf) << 15) | addr.addr as usize,
+                    (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & mask,
                 )),
                 (0x40.., _) | (_, 0x8000..) => Some(D::parse(
                     &self.rom,
@@ -293,7 +294,7 @@ impl Cartridge {
             match (addr.bank & 0x7f, addr.addr) {
                 (0..=0x3f, 0x6000..=0x7fff) => Some(D::parse(
                     &self.ram,
-                    ((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize,
+                    (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize) & mask,
                 )),
                 (0x40.., _) | (_, 0x8000..) => Some(D::parse(
                     &self.rom,
@@ -306,11 +307,12 @@ impl Cartridge {
 
     /// Read from the cartridge
     pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
+        let mask = self.ram.len() - 1;
         if self.is_lorom {
             match (addr.bank, addr.addr) {
                 ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => value.write_to(
                     &mut self.ram,
-                    ((addr.bank as usize & 0xf) << 15) | addr.addr as usize,
+                    (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & mask,
                 ),
                 (0x40.., _) | (_, 0x8000..) => value.write_to(
                     &mut self.rom,
@@ -322,7 +324,7 @@ impl Cartridge {
             match (addr.bank & 0x7f, addr.addr) {
                 (0..=0x3f, 0x6000..=0x7fff) => value.write_to(
                     &mut self.ram,
-                    ((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize,
+                    (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize) & mask,
                 ),
                 (0x40.., _) | (_, 0x8000..) => value.write_to(
                     &mut self.rom,

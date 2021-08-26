@@ -223,9 +223,12 @@ impl Device {
                     // address bus A + /WRAM
                     D::parse(&self.ram, addr.addr as usize)
                 }
-                (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
+                (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x5fff) => {
                     // address bus A
-                    todo!()
+                    todo!(
+                        "reading from unimplemented address {} at address bus A",
+                        addr
+                    )
                 }
                 0x2100..=0x21ff => {
                     // address bus B
@@ -246,8 +249,8 @@ impl Device {
                     }
                     D::from_bytes(&data)
                 }
-                0x8000..=0xffff => {
-                    // cartridge read on region $8000-$FFFF
+                0x6000..=0xffff => {
+                    // cartridge read on region ($30-$3f):$6000-$7fff or $xy:$8000-$FFFF
                     self.read_cartridge(addr)
                 }
             }
@@ -283,7 +286,7 @@ impl Device {
                     // address bus A + /WRAM
                     value.write_to(&mut self.ram, addr.addr as usize)
                 }
-                (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x7fff) => {
+                (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x5fff) => {
                     // address bus A
                     todo!(
                         "writing {:?} to unimplemented address {} at address bus A",
@@ -314,8 +317,8 @@ impl Device {
                             .write_internal_register(addr.addr.wrapping_add(i as u16), *d)
                     }
                 }
-                0x8000..=0xffff => {
-                    // cartridge read on region $8000-$FFFF
+                0x6000..=0xffff => {
+                    // cartridge read of bank $40-$7D or $C0-$FF
                     self.write_cartridge(addr, value)
                 }
             }
