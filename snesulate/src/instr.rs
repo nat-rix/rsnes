@@ -5,7 +5,7 @@ use crate::device::{Addr24, Device, InverseU16};
 static CYCLES: [u8; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
@@ -51,6 +51,23 @@ impl Device {
                     cycles += 1
                 }
                 todo!("COP instruction")
+            }
+            0x10 => {
+                // BPL - Branch if Plus
+                let rel = self.load::<u8>();
+                if !self.cpu.regs.status.has(Status::NEGATIVE) {
+                    cycles += 1;
+                    let new = if rel & 0x80 > 0 {
+                        let rel = 128 - (rel & 0x7f);
+                        self.cpu.regs.pc.addr.wrapping_sub(rel.into())
+                    } else {
+                        self.cpu.regs.pc.addr.wrapping_add(rel.into())
+                    };
+                    let old = core::mem::replace(&mut self.cpu.regs.pc.addr, new);
+                    if self.cpu.regs.is_emulation && old & 0xff00 != new & 0xff00 {
+                        cycles += 1
+                    }
+                }
             }
             0x18 => {
                 // CLC - Clear the Carry Flag
