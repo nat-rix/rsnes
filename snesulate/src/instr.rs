@@ -8,11 +8,11 @@ static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
-       6, 0, 8, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 2^
+       6, 0, 8, 0, 0, 0, 0, 0,   2, 2, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
+       0, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
@@ -94,6 +94,18 @@ impl Device {
                 self.push(start_addr.addr.wrapping_add(3));
                 let new_addr = self.load::<Addr24>();
                 self.cpu.regs.pc = new_addr;
+            }
+            0x29 => {
+                // AND - bitwise and A with immediate value
+                if self.cpu.is_reg8() {
+                    let value = self.cpu.regs.a8() & self.load::<u8>();
+                    self.cpu.regs.set_a8(value);
+                    self.cpu.update_nz8(value);
+                } else {
+                    self.cpu.regs.a &= self.load::<u16>();
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
             }
             0x2a => {
                 // ROL - Rotate A left
