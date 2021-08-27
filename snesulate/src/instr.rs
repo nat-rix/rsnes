@@ -15,9 +15,9 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 4, 0, 0, 5,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 4, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 3, 0, 0, 0, 0,  // e^
@@ -263,6 +263,21 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.a)
                 }
             }
+            0x9a => {
+                // TXS - Transfer X to SP
+                self.cpu.regs.sp = self.cpu.regs.x
+            }
+            0x9b => {
+                // TXY - Transfer X to Y
+                if self.cpu.is_idx8() {
+                    let x = self.cpu.regs.x8();
+                    self.cpu.regs.set_y8(x);
+                    self.cpu.update_nz8(x);
+                } else {
+                    self.cpu.regs.y = self.cpu.regs.x;
+                    self.cpu.update_nz16(self.cpu.regs.x);
+                }
+            }
             0x9c => {
                 // STZ - absolute addressing
                 let addr = self.load::<u16>();
@@ -331,6 +346,17 @@ impl Device {
                 // PLB - Pull Data Bank
                 self.cpu.regs.db = self.pull();
                 self.cpu.update_nz8(self.cpu.regs.db)
+            }
+            0xbb => {
+                // TYX - Transfer Y to X
+                if self.cpu.is_idx8() {
+                    let y = self.cpu.regs.y8();
+                    self.cpu.regs.set_x8(y);
+                    self.cpu.update_nz8(y);
+                } else {
+                    self.cpu.regs.x = self.cpu.regs.y;
+                    self.cpu.update_nz16(self.cpu.regs.y);
+                }
             }
             0xc2 => {
                 // REP - Reset specified bits in the Status Register
