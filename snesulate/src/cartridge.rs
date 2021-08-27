@@ -375,7 +375,21 @@ impl Cartridge {
                 // LoRomSa1
                 match (addr.bank, addr.addr) {
                     ((0x00..=0x3f) | (0x80..=0xbf), (0x2200..=0x23ff)) => {
-                        todo!("sa1 i/o-ports write access at {}", addr)
+                        for (i, b) in value.to_bytes().as_ref().iter().cloned().enumerate() {
+                            match addr.addr.wrapping_add(i as u16) {
+                                0x2200 => {
+                                    // TODO: fully implement this:
+                                    //   - interrupt flag 0x80 missing
+                                    //   - ready flag 0x40 missing
+                                    //   - NMI flag 0x10 missing
+                                    sa1.set_input(b & 15);
+                                    if b & 0x20 > 0 {
+                                        sa1.reset();
+                                    }
+                                }
+                                _ => todo!("sa1 i/o-ports write access at {}", addr),
+                            }
+                        }
                     }
                     ((0x00..=0x3f) | (0x80..=0xbf), (0x3000..=0x37ff)) => {
                         value.write_to(sa1.iram_mut(), (addr.addr & 0x7ff) as usize)

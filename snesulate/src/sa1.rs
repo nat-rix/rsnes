@@ -43,6 +43,8 @@ impl Block {
 pub struct Sa1 {
     pub(crate) iram: [u8; IRAM_SIZE],
     blocks: [Block; 4],
+    input: u8,
+    output: u8,
 }
 
 impl Sa1 {
@@ -55,7 +57,14 @@ impl Sa1 {
                 Block::new(0, 2), // Set Super MMC Bank E
                 Block::new(0, 3), // Set Super MMC Bank F
             ],
+            input: 0,
+            output: 0,
         }
+    }
+
+    pub fn reset(&mut self) {
+        // TODO: correctly implement resetting
+        *self = Self::new()
     }
 
     pub const fn iram_ref(&self) -> &[u8; IRAM_SIZE] {
@@ -84,5 +93,9 @@ impl Sa1 {
             0xf0..=0xff => self.blocks[3].hirom(addr),
             _ => unreachable!(),
         }
+    }
+
+    pub fn set_input(&mut self, input: u8) {
+        self.input = input
     }
 }

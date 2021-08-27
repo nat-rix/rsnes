@@ -254,10 +254,8 @@ impl Device {
                 }
                 (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x5fff) => {
                     // address bus A
-                    todo!(
-                        "reading from unimplemented address {} at address bus A",
-                        addr
-                    )
+                    // TODO: should there always be a cartridge access done?
+                    self.read_cartridge(addr)
                 }
                 0x2100..=0x21ff => {
                     // address bus B
@@ -316,11 +314,8 @@ impl Device {
                 }
                 (0x2000..=0x20ff) | (0x2200..=0x3fff) | (0x4400..=0x5fff) => {
                     // address bus A
-                    todo!(
-                        "writing {:?} to unimplemented address {} at address bus A",
-                        value,
-                        addr
-                    )
+                    // TODO: should there always be a cartridge access done?
+                    self.write_cartridge(addr, value)
                 }
                 0x2100..=0x21ff => {
                     // address bus B
