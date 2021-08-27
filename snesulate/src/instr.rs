@@ -1,7 +1,6 @@
 use crate::cpu::Status;
 use crate::device::{Addr24, Data, Device, InverseU16};
-
-type Cycles = u32;
+use crate::timing::Cycles;
 
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
@@ -51,7 +50,7 @@ impl Device {
         Addr24::new(0, self.cpu.regs.dp.wrapping_add(val.into()))
     }
 
-    pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) {
+    pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
         println!("exec '{:02x}' @ {}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
@@ -455,6 +454,7 @@ impl Device {
             opcode => todo!("not yet implemented instruction 0x{:02x}", opcode),
         };
         println!("ran '{:02x}' with {} cycles", op, cycles);
+        cycles
     }
 
     pub fn add_carry8(&mut self, op1: u8) {
@@ -509,7 +509,7 @@ impl Device {
         }
     }
 
-    pub fn dispatch_instruction(&mut self) {
+    pub fn dispatch_instruction(&mut self) -> Cycles {
         let pc = self.cpu.regs.pc;
         let op = self.load::<u8>();
         self.dispatch_instruction_with(pc, op)

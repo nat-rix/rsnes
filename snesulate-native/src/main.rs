@@ -47,6 +47,6 @@ fn main() {
     let mut device = snesulate::device::Device::new();
     device.load_cartridge(cartridge);
     loop {
-        device.dispatch_instruction();
+        device.run_cycle();
     }
 }

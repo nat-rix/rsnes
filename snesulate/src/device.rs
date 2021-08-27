@@ -158,6 +158,8 @@ pub struct Device {
     open_bus: u8,
     ram: [u8; RAM_SIZE],
     wram_addr: Addr24,
+    pub(crate) master_cycle: u64,
+    pub(crate) memory_cycles: u32,
 }
 
 impl Device {
@@ -171,6 +173,8 @@ impl Device {
             open_bus: 0,
             ram: [0; RAM_SIZE],
             wram_addr: Addr24::default(),
+            master_cycle: 0,
+            memory_cycles: 0,
         }
     }
 
@@ -198,6 +202,7 @@ impl Device {
     pub fn read<D: Data>(&mut self, addr: Addr24) -> D {
         let value = self.read_data::<D>(addr);
         self.open_bus = value.to_open_bus();
+        self.memory_cycles += self.get_memory_cycle(addr) * core::mem::size_of::<D::Arr>() as u32;
         value
     }
 
@@ -205,7 +210,8 @@ impl Device {
     /// This method also updates open bus.
     pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
         self.open_bus = value.to_open_bus();
-        self.write_data(addr, value)
+        self.write_data(addr, value);
+        self.memory_cycles += self.get_memory_cycle(addr) * core::mem::size_of::<D::Arr>() as u32;
     }
 
     /// Push data on the stack
@@ -238,7 +244,8 @@ impl Device {
     ///
     /// # Note
     ///
-    /// This method does not modify open bus
+    /// This method does not modify open bus.
+    /// The master cycles aren't touched either.
     pub fn read_data<D: Data>(&self, addr: Addr24) -> D {
         if (0x7e..=0x7f).contains(&addr.bank) {
             // address bus A + /WRAM
@@ -299,6 +306,7 @@ impl Device {
     /// # Note
     ///
     /// This method does not modify open bus
+    /// The master cycles aren't touched either.
     pub fn write_data<D: Data>(&mut self, addr: Addr24, value: D) {
         if (0x7e..=0x7f).contains(&addr.bank) {
             // address bus A + /WRAM
