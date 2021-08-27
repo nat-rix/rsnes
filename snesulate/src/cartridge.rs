@@ -8,6 +8,7 @@
 use std::convert::TryInto;
 
 use crate::device::{Addr24, Data};
+use crate::sa1::Sa1;
 
 const MINIMUM_SIZE: usize = 0x8000;
 
@@ -40,6 +41,9 @@ enum RomType {
     HiRom,
     LoRomSDD1,
     LoRomSA1,
+    // > ExHiRom only used by "Dai Kaiju Monogatari 2 (JP)" and "Tales of Phantasia (JP)"
+    // source: nocache SNES hardware specification
+    //         <https://problemkaputt.de/fullsnes.htm>
     ExHiRom,
     HiRomSPC7110,
 }
@@ -56,6 +60,22 @@ impl RomType {
             _ => return None,
         })
     }
+
+    pub fn to_mapping(&self) -> MemoryMapping {
+        match self {
+            Self::LoRom => MemoryMapping::LoRom,
+            Self::HiRom => MemoryMapping::HiRom,
+            Self::LoRomSA1 => MemoryMapping::LoRomSa1 { sa1: Sa1::new() },
+            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MemoryMapping {
+    LoRom,
+    HiRom,
+    LoRomSa1 { sa1: Sa1 },
 }
 
 #[derive(Debug, Clone)]
@@ -220,9 +240,9 @@ impl Header {
 #[derive(Debug, Clone)]
 pub struct Cartridge {
     header: Header,
-    is_lorom: bool,
     rom: Vec<u8>,
     ram: Vec<u8>,
+    mapping: MemoryMapping,
 }
 
 impl Cartridge {
@@ -240,16 +260,16 @@ impl Cartridge {
         };
 
         let mut header = None;
-        for (addr, is_lorom) in [(0x7fb0, true), (0xffb0, false), (0x40ffb0, false)] {
+        for addr in [0x7fb0, 0xffb0, 0x40ffb0] {
             if bytes.len() >= addr + 80 {
                 if let Some((new, score)) = Header::from_bytes(&bytes[addr..addr + 80]) {
-                    if header.as_ref().map(|(_, s, _)| score > *s).unwrap_or(true) {
-                        header = Some((new, score, is_lorom));
+                    if header.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
+                        header = Some((new, score));
                     }
                 }
             }
         }
-        let (header, _score, is_lorom) = header.ok_or(ReadRomError::NoSuitableHeader)?;
+        let (header, _score) = header.ok_or(ReadRomError::NoSuitableHeader)?;
 
         let mut rom = vec![0u8; usize::max(header.rom_size as usize, bytes.len())];
         for chunk in rom.chunks_mut(bytes.len()) {
@@ -266,8 +286,8 @@ impl Cartridge {
         Ok(Self {
             rom,
             ram: vec![0; ram_size as usize],
+            mapping: header.rom_type.to_mapping(),
             header,
-            is_lorom,
         })
     }
 
@@ -278,8 +298,8 @@ impl Cartridge {
     /// Read from the cartridge
     pub fn read<D: Data>(&self, addr: Addr24) -> Option<D> {
         let mask = self.ram.len() - 1;
-        if self.is_lorom {
-            match (addr.bank, addr.addr) {
+        match &self.mapping {
+            MemoryMapping::LoRom => match (addr.bank, addr.addr) {
                 ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(D::parse(
                     &self.ram,
                     (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & mask,
@@ -289,9 +309,8 @@ impl Cartridge {
                     ((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize,
                 )),
                 _ => None,
-            }
-        } else {
-            match (addr.bank & 0x7f, addr.addr) {
+            },
+            MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
                 (0..=0x3f, 0x6000..=0x7fff) => Some(D::parse(
                     &self.ram,
                     (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize) & mask,
@@ -301,15 +320,36 @@ impl Cartridge {
                     ((addr.bank as usize & 0x3f) << 16) | addr.addr as usize,
                 )),
                 _ => None,
+            },
+            MemoryMapping::LoRomSa1 { sa1 } => {
+                // LoRomSa1
+                match (addr.bank, addr.addr) {
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x2200..=0x23ff)) => {
+                        todo!("sa1 i/o-ports read access at {}", addr)
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x3000..=0x37ff)) => {
+                        Some(D::parse(sa1.iram_ref(), (addr.addr & 0x7ff) as usize))
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x6000..=0x7fff)) => {
+                        todo!("sa1 8kb bw-ram read access at {}", addr)
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x8000..=0xffff)) => {
+                        Some(D::parse(&self.rom, sa1.lorom_addr(addr) as usize))
+                    }
+                    (0x40..=0x4f, _) => todo!("sa1 256kb blocks read access at {}", addr),
+                    (0xc0..=0xff, _) => Some(D::parse(&self.rom, sa1.hirom_addr(addr) as usize)),
+                    _ => None,
+                }
             }
+            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
         }
     }
 
     /// Read from the cartridge
     pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
         let mask = self.ram.len() - 1;
-        if self.is_lorom {
-            match (addr.bank, addr.addr) {
+        match &mut self.mapping {
+            MemoryMapping::LoRom => match (addr.bank, addr.addr) {
                 ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => value.write_to(
                     &mut self.ram,
                     (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & mask,
@@ -319,9 +359,8 @@ impl Cartridge {
                     ((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize,
                 ),
                 _ => (),
-            }
-        } else {
-            match (addr.bank & 0x7f, addr.addr) {
+            },
+            MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
                 (0..=0x3f, 0x6000..=0x7fff) => value.write_to(
                     &mut self.ram,
                     (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize) & mask,
@@ -331,7 +370,30 @@ impl Cartridge {
                     ((addr.bank as usize & 0x3f) << 16) | addr.addr as usize,
                 ),
                 _ => (),
+            },
+            MemoryMapping::LoRomSa1 { sa1 } => {
+                // LoRomSa1
+                match (addr.bank, addr.addr) {
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x2200..=0x23ff)) => {
+                        todo!("sa1 i/o-ports write access at {}", addr)
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x3000..=0x37ff)) => {
+                        value.write_to(sa1.iram_mut(), (addr.addr & 0x7ff) as usize)
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x6000..=0x7fff)) => {
+                        todo!("sa1 8kb bw-ram write access at {}", addr)
+                    }
+                    ((0x00..=0x3f) | (0x80..=0xbf), (0x8000..=0xffff)) => {
+                        value.write_to(&mut self.rom, sa1.lorom_addr(addr) as usize)
+                    }
+                    (0x40..=0x4f, _) => todo!("sa1 256kb blocks write access at {}", addr),
+                    (0xc0..=0xff, _) => {
+                        value.write_to(&mut self.rom, sa1.hirom_addr(addr) as usize)
+                    }
+                    _ => (),
+                }
             }
+            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
         }
     }
 }

@@ -5,4 +5,5 @@ pub mod dma;
 pub mod instr;
 pub mod ppu;
 pub mod registers;
+pub mod sa1;
 pub mod spc700;
