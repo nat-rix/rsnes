@@ -14,6 +14,20 @@ static ROM: [u8; 64] = [
     0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF,
 ];
 
+/// Flags
+pub mod flags {
+    pub const CARRY: u8 = 0x01;
+    pub const ZERO: u8 = 0x02;
+    pub const INTERRUPT_ENABLE: u8 = 0x04;
+    pub const HALF_CARRY: u8 = 0x08;
+    pub const BREAK: u8 = 0x10;
+    /// 0 means zero page is at 0x00xx,
+    /// 1 means zero page is at 0x01xx
+    pub const ZERO_PAGE: u8 = 0x20;
+    pub const OVERFLOW: u8 = 0x40;
+    pub const SIGN: u8 = 0x80;
+}
+
 #[derive(Debug, Clone)]
 pub struct Spc700 {
     mem: [u8; MEMORY_SIZE],
@@ -21,6 +35,13 @@ pub struct Spc700 {
     pub input: [u8; 4],
     /// data, we send to the main processor
     pub output: [u8; 4],
+
+    a: u8,
+    x: u8,
+    y: u8,
+    sp: u8,
+    status: u8,
+    pc: u16,
 }
 
 impl Spc700 {
@@ -29,11 +50,32 @@ impl Spc700 {
             mem: [0; MEMORY_SIZE],
             input: [0; 4],
             output: [0; 4],
+            a: 0,
+            x: 0,
+            y: 0,
+            sp: 0,
+            pc: 0xffc0,
+            status: 0,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.input = [0; 4];
+        self.output = [0; 4];
+        self.a = 0;
+        self.x = 0;
+        self.y = 0;
+        self.sp = 0;
+        self.pc = self.read16(0xfffe);
+        self.status = 0;
     }
 
     pub fn is_rom_mapped(&self) -> bool {
         self.mem[0xf1] & 0x80 > 0
+    }
+
+    pub fn read16(&self, addr: u16) -> u16 {
+        u16::from_le_bytes([self.read(addr), self.read(addr.wrapping_add(1))])
     }
 
     pub fn read(&self, addr: u16) -> u8 {

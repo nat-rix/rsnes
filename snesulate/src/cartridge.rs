@@ -341,11 +341,10 @@ impl Cartridge {
                     _ => None,
                 }
             }
-            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
         }
     }
 
-    /// Read from the cartridge
+    /// Write to the cartridge
     pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
         let mask = self.ram.len() - 1;
         match &mut self.mapping {
@@ -407,7 +406,6 @@ impl Cartridge {
                     _ => (),
                 }
             }
-            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
         }
     }
 }
