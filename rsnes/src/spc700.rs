@@ -19,21 +19,21 @@ static ROM: [u8; 64] = [
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 6,  // 1^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 4,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 5,  // 6^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 5,  // 8^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
-       3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 4,  // a^
+       3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 0, 0,  // c^
+       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 4, 0,  // c^
        2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
-       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 4, 3, 0, 0,  // e^
+       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
        2, 0, 0, 0, 0, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
@@ -150,11 +150,15 @@ impl Spc700 {
         self.write_small(addr.wrapping_add(1), b)
     }
 
+    pub fn push(&mut self, val: u8) {
+        self.write(u16::from(self.sp) | 0x100, val);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
     pub fn push16(&mut self, val: u16) {
         let [a, b] = val.to_be_bytes();
-        self.write(u16::from(self.sp) | 0x100, a);
-        self.write(u16::from(self.sp.wrapping_sub(1)) | 0x100, b);
-        self.sp = self.sp.wrapping_sub(2);
+        self.push(a);
+        self.push(b)
     }
 
     pub fn pull(&mut self) -> u8 {
@@ -185,6 +189,10 @@ impl Spc700 {
         let mut cycles = CYCLES[op as usize];
         match op {
             0x00 => (), // NOP
+            0x0d => {
+                // PUSH - status
+                self.push(self.status)
+            }
             0x10 => {
                 // BPL/JNS - Branch if SIGN not set
                 let rel = self.load();
@@ -203,6 +211,10 @@ impl Spc700 {
             0x20 => {
                 // CLRP - Clear ZERO_PAGE
                 self.status &= !flags::ZERO_PAGE
+            }
+            0x2d => {
+                // PUSH - A
+                self.push(self.a)
             }
             0x2f => {
                 // BRA - Branch always
@@ -229,6 +241,10 @@ impl Spc700 {
                 // SETP - Set ZERO_PAGE
                 self.status |= flags::ZERO_PAGE
             }
+            0x4d => {
+                // PUSH - X
+                self.push(self.x)
+            }
             0x5d => {
                 // MOV - X := A
                 self.x = self.a;
@@ -237,6 +253,10 @@ impl Spc700 {
             0x60 => {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
+            }
+            0x6d => {
+                // PUSH - Y
+                self.push(self.y)
             }
             0x6f => {
                 // RET - Return from subroutine
@@ -275,6 +295,10 @@ impl Spc700 {
                 self.y = self.load();
                 self.update_nz8(self.y);
             }
+            0x8e => {
+                // POP - status
+                self.status = self.pull()
+            }
             0x8f => {
                 // MOV - (dp) := IMM
                 let (val, addr) = (self.load(), self.load());
@@ -306,6 +330,10 @@ impl Spc700 {
                 // CMP - Y - IMM
                 let val = self.load();
                 self.compare(self.y, val)
+            }
+            0xae => {
+                // POP - A
+                self.a = self.pull()
             }
             0xaf => {
                 // MOV - (X) := A; X++
@@ -367,6 +395,10 @@ impl Spc700 {
                 // MOV - X := IMM
                 self.x = self.load();
                 self.update_nz8(self.x);
+            }
+            0xce => {
+                // POP - X
+                self.x = self.pull()
             }
             0xd0 => {
                 // BNE/JNZ - if not Zero
@@ -430,6 +462,10 @@ impl Spc700 {
             0xed => {
                 // NOTC - Complement CARRY
                 self.status ^= flags::CARRY
+            }
+            0xee => {
+                // POP - Y
+                self.y = self.pull()
             }
             0xf0 => {
                 // BEQ - Branch if ZERO is set
