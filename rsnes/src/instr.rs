@@ -10,8 +10,8 @@ static CYCLES: [Cycles; 256] = [
        6, 0, 8, 0, 0, 0, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
-       0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       0, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
+       0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
+       6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
@@ -196,6 +196,11 @@ impl Device {
                     }
                 }
             }
+            0x58 => {
+                // CLI - Clear IRQ_DISABLE
+                // TODO: implement interrupts
+                self.cpu.regs.status &= !Status::IRQ_DISABLE
+            }
             0x5a => {
                 // PHY - Push Y
                 if self.cpu.is_idx8() {
@@ -213,6 +218,10 @@ impl Device {
             0x5c => {
                 // JMP/JML - Jump absolute Long
                 self.cpu.regs.pc = self.load::<Addr24>();
+            }
+            0x60 => {
+                // RTS - Return from subroutine
+                self.cpu.regs.pc.addr = 1u16.wrapping_add(self.pull());
             }
             0x64 => {
                 // STZ - Store Zero to memory
