@@ -14,7 +14,7 @@ static CYCLES: [Cycles; 256] = [
        6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 5, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 2, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
@@ -273,12 +273,7 @@ impl Device {
             0x74 => {
                 // STZ - Store Zero to DP X indexed memory
                 let addr = self.load_dp_indexed_x(&mut cycles);
-                if self.cpu.is_reg8() {
-                    self.write::<u8>(addr, 0);
-                } else {
-                    self.write::<u16>(addr, 0);
-                    cycles += 1
-                }
+                self.store_zero(addr, &mut cycles)
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
@@ -377,6 +372,11 @@ impl Device {
                 // STZ - absolute addressing
                 let addr = self.load::<u16>();
                 self.store_zero(self.cpu.get_data_addr(addr), &mut cycles)
+            }
+            0x9e => {
+                // STZ - absoulte X indexed
+                let addr = self.load_indexed_x(&mut cycles);
+                self.store_zero(addr, &mut cycles)
             }
             0x9f => {
                 // STA - Store absolute long indexed A to address
