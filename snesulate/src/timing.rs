@@ -1,6 +1,18 @@
+//! Timing control implementation
+//!
+//! # Literature
+//!
+//! - <https://wiki.superfamicom.org/timing>
+
 use crate::device::{Addr24, Device};
 
 pub type Cycles = u32;
+
+// The SNES master clock runs at ca. (945/44) MHz which is ca. 21.477Hz;
+// The APU runs at 1024MHz
+
+/// This is a fractional proportion between the cpu and apu clock speed
+const APU_CPU_TIMING_PROPORTION: (u64, u64) = (118125, 5632);
 
 impl Device {
     pub fn run_cycle(&mut self) {
@@ -9,7 +21,11 @@ impl Device {
         let cycles = self.dispatch_instruction() * 6 + self.memory_cycles;
         self.master_cycle += u64::from(cycles);
         self.memory_cycles = 0;
-        println!("master cycle {}", self.master_cycle);
+        while self.apu_cycles * APU_CPU_TIMING_PROPORTION.0
+            < self.master_cycle * APU_CPU_TIMING_PROPORTION.1
+        {
+            self.apu_cycles += u64::from(self.spc.dispatch_instruction())
+        }
     }
 
     pub fn get_memory_cycle(&self, addr: Addr24) -> Cycles {

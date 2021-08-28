@@ -160,6 +160,7 @@ pub struct Device {
     wram_addr: Addr24,
     pub(crate) master_cycle: u64,
     pub(crate) memory_cycles: u32,
+    pub(crate) apu_cycles: u64,
 }
 
 impl Device {
@@ -175,6 +176,7 @@ impl Device {
             wram_addr: Addr24::default(),
             master_cycle: 0,
             memory_cycles: 0,
+            apu_cycles: 0,
         }
     }
 

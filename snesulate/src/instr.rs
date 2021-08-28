@@ -51,7 +51,7 @@ impl Device {
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
-        println!("exec '{:02x}' @ {}", op, start_addr);
+        println!("<CPU> executing '{:02x}' @ {}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
             0x02 => {
@@ -451,9 +451,8 @@ impl Device {
                     cycles += 1;
                 }
             }
-            opcode => todo!("not yet implemented instruction 0x{:02x}", opcode),
+            opcode => todo!("not yet implemented CPU instruction 0x{:02x}", opcode),
         };
-        println!("ran '{:02x}' with {} cycles", op, cycles);
         cycles
     }
 

@@ -5,6 +5,8 @@
 //! - <https://wiki.superfamicom.org/spc700-reference>
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
 
+use crate::timing::Cycles;
+
 pub const MEMORY_SIZE: usize = 64 * 1024;
 
 static ROM: [u8; 64] = [
@@ -13,6 +15,29 @@ static ROM: [u8; 64] = [
     0xCB, 0xF4, 0xD7, 0x00, 0xFC, 0xD0, 0xF3, 0xAB, 0x01, 0x10, 0xEF, 0x7E, 0xF4, 0x10, 0xEB, 0xBA,
     0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF,
 ];
+
+#[rustfmt::skip]
+static CYCLES: [Cycles; 256] = [
+    /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 1^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 2^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 3^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 5^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 7^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // d^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // f^
+];
+
+const F1_RESET: u8 = 0xb0;
 
 /// Flags
 pub mod flags {
@@ -46,8 +71,15 @@ pub struct Spc700 {
 
 impl Spc700 {
     pub fn new() -> Self {
+        const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
+            let mut mem: [u8; MEMORY_SIZE] =
+                unsafe { core::mem::transmute([[[0x00u8; 32], [0xffu8; 32]]; 1024]) };
+            mem[0xf1] = F1_RESET;
+            mem
+        }
+        const POWER_UP_MEMORY: [u8; MEMORY_SIZE] = generate_power_up_memory();
         Self {
-            mem: [0; MEMORY_SIZE],
+            mem: POWER_UP_MEMORY,
             input: [0; 4],
             output: [0; 4],
             a: 0,
@@ -60,13 +92,16 @@ impl Spc700 {
     }
 
     pub fn reset(&mut self) {
+        self.mem[0xf1] = F1_RESET;
         self.input = [0; 4];
         self.output = [0; 4];
         self.a = 0;
         self.x = 0;
         self.y = 0;
         self.sp = 0;
-        self.pc = self.read16(0xfffe);
+        // actually self.read16(0xfffe), but this will
+        // always result in 0xffc0, because mem[0xf1] = 0xb0
+        self.pc = 0xffc0;
         self.status = 0;
     }
 
@@ -91,5 +126,22 @@ impl Spc700 {
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
             addr => self.mem[addr as usize] = val,
         }
+    }
+
+    pub fn load(&mut self) -> u8 {
+        let val = self.read(self.pc);
+        self.pc = self.pc.wrapping_add(1);
+        val
+    }
+
+    pub fn dispatch_instruction(&mut self) -> Cycles {
+        let start_addr = self.pc;
+        let op = self.load();
+        println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
+        let mut cycles = CYCLES[op as usize];
+        match op {
+            _ => todo!("not yet implemented SPC700 instruction 0x{:02x}", op),
+        }
+        cycles
     }
 }
