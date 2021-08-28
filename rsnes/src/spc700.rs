@@ -20,9 +20,9 @@ static ROM: [u8; 64] = [
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 1^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
@@ -162,6 +162,11 @@ impl Spc700 {
         println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x10 => {
+                // BPL/JNS - Branch if SIGN not set
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::SIGN == 0, &mut cycles)
+            }
             0x1d => {
                 // DEC - X
                 self.x = self.x.wrapping_sub(1);
@@ -171,6 +176,11 @@ impl Spc700 {
                 // BRA - Branch always
                 let rel = self.load();
                 self.branch_rel(rel, true, &mut cycles)
+            }
+            0x30 => {
+                // BMI - Branch if SIGN is set
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::SIGN > 0, &mut cycles)
             }
             0x3d => {
                 // INC - X

@@ -20,7 +20,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
@@ -552,6 +552,10 @@ impl Device {
                 // XBA - Swap the A Register
                 self.cpu.regs.a = self.cpu.regs.a.swap_bytes();
                 self.cpu.update_nz8(self.cpu.regs.a8())
+            }
+            0xf0 => {
+                // BEQ - Branch if ZERO is set
+                self.branch_near(self.cpu.regs.status.has(Status::ZERO), &mut cycles)
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
