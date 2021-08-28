@@ -13,10 +13,10 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
        0, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
+       3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 4, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
        0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 3, 0, 0, 0, 0,  // e^
@@ -48,6 +48,23 @@ impl Device {
             *cycles += 1
         }
         Addr24::new(0, self.cpu.regs.dp.wrapping_add(val.into()))
+    }
+
+    pub fn load_indirect_long_indexed_y(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let addr = self.load::<u8>();
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        let mut addr = self.read::<Addr24>(
+            self.cpu
+                .get_data_addr(self.cpu.regs.dp.wrapping_add(addr.into())),
+        );
+        let (new_addr, ov) = addr.addr.overflowing_add(self.cpu.regs.y);
+        if ov {
+            Addr24::new(addr.bank.wrapping_add(1), new_addr)
+        } else {
+            Addr24::new(addr.bank, new_addr)
+        }
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
@@ -204,6 +221,10 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x80 => {
+                // BRA - Branch always
+                self.branch_near(true, &mut cycles);
+            }
             0x8b => {
                 // PHB - Push Data Bank
                 self.push(self.cpu.regs.db)
@@ -344,6 +365,20 @@ impl Device {
                 // PLB - Pull Data Bank
                 self.cpu.regs.db = self.pull();
                 self.cpu.update_nz8(self.cpu.regs.db)
+            }
+            0xb7 => {
+                // LDA - Load indirect long indexed Y value to A
+                let addr = self.load_indirect_long_indexed_y(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.update_nz8(val);
+                    self.cpu.regs.set_a8(val)
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.update_nz16(val);
+                    self.cpu.regs.a = val;
+                    cycles += 1;
+                }
             }
             0xbb => {
                 // TYX - Transfer Y to X
