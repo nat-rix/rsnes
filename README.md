@@ -1,6 +1,9 @@
 # rsnes
 
-<img src='https://user-images.githubusercontent.com/26610181/131218830-bd73224e-4385-4b07-af01-7f61f69a00d7.png' alt='rsnes logo' width='420cm'>
+<div align='center'>
+  <img src='https://user-images.githubusercontent.com/26610181/131219139-4b2c12ca-cc3d-4a72-827c-1c83476a4401.png'
+       alt='rsnes logo' width='384cm' align='center'>
+</div>
 
 A simple [SNES](https://en.wikipedia.org/wiki/Super_Nintendo_Entertainment_System) emulator
 
