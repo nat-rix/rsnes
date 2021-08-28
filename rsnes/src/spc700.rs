@@ -21,7 +21,7 @@ static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 1^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 2^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
@@ -30,9 +30,9 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        0, 0, 0, 0, 0, 0, 4, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // d^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
@@ -128,15 +128,26 @@ impl Spc700 {
         }
     }
 
+    pub fn get_small(&self, addr: u8) -> u16 {
+        u16::from(addr) | (((self.status & flags::ZERO_PAGE) as u16) << 3)
+    }
+
     pub fn read_small(&self, addr: u8) -> u8 {
-        self.read(u16::from(addr) | (((self.status & flags::ZERO_PAGE) as u16) << 3))
+        self.read(self.get_small(addr))
+    }
+
+    pub fn read16_small(&self, addr: u8) -> u16 {
+        u16::from_le_bytes([self.read_small(addr), self.read_small(addr.wrapping_add(1))])
     }
 
     pub fn write_small(&mut self, addr: u8, val: u8) {
-        self.write(
-            u16::from(addr) | (((self.status & flags::ZERO_PAGE) as u16) << 3),
-            val,
-        )
+        self.write(self.get_small(addr), val)
+    }
+
+    pub fn write16_small(&mut self, addr: u8, val: u16) {
+        let [a, b] = val.to_le_bytes();
+        self.write_small(addr, a);
+        self.write_small(addr.wrapping_add(1), b)
     }
 
     pub fn load(&mut self) -> u8 {
@@ -155,6 +166,11 @@ impl Spc700 {
                 // DEC - X
                 self.x = self.x.wrapping_sub(1);
                 self.update_nz8(self.x);
+            }
+            0x2f => {
+                // BRA - Branch always
+                let rel = self.load();
+                self.branch_rel(rel, true, &mut cycles)
             }
             0x3d => {
                 // INC - X
@@ -203,6 +219,21 @@ impl Spc700 {
                 // MOV - X := SP
                 self.x = self.sp;
                 self.update_nz8(self.x);
+            }
+            0xba => {
+                // MOVW - YA := (imm)[16-bit]
+                let addr = self.load();
+                let value = self.read16_small(addr);
+                let [a, y] = value.to_le_bytes();
+                self.a = a;
+                self.y = y;
+                self.update_nz16(value);
+            }
+            0xda => {
+                // MOVW - (imm)[16-bit] := YA
+                // TODO: calculate cyles as if only one byte written
+                let addr = self.load();
+                self.write16_small(addr, u16::from_le_bytes([self.a, self.y]));
             }
             0xbc => {
                 // INC - A
@@ -260,6 +291,15 @@ impl Spc700 {
     pub fn update_nz8(&mut self, val: u8) {
         if val > 0 {
             self.status = (self.status & !(flags::ZERO | flags::SIGN)) | (val & flags::SIGN);
+        } else {
+            self.status = (self.status & !flags::SIGN) | flags::ZERO
+        }
+    }
+
+    pub fn update_nz16(&mut self, val: u16) {
+        if val > 0 {
+            self.status =
+                (self.status & !(flags::ZERO | flags::SIGN)) | ((val >> 8) as u8 & flags::SIGN);
         } else {
             self.status = (self.status & !flags::SIGN) | flags::ZERO
         }

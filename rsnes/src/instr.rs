@@ -11,7 +11,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   0, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       0, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
+       0, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
@@ -19,7 +19,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
-       0, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
+       2, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -203,6 +203,34 @@ impl Device {
                 // STZ - Store Zero to memory
                 let addr = self.load_direct(&mut cycles);
                 self.store_zero(addr, &mut cycles)
+            }
+            0x68 => {
+                // PLA - Pull A
+                if self.cpu.is_reg8() {
+                    let a = self.pull();
+                    self.cpu.regs.set_a8(a);
+                    self.cpu.update_nz8(a);
+                } else {
+                    self.cpu.regs.a = self.pull();
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x69 => {
+                // ADC -  immediate Add with Carry
+                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
+                if self.cpu.is_reg8() {
+                    let op1 = self.load::<u8>();
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.load::<u16>();
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
+            }
+            0x70 => {
+                // BVS - Branch if Overflow is set
+                self.branch_near(self.cpu.regs.status.has(Status::OVERFLOW), &mut cycles)
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
@@ -445,14 +473,10 @@ impl Device {
                 let addr = self.cpu.get_data_addr(addr);
                 if self.cpu.is_reg8() {
                     let val = self.read::<u8>(addr);
-                    let res = self.cpu.regs.a8() as u16 + (!val) as u16 + 1;
-                    self.cpu.regs.status.set_if(Status::CARRY, res > 0xff);
-                    self.cpu.update_nz8((res & 0xff) as u8);
+                    self.compare8(self.cpu.regs.a8(), val);
                 } else {
                     let val = self.read::<u16>(addr);
-                    let res = self.cpu.regs.a as u32 + (!val) as u32 + 1;
-                    self.cpu.regs.status.set_if(Status::CARRY, res > 0xffff);
-                    self.cpu.update_nz16((res & 0xffff) as u16);
+                    self.compare16(self.cpu.regs.a, val);
                     cycles += 1
                 }
             }
@@ -470,6 +494,18 @@ impl Device {
                     self.push(self.cpu.regs.x8())
                 } else {
                     self.push(self.cpu.regs.x);
+                    cycles += 1
+                }
+            }
+            0xe0 => {
+                // CPX - Compare X with immediate value
+                // this will also work with decimal mode (TODO: check this fact)
+                if self.cpu.is_idx8() {
+                    let val = self.load::<u8>();
+                    self.compare8(self.cpu.regs.x8(), val);
+                } else {
+                    let val = self.load::<u16>();
+                    self.compare16(self.cpu.regs.x, val);
                     cycles += 1
                 }
             }
@@ -584,6 +620,18 @@ impl Device {
             self.write(addr, 0u16);
             *cycles += 1;
         }
+    }
+
+    pub fn compare8(&mut self, a: u8, b: u8) {
+        let res = a as u16 + (!b) as u16 + 1;
+        self.cpu.regs.status.set_if(Status::CARRY, res > 0xff);
+        self.cpu.update_nz8((res & 0xff) as u8);
+    }
+
+    pub fn compare16(&mut self, a: u16, b: u16) {
+        let res = a as u32 + (!b) as u32 + 1;
+        self.cpu.regs.status.set_if(Status::CARRY, res > 0xffff);
+        self.cpu.update_nz16((res & 0xffff) as u16);
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
