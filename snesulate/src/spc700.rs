@@ -20,21 +20,21 @@ static ROM: [u8; 64] = [
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 1^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 2^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 3^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // b^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // d^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 4, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // d^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // e^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // f^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -156,6 +156,16 @@ impl Spc700 {
         println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x1d => {
+                // DEC - X
+                self.x = self.x.wrapping_sub(1);
+                self.update_nz8(self.x);
+            }
+            0x3d => {
+                // INC - X
+                self.x = self.x.wrapping_add(1);
+                self.update_nz8(self.x);
+            }
             0x5d => {
                 // MOV - X := A
                 self.x = self.a;
@@ -172,20 +182,39 @@ impl Spc700 {
                 self.y = self.read_small(addr);
                 self.update_nz8(self.y);
             }
+            0x9c => {
+                // DEC - A
+                self.a = self.a.wrapping_sub(1);
+                self.update_nz8(self.a);
+            }
             0x9d => {
                 // MOV - X := SP
                 self.x = self.sp;
                 self.update_nz8(self.x);
             }
+            0xbc => {
+                // INC - A
+                self.a = self.a.wrapping_add(1);
+                self.update_nz8(self.a);
+            }
             0xbd => {
                 // MOV - SP := X
                 self.sp = self.x
+            }
+            0xc6 => {
+                // MOV - (X) := A
+                self.write_small(self.x, self.a)
             }
             0xcd => {
                 // MOV - X := IMM
                 let addr = self.load();
                 self.x = self.read_small(addr);
                 self.update_nz8(self.x);
+            }
+            0xdc => {
+                // DEC - Y
+                self.y = self.y.wrapping_sub(1);
+                self.update_nz8(self.y);
             }
             0xdd => {
                 // MOV - A := Y
@@ -197,6 +226,11 @@ impl Spc700 {
                 let addr = self.load();
                 self.a = self.read_small(addr);
                 self.update_nz8(self.x);
+            }
+            0xfc => {
+                // INC - Y
+                self.y = self.y.wrapping_add(1);
+                self.update_nz8(self.y);
             }
             0xfd => {
                 // MOV - Y := A
