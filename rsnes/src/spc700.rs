@@ -169,8 +169,8 @@ impl Spc700 {
             0x78 => {
                 // CMP - (imm) - imm
                 let (a, b) = (self.load(), self.load());
-                println!("!!!! comparing {} vs @{:02x}", a, b);
                 let b = self.read_small(b);
+                println!("!!!! comparing {:02x} vs {:02x}", a, b);
                 let res = a as u16 + !b as u16 + 1;
                 if res > 0xff {
                     self.status |= flags::CARRY

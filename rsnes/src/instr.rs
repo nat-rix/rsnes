@@ -15,11 +15,11 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
-       2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 0, 4, 0, 0, 0, 0,  // a^
+       2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 2, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
-       0, 0, 3, 0, 0, 0, 0, 0,   0, 0, 2, 0, 0, 4, 0, 0,  // c^
+       0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
-       0, 0, 3, 0, 0, 0, 0, 0,   0, 2, 0, 3, 0, 0, 0, 0,  // e^
+       0, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -340,12 +340,17 @@ impl Device {
             }
             0xa8 => {
                 // TAY - Transfer A to Y
-                if self.cpu.is_reg8() {
-                    self.cpu.regs.set_y8(self.cpu.regs.a8());
-                    self.cpu.update_nz8(self.cpu.regs.a8());
+                if self.cpu.is_idx8() {
+                    let y = self.cpu.regs.a8();
+                    self.cpu.regs.set_y8(y);
+                    self.cpu.update_nz8(y);
                 } else {
-                    self.cpu.regs.y = self.cpu.regs.a;
-                    self.cpu.update_nz16(self.cpu.regs.a);
+                    self.cpu.regs.y = if self.cpu.is_reg8() {
+                        self.cpu.regs.a8().into()
+                    } else {
+                        self.cpu.regs.a
+                    };
+                    self.cpu.update_nz16(self.cpu.regs.y);
                 }
             }
             0xa9 => {
@@ -359,6 +364,21 @@ impl Device {
                     self.cpu.update_nz16(val);
                     self.cpu.regs.a = val;
                     cycles += 1;
+                }
+            }
+            0xaa => {
+                // TAX - Transfer A to X
+                if self.cpu.is_idx8() {
+                    let x = self.cpu.regs.a8();
+                    self.cpu.regs.set_x8(x);
+                    self.cpu.update_nz8(x);
+                } else {
+                    self.cpu.regs.x = if self.cpu.is_reg8() {
+                        self.cpu.regs.a8().into()
+                    } else {
+                        self.cpu.regs.a
+                    };
+                    self.cpu.update_nz16(self.cpu.regs.x);
                 }
             }
             0xab => {
@@ -395,6 +415,17 @@ impl Device {
                 // REP - Reset specified bits in the Status Register
                 let mask = Status(!self.load::<u8>());
                 self.cpu.regs.status &= mask
+            }
+            0xc8 => {
+                // INY - Increment Y
+                if self.cpu.is_idx8() {
+                    let y = self.cpu.regs.y8().wrapping_add(1);
+                    self.cpu.regs.set_y8(y);
+                    self.cpu.update_nz8(y);
+                } else {
+                    self.cpu.regs.y = self.cpu.regs.y.wrapping_add(1);
+                    self.cpu.update_nz16(self.cpu.regs.y);
+                }
             }
             0xca => {
                 // DEX - Decrement X
@@ -446,6 +477,17 @@ impl Device {
                 // SEP - Set specified bits in the Status Register
                 let mask = Status(self.load::<u8>());
                 self.cpu.regs.status |= mask
+            }
+            0xe8 => {
+                // INX - Increment X
+                if self.cpu.is_idx8() {
+                    let x = self.cpu.regs.x8().wrapping_add(1);
+                    self.cpu.regs.set_x8(x);
+                    self.cpu.update_nz8(x);
+                } else {
+                    self.cpu.regs.x = self.cpu.regs.x.wrapping_add(1);
+                    self.cpu.update_nz16(self.cpu.regs.x);
+                }
             }
             0xe9 => {
                 // SBC - Subtract with carry
