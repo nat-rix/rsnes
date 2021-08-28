@@ -6,7 +6,7 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // 0^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 0, 0, 0,  // 1^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 0, 0, 0,  // 1^
        6, 0, 8, 0, 0, 0, 0, 0,   2, 2, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
@@ -93,6 +93,17 @@ impl Device {
             0x18 => {
                 // CLC - Clear the Carry Flag
                 self.cpu.regs.status &= !Status::CARRY;
+            }
+            0x1a => {
+                // INC/INA - Increment A
+                if self.cpu.is_reg8() {
+                    let a = self.cpu.regs.a8().wrapping_add(1);
+                    self.cpu.regs.set_a8(a);
+                    self.cpu.update_nz8(a)
+                } else {
+                    self.cpu.regs.a = self.cpu.regs.a.wrapping_add(1);
+                    self.cpu.update_nz16(self.cpu.regs.a)
+                }
             }
             0x1b => {
                 // TCS - Transfer A to SP

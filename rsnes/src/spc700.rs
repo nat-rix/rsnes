@@ -27,9 +27,9 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 5,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        0, 0, 0, 0, 4, 0, 4, 0,   0, 0, 0, 4, 0, 2, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
@@ -198,6 +198,14 @@ impl Spc700 {
                 let addr = self.load();
                 self.compare(self.y, self.read_small(addr))
             }
+            0x8b => {
+                // DEC - Decrement (imm)
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_sub(1);
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
             0x8d => {
                 // MOV - Y := IMM
                 self.y = self.load();
@@ -217,6 +225,14 @@ impl Spc700 {
                 // MOV - X := SP
                 self.x = self.sp;
                 self.update_nz8(self.x);
+            }
+            0xab => {
+                // INC - Increment (imm)
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_add(1);
+                self.write(addr, val);
+                self.update_nz8(val)
             }
             0xba => {
                 // MOVW - YA := (imm)[16-bit]
