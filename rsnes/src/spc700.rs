@@ -28,7 +28,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 2,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
        0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
        2, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2,12, 0,  // 9^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        3, 0, 0, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
@@ -359,6 +359,24 @@ impl Spc700 {
                 // MOV - X := SP
                 self.x = self.sp;
                 self.update_nz8(self.x);
+            }
+            0x9e => {
+                // DIV - Y, A := YA % X, YA / X
+                // TODO: no exact reproduction of behaviour (see bsnes impl)
+                let (rdiv, rmod) = if self.x == 0 {
+                    (0xffff, self.a)
+                } else {
+                    let ya = self.ya();
+                    let x = u16::from(self.x);
+                    (ya / x, (ya % x) as u8)
+                };
+                self.set_status(rdiv > 0xff, flags::OVERFLOW);
+                // TODO: understand why this works and what exactly HALF_CARRY does
+                // This will probably work, because bsnes does this
+                self.set_status((self.x & 15) <= (self.y & 15), flags::HALF_CARRY);
+                self.update_nz8(self.a);
+                self.a = (rdiv & 0xff) as u8;
+                self.y = rmod;
             }
             0xa0 => {
                 // EI - Set INTERRUPT_ENABLE
