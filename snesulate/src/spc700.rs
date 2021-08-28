@@ -32,7 +32,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // b^
        0, 0, 0, 0, 0, 0, 4, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // d^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // d^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
@@ -129,19 +129,14 @@ impl Spc700 {
     }
 
     pub fn read_small(&self, addr: u8) -> u8 {
-        if self.status & flags::ZERO_PAGE > 0 {
-            self.read(u16::from(addr) | 0x100)
-        } else {
-            self.read(addr.into())
-        }
+        self.read(u16::from(addr) | (((self.status & flags::ZERO_PAGE) as u16) << 3))
     }
 
     pub fn write_small(&mut self, addr: u8, val: u8) {
-        if self.status & flags::ZERO_PAGE > 0 {
-            self.write(u16::from(addr) | 0x100, val)
-        } else {
-            self.write(addr.into(), val)
-        }
+        self.write(
+            u16::from(addr) | (((self.status & flags::ZERO_PAGE) as u16) << 3),
+            val,
+        )
     }
 
     pub fn load(&mut self) -> u8 {
@@ -178,8 +173,7 @@ impl Spc700 {
             }
             0x8d => {
                 // MOV - Y := IMM
-                let addr = self.load();
-                self.y = self.read_small(addr);
+                self.y = self.load();
                 self.update_nz8(self.y);
             }
             0x9c => {
@@ -207,9 +201,13 @@ impl Spc700 {
             }
             0xcd => {
                 // MOV - X := IMM
-                let addr = self.load();
-                self.x = self.read_small(addr);
+                self.x = self.load();
                 self.update_nz8(self.x);
+            }
+            0xd0 => {
+                // BNE/JNZ - if not Zero
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::ZERO == 0, &mut cycles)
             }
             0xdc => {
                 // DEC - Y
@@ -223,9 +221,8 @@ impl Spc700 {
             }
             0xe8 => {
                 // MOV - A := IMM
-                let addr = self.load();
-                self.a = self.read_small(addr);
-                self.update_nz8(self.x);
+                self.a = self.load();
+                self.update_nz8(self.a);
             }
             0xfc => {
                 // INC - Y
@@ -247,6 +244,17 @@ impl Spc700 {
             self.status = (self.status & !(flags::ZERO | flags::SIGN)) | (val & flags::SIGN);
         } else {
             self.status = (self.status & !flags::SIGN) | flags::ZERO
+        }
+    }
+
+    pub fn branch_rel(&mut self, rel: u8, cond: bool, cycles: &mut Cycles) {
+        if cond {
+            if rel < 0x80 {
+                self.pc = self.pc.wrapping_add(rel.into());
+            } else {
+                self.pc = self.pc.wrapping_sub(0x100 - u16::from(rel));
+            }
+            *cycles += 2;
         }
     }
 }
