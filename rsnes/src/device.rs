@@ -333,9 +333,7 @@ impl Device {
                         let addr = (addr.addr.wrapping_add(i as u16) & 0xff) as u8;
                         match addr {
                             0x00..=0x33 => self.ppu.write_register(addr, *d),
-                            0x40..=0x43 => {
-                                value.write_to(&mut self.spc.input, (addr & 0b11) as usize)
-                            }
+                            0x40..=0x43 => self.spc.input[(addr & 0b11) as usize] = *d,
                             0x81 => {
                                 self.wram_addr.addr = (self.wram_addr.addr & 0xff00) | *d as u16
                             }
