@@ -12,7 +12,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
+       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 0, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 2, 4, 0, 0, 0, 0,  // a^
@@ -30,7 +30,21 @@ impl Device {
             // TODO: check this criteria (very much not sure)
             *cycles += 1
         }
-        Addr24::new(self.cpu.regs.db, addr)
+        self.cpu.get_data_addr(addr)
+    }
+
+    pub fn load_dp_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let addr = self.load::<u8>();
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        self.cpu.get_data_addr(
+            self.cpu
+                .regs
+                .dp
+                .wrapping_add(addr.into())
+                .wrapping_add(self.cpu.regs.x),
+        )
     }
 
     pub fn load_long_indexed_x(&mut self) -> Addr24 {
@@ -255,6 +269,16 @@ impl Device {
             0x70 => {
                 // BVS - Branch if Overflow is set
                 self.branch_near(self.cpu.regs.status.has(Status::OVERFLOW), &mut cycles)
+            }
+            0x74 => {
+                // STZ - Store Zero to DP X indexed memory
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, 0);
+                } else {
+                    self.write::<u16>(addr, 0);
+                    cycles += 1
+                }
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
