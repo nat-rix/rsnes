@@ -20,7 +20,7 @@ static ROM: [u8; 64] = [
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 1^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 6,  // 1^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
@@ -156,6 +156,12 @@ impl Spc700 {
         val
     }
 
+    pub fn load16(&mut self) -> u16 {
+        let val = self.read16(self.pc);
+        self.pc = self.pc.wrapping_add(2);
+        val
+    }
+
     pub fn dispatch_instruction(&mut self) -> Cycles {
         let start_addr = self.pc;
         let op = self.load();
@@ -171,6 +177,11 @@ impl Spc700 {
                 // DEC - X
                 self.x = self.x.wrapping_sub(1);
                 self.update_nz8(self.x);
+            }
+            0x1f => {
+                // JMP - PC := (X)
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.pc = self.read16(addr);
             }
             0x2f => {
                 // BRA - Branch always
