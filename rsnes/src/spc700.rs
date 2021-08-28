@@ -27,11 +27,11 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
+       2, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 4, 0,  // c^
+       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
        2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
        2, 0, 0, 0, 0, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
@@ -182,6 +182,24 @@ impl Spc700 {
         val
     }
 
+    pub fn ya(&self) -> u16 {
+        u16::from_le_bytes([self.a, self.y])
+    }
+
+    pub fn set_ya(&mut self, val: u16) {
+        let [a, y] = val.to_le_bytes();
+        self.a = a;
+        self.y = y;
+    }
+
+    pub fn set_status(&mut self, cond: bool, flag: u8) {
+        if cond {
+            self.status |= flag
+        } else {
+            self.status &= !flag
+        }
+    }
+
     pub fn dispatch_instruction(&mut self) -> Cycles {
         let start_addr = self.pc;
         let op = self.load();
@@ -281,6 +299,12 @@ impl Spc700 {
             0x80 => {
                 // SETC - Set CARRY
                 self.status |= flags::CARRY
+            }
+            0x84 => {
+                // ADC - A += (imm) + CARRY
+                let addr = self.load();
+                let val = self.read_small(addr);
+                self.a = self.adc(self.a, val)
             }
             0x8b => {
                 // DEC - Decrement (imm)
@@ -399,6 +423,11 @@ impl Spc700 {
             0xce => {
                 // POP - X
                 self.x = self.pull()
+            }
+            0xcf => {
+                // MUL - YA := Y * A
+                self.set_ya(u16::from(self.y) * u16::from(self.a));
+                self.update_nz8(self.y);
             }
             0xd0 => {
                 // BNE/JNZ - if not Zero
@@ -522,11 +551,21 @@ impl Spc700 {
 
     pub fn compare(&mut self, a: u8, b: u8) {
         let res = a as u16 + !b as u16 + 1;
-        if res > 0xff {
-            self.status |= flags::CARRY
-        } else {
-            self.status &= !flags::CARRY
-        }
+        self.set_status(res > 0xff, flags::CARRY);
         self.update_nz8((res & 0xff) as u8);
+    }
+
+    pub fn adc(&mut self, a: u8, b: u8) -> u8 {
+        let c = self.status & flags::CARRY;
+        let (res, ov1) = a.overflowing_add(b);
+        let (res, ov2) = res.overflowing_add(c);
+        self.set_status(
+            (a & 0x80 == b & 0x80) && (b & 0x80 != res & 0x80),
+            flags::OVERFLOW,
+        );
+        self.set_status(((a & 15) + (b & 15) + c) > 15, flags::HALF_CARRY);
+        self.set_status(ov1 || ov2, flags::CARRY);
+        self.update_nz8(res);
+        a
     }
 }
