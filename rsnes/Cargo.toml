@@ -1,5 +1,5 @@
 [package]
-name = "snesulate"
+name = "rsnes"
 version = "0.1.0"
 edition = "2018"
 description = "a siple SNES emulator"

@@ -1,4 +1,4 @@
-extern crate snesulate;
+extern crate rsnes;
 
 use clap::{AppSettings, Clap};
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ fn main() {
         )
         .exit()
     });
-    let cartridge = snesulate::cartridge::Cartridge::from_bytes(&content).unwrap_or_else(|err| {
+    let cartridge = rsnes::cartridge::Cartridge::from_bytes(&content).unwrap_or_else(|err| {
         clap::Error::with_description(
             format!(
                 "Failiure while reading cartridge file \"{}\" ({})\n",
@@ -44,7 +44,7 @@ fn main() {
         "[info] Cartridge header information: {:#?}",
         cartridge.header()
     );
-    let mut device = snesulate::device::Device::new();
+    let mut device = rsnes::device::Device::new();
     device.load_cartridge(cartridge);
     loop {
         device.run_cycle();
