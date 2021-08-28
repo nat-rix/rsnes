@@ -19,21 +19,21 @@ static ROM: [u8; 64] = [
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 6,  // 1^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 5,  // 8^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // a^
+       3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       0, 0, 0, 0, 4, 0, 4, 0,   0, 0, 0, 4, 0, 2, 0, 0,  // c^
+       3, 0, 0, 0, 4, 0, 4, 0,   0, 0, 0, 4, 0, 2, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
-       0, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 0, 0, 0, 0,  // e^
+       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 0, 3, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
@@ -168,6 +168,7 @@ impl Spc700 {
         println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x00 => (), // NOP
             0x10 => {
                 // BPL/JNS - Branch if SIGN not set
                 let rel = self.load();
@@ -182,6 +183,10 @@ impl Spc700 {
                 // JMP - PC := (X)
                 let addr = self.load16().wrapping_add(self.x.into());
                 self.pc = self.read16(addr);
+            }
+            0x20 => {
+                // CLRP - Clear ZERO_PAGE
+                self.status &= !flags::ZERO_PAGE
             }
             0x2f => {
                 // BRA - Branch always
@@ -198,10 +203,18 @@ impl Spc700 {
                 self.x = self.x.wrapping_add(1);
                 self.update_nz8(self.x);
             }
+            0x40 => {
+                // SETP - Set ZERO_PAGE
+                self.status |= flags::ZERO_PAGE
+            }
             0x5d => {
                 // MOV - X := A
                 self.x = self.a;
                 self.update_nz8(self.x)
+            }
+            0x60 => {
+                // CLRC - Clear CARRY
+                self.status &= !flags::CARRY
             }
             0x78 => {
                 // CMP - (imm) - imm
@@ -218,6 +231,10 @@ impl Spc700 {
                 // CMP - Y - (imm)
                 let addr = self.load();
                 self.compare(self.y, self.read_small(addr))
+            }
+            0x80 => {
+                // SETC - Set CARRY
+                self.status |= flags::CARRY
             }
             0x8b => {
                 // DEC - Decrement (imm)
@@ -247,6 +264,10 @@ impl Spc700 {
                 self.x = self.sp;
                 self.update_nz8(self.x);
             }
+            0xa0 => {
+                // EI - Set INTERRUPT_ENABLE
+                self.status |= flags::INTERRUPT_ENABLE
+            }
             0xab => {
                 // INC - Increment (imm)
                 let addr = self.load();
@@ -264,12 +285,6 @@ impl Spc700 {
                 self.y = y;
                 self.update_nz16(value);
             }
-            0xda => {
-                // MOVW - (imm)[16-bit] := YA
-                // TODO: calculate cyles as if only one byte written
-                let addr = self.load();
-                self.write16_small(addr, u16::from_le_bytes([self.a, self.y]));
-            }
             0xbc => {
                 // INC - A
                 self.a = self.a.wrapping_add(1);
@@ -278,6 +293,10 @@ impl Spc700 {
             0xbd => {
                 // MOV - SP := X
                 self.sp = self.x
+            }
+            0xc0 => {
+                // DI - Clear INTERRUPT_ENABLE
+                self.status &= !flags::INTERRUPT_ENABLE
             }
             0xc4 => {
                 // MOV - (db) := A
@@ -309,6 +328,12 @@ impl Spc700 {
                 let addr = self.read16_small(addr).wrapping_add(self.y.into());
                 self.write(addr, self.a);
             }
+            0xda => {
+                // MOVW - (imm)[16-bit] := YA
+                // TODO: calculate cyles as if only one byte written
+                let addr = self.load();
+                self.write16_small(addr, u16::from_le_bytes([self.a, self.y]));
+            }
             0xdc => {
                 // DEC - Y
                 self.y = self.y.wrapping_sub(1);
@@ -335,6 +360,14 @@ impl Spc700 {
                 let addr = self.load();
                 self.y = self.read_small(addr);
                 self.update_nz8(self.y)
+            }
+            0xe0 => {
+                // CLRV - Clear OVERFLOW and HALF_CARRY
+                self.status &= !(flags::OVERFLOW | flags::HALF_CARRY)
+            }
+            0xed => {
+                // NOTC - Complement CARRY
+                self.status ^= flags::CARRY
             }
             0xfc => {
                 // INC - Y
