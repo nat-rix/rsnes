@@ -24,17 +24,17 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 5^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 7^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 9^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // b^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // c^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // d^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // e^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // f^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // d^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -105,7 +105,7 @@ impl Spc700 {
         self.status = 0;
     }
 
-    pub fn is_rom_mapped(&self) -> bool {
+    pub const fn is_rom_mapped(&self) -> bool {
         self.mem[0xf1] & 0x80 > 0
     }
 
@@ -128,6 +128,22 @@ impl Spc700 {
         }
     }
 
+    pub fn read_small(&self, addr: u8) -> u8 {
+        if self.status & flags::ZERO_PAGE > 0 {
+            self.read(u16::from(addr) | 0x100)
+        } else {
+            self.read(addr.into())
+        }
+    }
+
+    pub fn write_small(&mut self, addr: u8, val: u8) {
+        if self.status & flags::ZERO_PAGE > 0 {
+            self.write(u16::from(addr) | 0x100, val)
+        } else {
+            self.write(addr.into(), val)
+        }
+    }
+
     pub fn load(&mut self) -> u8 {
         let val = self.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
@@ -140,8 +156,63 @@ impl Spc700 {
         println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x5d => {
+                // MOV - X := A
+                self.x = self.a;
+                self.update_nz8(self.x)
+            }
+            0x7d => {
+                // MOV - A := X
+                self.a = self.x;
+                self.update_nz8(self.a)
+            }
+            0x8d => {
+                // MOV - Y := IMM
+                let addr = self.load();
+                self.y = self.read_small(addr);
+                self.update_nz8(self.y);
+            }
+            0x9d => {
+                // MOV - X := SP
+                self.x = self.sp;
+                self.update_nz8(self.x);
+            }
+            0xbd => {
+                // MOV - SP := X
+                self.sp = self.x
+            }
+            0xcd => {
+                // MOV - X := IMM
+                let addr = self.load();
+                self.x = self.read_small(addr);
+                self.update_nz8(self.x);
+            }
+            0xdd => {
+                // MOV - A := Y
+                self.a = self.y;
+                self.update_nz8(self.a)
+            }
+            0xe8 => {
+                // MOV - A := IMM
+                let addr = self.load();
+                self.a = self.read_small(addr);
+                self.update_nz8(self.x);
+            }
+            0xfd => {
+                // MOV - Y := A
+                self.y = self.a;
+                self.update_nz8(self.y)
+            }
             _ => todo!("not yet implemented SPC700 instruction 0x{:02x}", op),
         }
         cycles
+    }
+
+    pub fn update_nz8(&mut self, val: u8) {
+        if val > 0 {
+            self.status = (self.status & !(flags::ZERO | flags::SIGN)) | (val & flags::SIGN);
+        } else {
+            self.status = (self.status & !flags::SIGN) | flags::ZERO
+        }
     }
 }
