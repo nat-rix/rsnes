@@ -26,14 +26,14 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
-       0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 0, 0,  // 7^
+       0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       0, 0, 0, 0, 0, 0, 4, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // c^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // e^
+       0, 0, 0, 0, 4, 0, 4, 0,   0, 0, 0, 4, 0, 2, 0, 0,  // c^
+       2, 0, 0, 0, 0, 0, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
+       0, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 0, 0, 0, 0,  // e^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
@@ -184,21 +184,19 @@ impl Spc700 {
             }
             0x78 => {
                 // CMP - (imm) - imm
-                let (a, b) = (self.load(), self.load());
-                let b = self.read_small(b);
-                println!("!!!! comparing {:02x} vs {:02x}", a, b);
-                let res = a as u16 + !b as u16 + 1;
-                if res > 0xff {
-                    self.status |= flags::CARRY
-                } else {
-                    self.status &= !flags::CARRY
-                }
-                self.update_nz8((res & 0xff) as u8);
+                let (b, a) = (self.load(), self.load());
+                let a = self.read_small(a);
+                self.compare(a, b)
             }
             0x7d => {
                 // MOV - A := X
                 self.a = self.x;
                 self.update_nz8(self.a)
+            }
+            0x7e => {
+                // CMP - Y - (imm)
+                let addr = self.load();
+                self.compare(self.y, self.read_small(addr))
             }
             0x8d => {
                 // MOV - Y := IMM
@@ -244,9 +242,19 @@ impl Spc700 {
                 // MOV - SP := X
                 self.sp = self.x
             }
+            0xc4 => {
+                // MOV - (db) := A
+                let addr = self.load();
+                self.write_small(addr, self.a)
+            }
             0xc6 => {
                 // MOV - (X) := A
                 self.write_small(self.x, self.a)
+            }
+            0xcb => {
+                // MOV - (imm) := Y
+                let addr = self.load();
+                self.write_small(addr, self.y)
             }
             0xcd => {
                 // MOV - X := IMM
@@ -258,6 +266,12 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::ZERO == 0, &mut cycles)
             }
+            0xd7 => {
+                // MOV - ((db)[16-bit] + Y) := A
+                let addr = self.load();
+                let addr = self.read16_small(addr).wrapping_add(self.y.into());
+                self.write(addr, self.a);
+            }
             0xdc => {
                 // DEC - Y
                 self.y = self.y.wrapping_sub(1);
@@ -268,10 +282,22 @@ impl Spc700 {
                 self.a = self.y;
                 self.update_nz8(self.a)
             }
+            0xe4 => {
+                // MOV - A := (imm)
+                let addr = self.load();
+                self.a = self.read_small(addr);
+                self.update_nz8(self.a);
+            }
             0xe8 => {
                 // MOV - A := IMM
                 self.a = self.load();
                 self.update_nz8(self.a);
+            }
+            0xeb => {
+                // MOV - Y := (IMM)
+                let addr = self.load();
+                self.y = self.read_small(addr);
+                self.update_nz8(self.y)
             }
             0xfc => {
                 // INC - Y
@@ -314,5 +340,15 @@ impl Spc700 {
             }
             *cycles += 2;
         }
+    }
+
+    pub fn compare(&mut self, a: u8, b: u8) {
+        let res = a as u16 + !b as u16 + 1;
+        if res > 0xff {
+            self.status |= flags::CARRY
+        } else {
+            self.status &= !flags::CARRY
+        }
+        self.update_nz8((res & 0xff) as u8);
     }
 }
