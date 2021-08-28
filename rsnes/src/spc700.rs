@@ -25,16 +25,16 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 8,  // 3^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
-       0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
+       2, 0, 0, 0, 0, 0, 0, 2,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
+       0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
        2, 0, 0, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
-       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
-       2, 0, 0, 0, 0, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
+       3, 0, 0, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
+       2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 0, 0, 3, 4, 0, 0,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 0, 0, 4, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -268,9 +268,20 @@ impl Spc700 {
                 self.x = self.a;
                 self.update_nz8(self.x)
             }
+            0x5e => {
+                // CMP - Y - (imm[16-bit])
+                let addr = self.load16();
+                let val = self.read(addr);
+                self.compare(self.y, val)
+            }
             0x60 => {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
+            }
+            0x68 => {
+                // CMP - A - imm
+                let val = self.load();
+                self.compare(self.a, val)
             }
             0x6d => {
                 // PUSH - Y
@@ -279,6 +290,12 @@ impl Spc700 {
             0x6f => {
                 // RET - Return from subroutine
                 self.pc = self.pull16()
+            }
+            0x75 => {
+                // CMP - A - (imm[16-bit]+X)
+                let addr = self.load16().wrapping_add(self.x.into());
+                let val = self.read(addr);
+                self.compare(self.a, val)
             }
             0x78 => {
                 // CMP - (imm) - imm
@@ -327,6 +344,11 @@ impl Spc700 {
                 // MOV - (dp) := IMM
                 let (val, addr) = (self.load(), self.load());
                 self.write_small(addr, val);
+            }
+            0x90 => {
+                // BCC - Branch if CARRY not set
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::CARRY == 0, &mut cycles)
             }
             0x9c => {
                 // DEC - A
@@ -405,6 +427,11 @@ impl Spc700 {
                 let val = self.load();
                 self.compare(self.x, val)
             }
+            0xc9 => {
+                // MOV - (imm[16-bit]) := X
+                let addr = self.load16();
+                self.write(addr, self.x)
+            }
             0xcb => {
                 // MOV - (imm) := Y
                 let addr = self.load();
@@ -451,6 +478,11 @@ impl Spc700 {
                 let addr = self.load();
                 self.write16_small(addr, u16::from_le_bytes([self.a, self.y]));
             }
+            0xdb => {
+                // MOV - (imm+X) := Y
+                let addr = self.load().wrapping_add(self.x);
+                self.write_small(addr, self.y)
+            }
             0xdc => {
                 // DEC - Y
                 self.y = self.y.wrapping_sub(1);
@@ -461,10 +493,23 @@ impl Spc700 {
                 self.a = self.y;
                 self.update_nz8(self.a)
             }
+            0xde => {
+                // CBNE - Branch if A != (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                let val = self.read_small(addr);
+                let rel = self.load();
+                self.branch_rel(rel, self.a != val, &mut cycles)
+            }
             0xe4 => {
                 // MOV - A := (imm)
                 let addr = self.load();
                 self.a = self.read_small(addr);
+                self.update_nz8(self.a);
+            }
+            0xe5 => {
+                // MOV - A := (imm[16-bit])
+                let addr = self.load16();
+                self.a = self.read(addr);
                 self.update_nz8(self.a);
             }
             0xe8 => {
@@ -501,10 +546,17 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::ZERO > 0, &mut cycles)
             }
+            0xf4 => {
+                // MOV - A := (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                self.a = self.read_small(addr);
+                self.update_nz8(self.a);
+            }
             0xf5 => {
                 // MOV - A := (imm[16-bit]+X)
                 let addr = self.load16().wrapping_add(self.x.into());
-                self.a = self.read(addr)
+                self.a = self.read(addr);
+                self.update_nz8(self.a);
             }
             0xfc => {
                 // INC - Y
