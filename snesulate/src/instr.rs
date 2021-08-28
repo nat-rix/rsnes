@@ -181,7 +181,6 @@ impl Device {
             0x5c => {
                 // JMP/JML - Jump absolute Long
                 self.cpu.regs.pc = self.load::<Addr24>();
-                println!("updating pc to: {}", self.cpu.regs.pc);
             }
             0x64 => {
                 // STZ - Store Zero to memory
@@ -376,13 +375,15 @@ impl Device {
             0xcd => {
                 // CMP - Compare A with absolute value
                 // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load::<u16>();
+                let addr = self.cpu.get_data_addr(addr);
                 if self.cpu.is_reg8() {
-                    let val = self.load::<u8>();
+                    let val = self.read::<u8>(addr);
                     let res = self.cpu.regs.a8() as u16 + (!val) as u16 + 1;
                     self.cpu.regs.status.set_if(Status::CARRY, res > 0xff);
                     self.cpu.update_nz8((res & 0xff) as u8);
                 } else {
-                    let val = self.load::<u16>();
+                    let val = self.read::<u16>(addr);
                     let res = self.cpu.regs.a as u32 + (!val) as u32 + 1;
                     self.cpu.regs.status.set_if(Status::CARRY, res > 0xffff);
                     self.cpu.update_nz16((res & 0xffff) as u16);

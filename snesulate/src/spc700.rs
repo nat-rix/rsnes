@@ -26,8 +26,8 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 7^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 0, 0,  // 7^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // b^
@@ -166,6 +166,19 @@ impl Spc700 {
                 self.x = self.a;
                 self.update_nz8(self.x)
             }
+            0x78 => {
+                // CMP - (imm) - imm
+                let (a, b) = (self.load(), self.load());
+                println!("!!!! comparing {} vs @{:02x}", a, b);
+                let b = self.read_small(b);
+                let res = a as u16 + !b as u16 + 1;
+                if res > 0xff {
+                    self.status |= flags::CARRY
+                } else {
+                    self.status &= !flags::CARRY
+                }
+                self.update_nz8((res & 0xff) as u8);
+            }
             0x7d => {
                 // MOV - A := X
                 self.a = self.x;
@@ -175,6 +188,11 @@ impl Spc700 {
                 // MOV - Y := IMM
                 self.y = self.load();
                 self.update_nz8(self.y);
+            }
+            0x8f => {
+                // MOV - (dp) := IMM
+                let (val, addr) = (self.load(), self.load());
+                self.write_small(addr, val);
             }
             0x9c => {
                 // DEC - A
