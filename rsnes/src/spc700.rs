@@ -22,19 +22,19 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 6,  // 1^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 4,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 3^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 8,  // 3^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,  // 6^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 5,  // 6^
        0, 0, 0, 0, 0, 0, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // 9^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 0, 4,  // a^
        0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
-       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 0, 2, 0, 0,  // c^
+       3, 0, 0, 0, 4, 5, 4, 0,   2, 0, 0, 4, 5, 2, 0, 0,  // c^
        2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 0, 2, 2, 0, 0,  // d^
-       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 0, 3, 0, 0,  // e^
-       0, 0, 0, 0, 0, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
+       2, 0, 0, 0, 3, 0, 0, 0,   2, 0, 0, 3, 4, 3, 0, 0,  // e^
+       2, 0, 0, 0, 0, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -150,6 +150,22 @@ impl Spc700 {
         self.write_small(addr.wrapping_add(1), b)
     }
 
+    pub fn push16(&mut self, val: u16) {
+        let [a, b] = val.to_be_bytes();
+        self.write(u16::from(self.sp) | 0x100, a);
+        self.write(u16::from(self.sp.wrapping_sub(1)) | 0x100, b);
+        self.sp = self.sp.wrapping_sub(2);
+    }
+
+    pub fn pull(&mut self) -> u8 {
+        self.sp = self.sp.wrapping_add(1);
+        self.read(u16::from(self.sp) | 0x100)
+    }
+
+    pub fn pull16(&mut self) -> u16 {
+        u16::from_le_bytes([self.pull(), self.pull()])
+    }
+
     pub fn load(&mut self) -> u8 {
         let val = self.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
@@ -203,6 +219,12 @@ impl Spc700 {
                 self.x = self.x.wrapping_add(1);
                 self.update_nz8(self.x);
             }
+            0x3f => {
+                // CALL - Call a subroutine
+                let addr = self.load16();
+                self.push16(self.pc);
+                self.pc = addr
+            }
             0x40 => {
                 // SETP - Set ZERO_PAGE
                 self.status |= flags::ZERO_PAGE
@@ -215,6 +237,10 @@ impl Spc700 {
             0x60 => {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
+            }
+            0x6f => {
+                // RET - Return from subroutine
+                self.pc = self.pull16()
             }
             0x78 => {
                 // CMP - (imm) - imm
@@ -332,6 +358,11 @@ impl Spc700 {
                 let addr = self.load();
                 self.write_small(addr, self.y)
             }
+            0xcc => {
+                // MOV - (imm[16-bit]) := Y
+                let addr = self.load16();
+                self.write(addr, self.y)
+            }
             0xcd => {
                 // MOV - X := IMM
                 self.x = self.load();
@@ -390,9 +421,20 @@ impl Spc700 {
                 // CLRV - Clear OVERFLOW and HALF_CARRY
                 self.status &= !(flags::OVERFLOW | flags::HALF_CARRY)
             }
+            0xec => {
+                // MOV - Y := (imm[16-bit])
+                let addr = self.load16();
+                self.y = self.read(addr);
+                self.update_nz8(self.y);
+            }
             0xed => {
                 // NOTC - Complement CARRY
                 self.status ^= flags::CARRY
+            }
+            0xf0 => {
+                // BEQ - Branch if ZERO is set
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::ZERO > 0, &mut cycles)
             }
             0xf5 => {
                 // MOV - A := (imm[16-bit]+X)
