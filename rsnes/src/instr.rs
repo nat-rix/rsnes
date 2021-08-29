@@ -14,9 +14,9 @@ static CYCLES: [Cycles; 256] = [
        6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 0, 5, 5,  // 9^
+       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 2, 4, 0, 0, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 0, 0, 0,  // b^
+       0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 4, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
@@ -374,6 +374,16 @@ impl Device {
                 let addr = self.load::<u16>();
                 self.store_zero(self.cpu.get_data_addr(addr), &mut cycles)
             }
+            0x9d => {
+                // STA - Store A to absolute indexed X
+                let addr = self.load_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    self.write(addr, self.cpu.regs.a8());
+                } else {
+                    self.write(addr, self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x9e => {
                 // STZ - absoulte X indexed
                 let addr = self.load_indexed_x(&mut cycles);
@@ -486,6 +496,19 @@ impl Device {
                 } else {
                     self.cpu.regs.x = self.cpu.regs.y;
                     self.cpu.update_nz16(self.cpu.regs.y);
+                }
+            }
+            0xbd => {
+                // LDA - Load absolute indexed X value to A
+                let addr = self.load_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a = self.read(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
                 }
             }
             0xc2 => {
