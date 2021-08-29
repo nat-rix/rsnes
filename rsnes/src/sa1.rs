@@ -7,7 +7,7 @@
 //! - <https://wiki.superfamicom.org/uploads/assembly-programming-manual-for-w65c816.pdf>
 //! - <https://problemkaputt.de/fullsnes.htm>
 
-use crate::device::{Addr24, Data};
+use crate::device::Addr24;
 
 const IRAM_SIZE: usize = 0x800;
 

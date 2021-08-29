@@ -1,4 +1,4 @@
-use crate::device::{Addr24, Data};
+use crate::device::Addr24;
 
 pub const CHANNEL_COUNT: usize = 8;
 
@@ -17,7 +17,7 @@ impl Channel {
     }
 
     /// Write 8-bit value from Channel transfer values
-    pub fn read(&self, id: u8) -> Option<u8> {
+    pub fn read(&self, _id: u8) -> Option<u8> {
         todo!()
     }
 

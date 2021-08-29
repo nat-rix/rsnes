@@ -69,7 +69,7 @@ impl Device {
         if self.cpu.regs.dp & 0xff > 0 {
             *cycles += 1
         }
-        let mut addr = self.read::<Addr24>(
+        let addr = self.read::<Addr24>(
             self.cpu
                 .get_data_addr(self.cpu.regs.dp.wrapping_add(addr.into())),
         );
@@ -87,6 +87,7 @@ impl Device {
         match op {
             0x02 => {
                 // COP - Co-Processor Enable
+                #[allow(unused_assignments)]
                 if !self.cpu.regs.is_emulation {
                     cycles += 1
                 }

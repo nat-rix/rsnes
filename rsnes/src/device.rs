@@ -1,7 +1,6 @@
 //! The SNES/Famicom device
 
 use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700};
-use core::convert::TryInto;
 
 const RAM_SIZE: usize = 0x20000;
 
