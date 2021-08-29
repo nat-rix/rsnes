@@ -1,5 +1,5 @@
 use crate::cpu::Status;
-use crate::device::{Addr24, Data, Device, InverseU16};
+use crate::device::{Addr24, Data, Device};
 use crate::timing::Cycles;
 
 #[rustfmt::skip]
@@ -25,7 +25,7 @@ static CYCLES: [Cycles; 256] = [
 
 impl Device {
     pub fn load_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
-        let (addr, ov) = self.cpu.regs.x.overflowing_add(self.load::<InverseU16>().0);
+        let (addr, ov) = self.cpu.regs.x.overflowing_add(self.load::<u16>());
         if ov || self.cpu.regs.x == 0 {
             // TODO: check this criteria (very much not sure)
             *cycles += 1
