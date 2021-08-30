@@ -32,10 +32,12 @@ impl Device {
             0x420b => {
                 // MDMAEN - DMA Enable
                 // TODO: implement expected behavior
+                self.dma.enable_dma(val)
             }
             0x420c => {
                 // HDMAEN - HDMA Enable
                 // TODO: implement expected behavior
+                self.dma.enable_hdma(val)
             }
             0x420d => {
                 // MEMSEL - ROM access speed
@@ -43,6 +45,7 @@ impl Device {
             }
             0x4300..=0x43ff => {
                 // DMA Registers
+                println!("writing to id {:04x}", id);
                 self.dma.write(id, val)
             }
             _ => todo!("internal register 0x{:04x} written", id),

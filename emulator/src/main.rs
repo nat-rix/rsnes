@@ -47,6 +47,6 @@ fn main() {
     let mut device = rsnes::device::Device::new();
     device.load_cartridge(cartridge);
     loop {
-        device.run_cycle();
+        device.run_cycle::<1>();
     }
 }

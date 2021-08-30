@@ -24,7 +24,7 @@ impl Ppu {
                 );
             }
             0x34.. => unreachable!(),
-            _ => todo!(),
+            _ => todo!("unknown PPU register 0x21{:02x}", id),
         }
     }
 }

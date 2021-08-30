@@ -1,6 +1,6 @@
 //! The SNES/Famicom device
 
-use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700};
+use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700, timing::Cycles};
 
 const RAM_SIZE: usize = 0x20000;
 
@@ -157,9 +157,14 @@ pub struct Device {
     open_bus: u8,
     ram: [u8; RAM_SIZE],
     wram_addr: Addr24,
-    pub(crate) master_cycle: u64,
-    pub(crate) memory_cycles: u32,
-    pub(crate) apu_cycles: u64,
+    pub(crate) master_cycle: Cycles,
+    pub(crate) memory_cycles: Cycles,
+    pub(crate) apu_cycles: u32,
+    /// Some people refer to this as H-Pos
+    pub(crate) scanline_cycle: u16,
+    /// Some people refer to this as V-Pos
+    pub(crate) scanline_nr: u16,
+    pub(crate) cpu_ahead_cycles: i32,
 }
 
 impl Device {
@@ -176,6 +181,9 @@ impl Device {
             master_cycle: 0,
             memory_cycles: 0,
             apu_cycles: 0,
+            scanline_cycle: 0,
+            scanline_nr: 0,
+            cpu_ahead_cycles: 0,
         }
     }
 
