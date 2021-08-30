@@ -97,6 +97,10 @@ impl Dma {
         }
     }
 
+    pub fn reset_hdma(&mut self) {
+        // TODO
+    }
+
     /// Read 8-bit from channel transfer values
     pub fn read(&self, addr: u16) -> Option<u8> {
         let channel = (addr >> 4) & 0b111;
@@ -123,5 +127,13 @@ impl Dma {
 
     pub fn enable_hdma(&mut self, value: u8) {
         self.hdma_enabled = value;
+    }
+
+    pub fn do_dma(&mut self) {
+        todo!("do dma stuff")
+    }
+
+    pub fn do_hdma(&mut self) {
+        todo!("do hdma stuff")
     }
 }

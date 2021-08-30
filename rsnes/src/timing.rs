@@ -16,27 +16,50 @@ const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
 
 impl Device {
     pub fn run_cycle<const N: u16>(&mut self) {
+        if self.new_frame {
+            self.dma.reset_hdma();
+        }
+        if self.do_hdma {
+            self.do_hdma = false;
+            if self.dma.is_hdma_running() && self.scanline_nr <= 0xe1
+                || (self.overscan && self.scanline_nr <= 0xf0)
+            {
+                self.dma.do_hdma();
+            }
+        }
         // > The CPU is paused for 40 cycles beginning about 536 cycles
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
             if self.dma.is_dma_running() && !self.dma.is_hdma_running() {
-                todo!("do dma stuff")
+                self.dma.do_dma();
             } else {
                 self.run_cpu();
             }
         }
+        self.update_counters::<N>();
+    }
+
+    pub fn update_counters<const N: u16>(&mut self) {
         self.cpu_ahead_cycles -= i32::from(N);
+        let old_scanline_cycle = self.scanline_cycle;
         self.scanline_cycle += N;
+        if old_scanline_cycle < 1024 && self.scanline_cycle >= 1024 {
+            self.do_hdma = true;
+        }
+        self.new_scanline = false;
+        self.new_frame = false;
         // Test if one scanline completed
         // TODO: Take notice of the interlace mode
         if self.scanline_cycle >= 1364 {
             self.scanline_cycle -= 1364;
             self.scanline_nr += 1;
+            self.new_scanline = true;
             // Test if one frame completed
             // TODO: Take notice of the interlace mode
             if self.scanline_nr >= 262 {
                 self.scanline_nr -= 262;
+                self.new_frame = true;
             }
         }
     }
