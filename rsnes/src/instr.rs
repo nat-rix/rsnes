@@ -5,21 +5,21 @@ use crate::timing::Cycles;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 7, 0, 0, 0, 0, 0,   3, 0, 0, 4, 0, 0, 0, 0,  // 0^
+       0, 0, 7, 0, 0, 0, 0, 0,   3, 0, 2, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 0, 0, 0,  // 1^
        6, 0, 8, 0, 0, 0, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
-       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 7^
-       3, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
+       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
+       3, 0, 0, 0, 3, 3, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 5, 5, 5,  // 9^
-       2, 0, 2, 0, 0, 0, 0, 0,   2, 2, 2, 4, 0, 0, 0, 0,  // a^
+       2, 0, 2, 0, 3, 3, 0, 0,   2, 2, 2, 4, 0, 4, 0, 0,  // a^
        0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 4, 0, 0,  // b^
        0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 0, 0, 0, 0,  // d^
-       2, 0, 3, 0, 0, 0, 0, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
+       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -96,6 +96,22 @@ impl Device {
             0x08 => {
                 // PHP - Push Status Register
                 self.push(self.cpu.regs.status.0)
+            }
+            0x0a => {
+                // ASL - Arithmetic left shift on A
+                if self.cpu.is_reg8() {
+                    let val = self.cpu.regs.a8();
+                    let newval = val << 1;
+                    self.cpu.regs.set_a8(newval);
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x80);
+                    self.cpu.update_nz8(newval);
+                } else {
+                    let val = self.cpu.regs.a;
+                    let newval = val << 1;
+                    self.cpu.regs.a = newval;
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x8000);
+                    self.cpu.update_nz16(newval);
+                }
             }
             0x0b => {
                 // PHD - Push Direct Page
@@ -280,6 +296,18 @@ impl Device {
                 // SEI - Set the Interrupt Disable flag
                 self.cpu.regs.status |= Status::IRQ_DISABLE
             }
+            0x7a => {
+                // PLY - Pull Y
+                if self.cpu.is_idx8() {
+                    let y = self.pull();
+                    self.cpu.regs.set_y8(y);
+                    self.cpu.update_nz8(y);
+                } else {
+                    self.cpu.regs.y = self.pull();
+                    self.cpu.update_nz16(self.cpu.regs.y);
+                    cycles += 1
+                }
+            }
             0x7d => {
                 // ADC - Add with Carry
                 assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
@@ -296,6 +324,26 @@ impl Device {
             0x80 => {
                 // BRA - Branch always
                 self.branch_near(true, &mut cycles);
+            }
+            0x84 => {
+                // STY - Store Y to direct page
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    self.write::<u8>(addr, self.cpu.regs.y8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.y);
+                    cycles += 1;
+                }
+            }
+            0x85 => {
+                // STA - Store A to direct page
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
+                    cycles += 1;
+                }
             }
             0x8b => {
                 // PHB - Push Data Bank
@@ -425,6 +473,34 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xa4 => {
+                // LDY - Load direct page into Y
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let y = self.read::<u8>(addr);
+                    self.cpu.update_nz8(y);
+                    self.cpu.regs.set_y8(y);
+                } else {
+                    let y = self.read::<u16>(addr);
+                    self.cpu.update_nz16(y);
+                    self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
+            0xa5 => {
+                // LDA - Load direct page to A
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
+                    cycles += 1;
+                }
+            }
             0xa8 => {
                 // TAY - Transfer A to Y
                 if self.cpu.is_idx8() {
@@ -472,6 +548,21 @@ impl Device {
                 // PLB - Pull Data Bank
                 self.cpu.regs.db = self.pull();
                 self.cpu.update_nz8(self.cpu.regs.db)
+            }
+            0xad => {
+                // LDA - Load absolute to A
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
+                    cycles += 1;
+                }
             }
             0xb7 => {
                 // LDA - Load indirect long indexed Y value to A
@@ -569,6 +660,12 @@ impl Device {
                     cycles += 1
                 }
             }
+            0xdc => {
+                // JMP/JML - Jump absolute indirect long
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                self.cpu.regs.pc = self.read::<Addr24>(addr);
+            }
             0xe0 => {
                 // CPX - Compare X with immediate value
                 // this will also work with decimal mode (TODO: check this fact)
@@ -585,6 +682,20 @@ impl Device {
                 // SEP - Set specified bits in the Status Register
                 let mask = Status(self.load::<u8>());
                 self.cpu.regs.status |= mask
+            }
+            0xe6 => {
+                // INC - Increment direct page
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr).wrapping_add(1);
+                    self.write::<u8>(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr).wrapping_add(1);
+                    self.write::<u16>(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
+                }
             }
             0xe8 => {
                 // INX - Increment X
