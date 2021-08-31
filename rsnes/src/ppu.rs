@@ -1,15 +1,27 @@
+pub const VRAM_SIZE: usize = 0x8000;
+
 #[derive(Debug, Clone)]
 pub struct Ppu {
+    vram: [u16; VRAM_SIZE],
+    vram_addr: u16,
+    vram_addr_unmapped: u16,
     /// A value between 0 and 15 with 15 being maximum brightness
     brightness: u8,
     obj_size: ObjectSize,
+    remap_mode: RemapMode,
+    vram_increment_amount: u8,
 }
 
 impl Ppu {
     pub fn new() -> Self {
         Self {
+            vram: [0; VRAM_SIZE],
+            vram_addr: 0,
+            vram_addr_unmapped: 0,
             brightness: 0x0f,
             obj_size: ObjectSize::O8S16,
+            remap_mode: RemapMode::NoRemap,
+            vram_increment_amount: 1,
         }
     }
 
@@ -38,9 +50,34 @@ impl Ppu {
                 // TODO: name select bits and name base select bits
                 self.obj_size = ObjectSize::from_upper_bits(val);
             }
+            0x15 => {
+                // VMAIN - Video Port Control
+                // TODO: increment mode
+                self.vram_increment_amount = match val & 0b11 {
+                    0 => 1,
+                    1 => 32,
+                    _ => 128,
+                };
+                self.remap_mode = RemapMode::from_bits(val >> 2);
+                self.update_vram_addr();
+            }
+            0x16 => {
+                // VMADDL
+                self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff00) | u16::from(val);
+                self.update_vram_addr();
+            }
+            0x17 => {
+                // VMADDH
+                self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff) | (u16::from(val) << 8);
+                self.update_vram_addr();
+            }
             0x34.. => unreachable!(),
             _ => todo!("write to unknown PPU register 0x21{:02x}", id),
         }
+    }
+
+    pub fn update_vram_addr(&mut self) {
+        self.vram_addr = self.remap_mode.remap(self.vram_addr_unmapped);
     }
 }
 
@@ -108,6 +145,35 @@ impl ObjectSize {
             Self::O8S16 => 16,
             Self::O8S32 | Self::O16S32 | Self::O16x32S32 => 32,
             Self::O8S64 | Self::O16S64 | Self::O32S64 | Self::O16x32S32x64 => 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemapMode {
+    NoRemap,
+    First,
+    Second,
+    Third,
+}
+
+impl RemapMode {
+    pub fn from_bits(bits: u8) -> Self {
+        match bits & 0b11 {
+            0b00 => Self::NoRemap,
+            0b01 => Self::First,
+            0b10 => Self::Second,
+            0b11 => Self::Third,
+            _ => unreachable!(),
+        }
+    }
+
+    pub const fn remap(&self, addr: u16) -> u16 {
+        match self {
+            Self::NoRemap => addr,
+            Self::First => (addr & 0xff00) | ((addr & 0x1f) << 3) | ((addr >> 5) & 0b111),
+            Self::Second => (addr & 0xfe00) | ((addr & 0x3f) << 3) | ((addr >> 6) & 0b111),
+            Self::Third => (addr & 0xfc00) | ((addr & 0x7f) << 3) | ((addr >> 7) & 0b111),
         }
     }
 }
