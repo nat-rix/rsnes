@@ -284,6 +284,18 @@ impl Device {
                 0x2100..=0x21ff => {
                     // address bus B
                     match addr.addr {
+                        0x2134..=0x213f => {
+                            let mut data = <D::Arr as Default>::default();
+                            for (i, d) in data.as_mut().iter_mut().enumerate() {
+                                *d = self
+                                    .ppu
+                                    .read_register(
+                                        ((addr.addr as usize).wrapping_add(i) & 0xff) as u8,
+                                    )
+                                    .unwrap_or(self.open_bus)
+                            }
+                            D::from_bytes(&data)
+                        }
                         0x2140..=0x2143 => D::parse(&self.spc.output, (addr.addr & 0b11) as usize),
                         _ => todo!("unimplemented address bus B read at 0x{:04x}", addr.addr),
                     }
