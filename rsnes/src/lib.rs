@@ -3,6 +3,7 @@ pub mod cpu;
 pub mod device;
 pub mod dma;
 mod instr;
+pub mod oam;
 pub mod ppu;
 mod registers;
 pub mod sa1;

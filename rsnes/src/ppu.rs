@@ -1,7 +1,10 @@
+use crate::oam::Oam;
+
 pub const VRAM_SIZE: usize = 0x8000;
 
 #[derive(Debug, Clone)]
 pub struct Ppu {
+    pub(crate) oam: Oam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
     /// A value between 0 and 15 with 15 being maximum brightness
@@ -15,6 +18,7 @@ pub struct Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self {
+            oam: Oam::new(),
             vram: [0; VRAM_SIZE],
             vram_addr_unmapped: 0,
             brightness: 0x0f,
@@ -49,6 +53,14 @@ impl Ppu {
                 // OBSEL
                 // TODO: name select bits and name base select bits
                 self.obj_size = ObjectSize::from_upper_bits(val);
+            }
+            0x02 => {
+                // OAMADDL
+                self.oam.set_addr_low(val)
+            }
+            0x03 => {
+                // OAMADDH
+                self.oam.set_addr_high(val)
             }
             0x15 => {
                 // VMAIN - Video Port Control
