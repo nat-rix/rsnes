@@ -8,37 +8,58 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 7, 0, 0, 0, 0, 0,   3, 0, 2, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 0, 0, 0,  // 1^
        6, 0, 8, 0, 0, 0, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 3, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 6, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
-       3, 0, 0, 0, 3, 3, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
-       0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 5, 5, 5,  // 9^
-       2, 0, 2, 0, 3, 3, 0, 0,   2, 2, 2, 4, 0, 4, 0, 0,  // a^
-       0, 0, 0, 0, 0, 0, 0, 6,   0, 0, 0, 2, 0, 4, 0, 0,  // b^
-       0, 0, 3, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 0,  // c^
+       3, 0, 0, 0, 3, 3, 3, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
+       0, 0, 0, 0, 0, 0, 0, 6,   2, 0, 2, 2, 4, 5, 5, 5,  // 9^
+       2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 0, 4, 0, 0,  // a^
+       0, 0, 0, 0, 0, 0, 0, 6,   0, 3, 0, 2, 0, 3, 0, 0,  // b^
+       0, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
-    pub fn load_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
-        let (addr, ov) = self.cpu.regs.x.overflowing_add(self.load::<u16>());
-        if ov || self.cpu.regs.x == 0 {
-            // TODO: check this criteria (very much not sure)
+    fn load_indexed_v(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
+        let loaded_addr = self.load::<u16>();
+        let addr = loaded_addr.wrapping_add(val);
+        if self.cpu.is_idx8() || loaded_addr & 0xff00 != addr & 0xff00 {
             *cycles += 1
         }
         self.cpu.get_data_addr(addr)
     }
 
+    /// Absolute Indexed, X
+    pub fn load_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v(cycles, self.cpu.regs.x)
+    }
+
+    /// Absolute Indexed, Y
+    pub fn load_indexed_y(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v(cycles, self.cpu.regs.y)
+    }
+
+    /// DP Indirect Long
+    pub fn load_dp_indirect_long(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let addr = self.load::<u8>();
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        self.read(Addr24::new(0, self.cpu.regs.dp.wrapping_add(addr.into())))
+    }
+
+    /// DP Indexed, X
     pub fn load_dp_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
         let addr = self.load::<u8>();
         if self.cpu.regs.dp & 0xff > 0 {
             *cycles += 1
         }
-        self.cpu.get_data_addr(
+        Addr24::new(
+            0,
             self.cpu
                 .regs
                 .dp
@@ -47,6 +68,7 @@ impl Device {
         )
     }
 
+    /// Absolute Long Indexed, X
     pub fn load_long_indexed_x(&mut self) -> Addr24 {
         let Addr24 { mut bank, addr } = self.load::<Addr24>();
         let (addr, ov) = self.cpu.regs.x.overflowing_add(addr);
@@ -56,6 +78,7 @@ impl Device {
         Addr24::new(bank, addr)
     }
 
+    /// Direct Page
     pub fn load_direct(&mut self, cycles: &mut Cycles) -> Addr24 {
         let val = self.load::<u8>();
         if self.cpu.regs.dp & 0xff > 0 {
@@ -64,6 +87,7 @@ impl Device {
         Addr24::new(0, self.cpu.regs.dp.wrapping_add(val.into()))
     }
 
+    /// DP Indirect Long Indexed, Y
     pub fn load_indirect_long_indexed_y(&mut self, cycles: &mut Cycles) -> Addr24 {
         let addr = self.load::<u8>();
         if self.cpu.regs.dp & 0xff > 0 {
@@ -187,6 +211,10 @@ impl Device {
                     self.cpu.update_nz16(res);
                     self.cpu.regs.a = res;
                 }
+            }
+            0x30 => {
+                // BMI - Branch if Negative Flag set
+                self.branch_near(self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
             }
             0x38 => {
                 // SEC - Set Carry Flag
@@ -355,6 +383,16 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x86 => {
+                // STX - Store X to direct page
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    self.write::<u8>(addr, self.cpu.regs.x8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.x);
+                    cycles += 1;
+                }
+            }
             0x8b => {
                 // PHB - Push Data Bank
                 self.push(self.cpu.regs.db)
@@ -395,6 +433,16 @@ impl Device {
             0x8f => {
                 // STA - Store A to absolute long address
                 let addr = self.load::<Addr24>();
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
+                    cycles += 1;
+                }
+            }
+            0x97 => {
+                // STA - Store A to DP indirect long indexed, Y
+                let addr = self.load_indirect_long_indexed_y(&mut cycles);
                 if self.cpu.is_reg8() {
                     self.write::<u8>(addr, self.cpu.regs.a8());
                 } else {
@@ -511,6 +559,34 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xa6 => {
+                // LDX - Load direct page into X
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let x = self.read::<u8>(addr);
+                    self.cpu.update_nz8(x);
+                    self.cpu.regs.set_y8(x);
+                } else {
+                    let x = self.read::<u16>(addr);
+                    self.cpu.update_nz16(x);
+                    self.cpu.regs.x = x;
+                    cycles += 1;
+                }
+            }
+            0xa7 => {
+                // LDA - Load direct page indirect long to A
+                let addr = self.load_dp_indirect_long(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
+                    cycles += 1;
+                }
+            }
             0xa8 => {
                 // TAY - Transfer A to Y
                 if self.cpu.is_idx8() {
@@ -588,6 +664,19 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xb9 => {
+                // LDA - Load absolute indexed Y value to A
+                let addr = self.load_indexed_y(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a = self.read(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0xbb => {
                 // TYX - Transfer Y to X
                 if self.cpu.is_idx8() {
@@ -618,6 +707,20 @@ impl Device {
                 // no `update_status` needed, because no bits got set
                 self.cpu.regs.status &= mask
             }
+            0xc6 => {
+                // DEC - Decrement DP
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr).wrapping_add(1);
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val)
+                } else {
+                    let val = self.read::<u16>(addr).wrapping_add(1);
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
+                }
+            }
             0xc8 => {
                 // INY - Increment Y
                 if self.cpu.is_idx8() {
@@ -627,6 +730,18 @@ impl Device {
                 } else {
                     self.cpu.regs.y = self.cpu.regs.y.wrapping_add(1);
                     self.cpu.update_nz16(self.cpu.regs.y);
+                }
+            }
+            0xc9 => {
+                // CMP - Compare A with immediate value
+                // this will also work with decimal mode (TODO: check this fact)
+                if self.cpu.is_reg8() {
+                    let val = self.load::<u8>();
+                    self.compare8(self.cpu.regs.a8(), val);
+                } else {
+                    let val = self.load::<u16>();
+                    self.compare16(self.cpu.regs.a, val);
+                    cycles += 1
                 }
             }
             0xca => {

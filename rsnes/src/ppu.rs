@@ -268,9 +268,7 @@ impl Ppu {
 
     fn get_vram_word_mut(&mut self, index: u16) -> &mut u16 {
         self.vram
-            .get_mut(usize::from(
-                self.remap_mode.remap(self.vram_addr_unmapped) & 0x7fff,
-            ))
+            .get_mut(usize::from(self.remap_mode.remap(index) & 0x7fff))
             .unwrap()
     }
 }
