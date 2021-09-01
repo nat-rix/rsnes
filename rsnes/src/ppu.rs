@@ -153,6 +153,10 @@ impl Ppu {
                 // OAMADDH
                 self.oam.set_addr_high(val)
             }
+            0x04 => {
+                // OAMDATA
+                self.oam.write(val)
+            }
             0x06 => {
                 // MOSAIC
                 self.mosaic_size = val >> 4;

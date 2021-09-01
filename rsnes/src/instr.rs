@@ -711,11 +711,11 @@ impl Device {
                 // DEC - Decrement DP
                 let addr = self.load_direct(&mut cycles);
                 if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr).wrapping_add(1);
+                    let val = self.read::<u8>(addr).wrapping_sub(1);
                     self.write(addr, val);
                     self.cpu.update_nz8(val)
                 } else {
-                    let val = self.read::<u16>(addr).wrapping_add(1);
+                    let val = self.read::<u16>(addr).wrapping_sub(1);
                     self.write(addr, val);
                     self.cpu.update_nz16(val);
                     cycles += 2
