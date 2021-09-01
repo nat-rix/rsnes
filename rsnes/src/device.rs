@@ -165,7 +165,6 @@ pub struct Device {
     /// Some people refer to this as V-Pos
     pub(crate) scanline_nr: u16,
     pub(crate) cpu_ahead_cycles: i32,
-    pub(crate) overscan: bool,
     pub(crate) new_scanline: bool,
     pub(crate) new_frame: bool,
     pub(crate) do_hdma: bool,
@@ -188,7 +187,6 @@ impl Device {
             scanline_cycle: 0,
             scanline_nr: 0,
             cpu_ahead_cycles: 0,
-            overscan: false,
             new_scanline: true,
             new_frame: true,
             do_hdma: false,

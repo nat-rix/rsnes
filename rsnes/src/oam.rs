@@ -9,7 +9,7 @@ pub struct Oam {
 }
 
 impl Oam {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             low: [0; 512],
             high: [0; 32],

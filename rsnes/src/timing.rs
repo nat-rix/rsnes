@@ -21,8 +21,8 @@ impl Device {
         }
         if self.do_hdma {
             self.do_hdma = false;
-            if self.dma.is_hdma_running() && self.scanline_nr <= 0xe1
-                || (self.overscan && self.scanline_nr <= 0xf0)
+            if self.dma.is_hdma_running()
+                && (self.scanline_nr <= 0xe1 || (self.ppu.overscan && self.scanline_nr <= 0xf0))
             {
                 self.dma.do_hdma();
             }

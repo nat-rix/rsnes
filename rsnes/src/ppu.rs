@@ -2,6 +2,72 @@ use crate::oam::Oam;
 
 pub const VRAM_SIZE: usize = 0x8000;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Background {
+    tilemap_addr: u8,
+    base_addr: u8,
+    x_mirror: bool,
+    y_mirror: bool,
+    layer: Layer,
+}
+
+impl Background {
+    pub const fn new() -> Self {
+        Self {
+            tilemap_addr: 0,
+            base_addr: 0,
+            x_mirror: false,
+            y_mirror: false,
+            layer: Layer::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Layer {
+    mask_logic: MaskLogic,
+    // not on color_layer
+    main_screen: bool,
+    // not on color_layer
+    sub_screen: bool,
+    // not on color_layer
+    main_screen_masked: bool,
+    // not on color_layer
+    sub_screen_masked: bool,
+}
+
+impl Layer {
+    pub const fn new() -> Self {
+        Self {
+            mask_logic: MaskLogic::Or,
+            main_screen: false,
+            sub_screen: false,
+            main_screen_masked: false,
+            sub_screen_masked: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskLogic {
+    Or,
+    And,
+    Xor,
+    XNor,
+}
+
+impl MaskLogic {
+    pub fn from_byte(val: u8) -> Self {
+        match val & 3 {
+            0 => Self::Or,
+            1 => Self::And,
+            2 => Self::Xor,
+            3 => Self::XNor,
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Ppu {
     pub(crate) oam: Oam,
@@ -13,10 +79,16 @@ pub struct Ppu {
     remap_mode: RemapMode,
     vram_increment_amount: u8,
     increment_first: bool,
+    pub(crate) overscan: bool,
+    mosaic_bgs: u8,
+    mosaic_size: u8,
+    bgs: [Background; 4],
+    obj_layer: Layer,
+    color_layer: Layer,
 }
 
 impl Ppu {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             oam: Oam::new(),
             vram: [0; VRAM_SIZE],
@@ -26,6 +98,12 @@ impl Ppu {
             remap_mode: RemapMode::NoRemap,
             vram_increment_amount: 1,
             increment_first: true,
+            overscan: false,
+            mosaic_bgs: 0,
+            mosaic_size: 0,
+            bgs: [Background::new(); 4],
+            obj_layer: Layer::new(),
+            color_layer: Layer::new(),
         }
     }
 
@@ -61,6 +139,24 @@ impl Ppu {
             0x03 => {
                 // OAMADDH
                 self.oam.set_addr_high(val)
+            }
+            0x06 => {
+                // MOSAIC
+                self.mosaic_size = val >> 4;
+                self.mosaic_bgs = val & 0xf;
+            }
+            0x07..=0x0a => {
+                // BGnSC
+                let bg = &mut self.bgs[usize::from((id + 1) & 3)];
+                bg.tilemap_addr = (val & 0x7f) >> 2;
+                bg.y_mirror = val & 2 > 0;
+                bg.x_mirror = val & 1 > 0;
+            }
+            0x0b..=0x0c => {
+                let val = val & 0x77;
+                let id = usize::from(!id & 2);
+                self.bgs[id].base_addr = val >> 4;
+                self.bgs[id | 1].base_addr = val & 7;
             }
             0x15 => {
                 // VMAIN - Video Port Control
@@ -98,6 +194,50 @@ impl Ppu {
                     self.vram_addr_unmapped = self
                         .vram_addr_unmapped
                         .wrapping_add(self.vram_increment_amount.into());
+                }
+            }
+            0x2a => {
+                // WBGLOG
+                for i in 0..4 {
+                    self.bgs[i].layer.mask_logic = MaskLogic::from_byte(val >> (i << 1));
+                }
+            }
+            0x2b => {
+                // WOBJLOG
+                self.obj_layer.mask_logic = MaskLogic::from_byte(val);
+                self.color_layer.mask_logic = MaskLogic::from_byte(val >> 2);
+            }
+            0x2c..=0x2f => {
+                // TM/TS/TMW/TSW
+                let f: fn(&mut Layer, val: bool) = match id {
+                    0x2c => |layer, val| layer.main_screen = val,
+                    0x2d => |layer, val| layer.sub_screen = val,
+                    0x2e => |layer, val| layer.main_screen_masked = val,
+                    0x2f => |layer, val| layer.sub_screen_masked = val,
+                    _ => unreachable!(),
+                };
+                for (i, bg) in self.bgs.iter_mut().enumerate() {
+                    f(&mut bg.layer, val & (1 << i) > 0)
+                }
+                f(&mut self.obj_layer, val & 0x10 > 0)
+            }
+            0x33 => {
+                // SETINI
+                if val & 1 > 0 {
+                    todo!("screen interlace mode")
+                }
+                if val & 2 > 0 {
+                    todo!("object interlace mode")
+                }
+                self.overscan = val & 4 > 0;
+                if val & 8 > 0 {
+                    todo!("pseudo-hires mode")
+                }
+                if val & 0x40 > 0 {
+                    todo!("mode 7 extra")
+                }
+                if val & 0x80 > 0 {
+                    todo!("enable super imposing")
                 }
             }
             0x34.. => unreachable!(),
