@@ -215,4 +215,15 @@ impl Cpu {
             self.regs.status = (self.regs.status & !Status::NEGATIVE) | Status::ZERO
         }
     }
+
+    pub fn update_status(&mut self) {
+        if self.regs.is_emulation {
+            self.regs.status |= Status::INDEX_REGISTER_SIZE | Status::ACCUMULATION;
+            self.regs.sp = (self.regs.sp & 0xff) | 0x100;
+        }
+        if self.is_idx8() {
+            self.regs.x &= 0xff;
+            self.regs.y &= 0xff;
+        }
+    }
 }

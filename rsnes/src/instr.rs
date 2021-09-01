@@ -155,7 +155,8 @@ impl Device {
             }
             0x28 => {
                 // PLP - Pull status
-                self.cpu.regs.status = Status(self.pull::<u8>())
+                self.cpu.regs.status = Status(self.pull::<u8>());
+                self.cpu.update_status();
             }
             0x29 => {
                 // AND - bitwise and A with immediate value
@@ -605,6 +606,7 @@ impl Device {
             0xc2 => {
                 // REP - Reset specified bits in the Status Register
                 let mask = Status(!self.load::<u8>());
+                // no `update_status` needed, because no bits got set
                 self.cpu.regs.status &= mask
             }
             0xc8 => {
@@ -681,7 +683,8 @@ impl Device {
             0xe2 => {
                 // SEP - Set specified bits in the Status Register
                 let mask = Status(self.load::<u8>());
-                self.cpu.regs.status |= mask
+                self.cpu.regs.status |= mask;
+                self.cpu.update_status();
             }
             0xe6 => {
                 // INC - Increment direct page
