@@ -69,6 +69,13 @@ impl MaskLogic {
 }
 
 #[derive(Debug, Clone)]
+pub struct Mode7Settings {
+    x_mirror: bool,
+    y_mirror: bool,
+    fill_zeros: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Ppu {
     pub(crate) oam: Oam,
     vram: [u16; VRAM_SIZE],
@@ -85,6 +92,7 @@ pub struct Ppu {
     bgs: [Background; 4],
     obj_layer: Layer,
     color_layer: Layer,
+    mode7_settings: Mode7Settings,
 }
 
 impl Ppu {
@@ -104,6 +112,11 @@ impl Ppu {
             bgs: [Background::new(); 4],
             obj_layer: Layer::new(),
             color_layer: Layer::new(),
+            mode7_settings: Mode7Settings {
+                x_mirror: false,
+                y_mirror: false,
+                fill_zeros: None,
+            },
         }
     }
 
@@ -194,6 +207,14 @@ impl Ppu {
                     self.vram_addr_unmapped = self
                         .vram_addr_unmapped
                         .wrapping_add(self.vram_increment_amount.into());
+                }
+            }
+            0x1a => {
+                // M7SEL
+                self.mode7_settings = Mode7Settings {
+                    x_mirror: val & 1 > 0,
+                    y_mirror: val & 2 > 0,
+                    fill_zeros: Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0),
                 }
             }
             0x2a => {
