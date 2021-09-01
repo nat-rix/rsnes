@@ -157,7 +157,7 @@ pub struct Device {
     pub(crate) open_bus: u8,
     ram: [u8; RAM_SIZE],
     wram_addr: Addr24,
-    pub(crate) master_cycle: Cycles,
+    pub(crate) cpu_cycles: Cycles,
     pub(crate) memory_cycles: Cycles,
     pub(crate) apu_cycles: u32,
     /// Some people refer to this as H-Pos
@@ -182,7 +182,7 @@ impl Device {
             open_bus: 0,
             ram: [0; RAM_SIZE],
             wram_addr: Addr24::default(),
-            master_cycle: 0,
+            cpu_cycles: 0,
             memory_cycles: 0,
             apu_cycles: 0,
             scanline_cycle: 0,

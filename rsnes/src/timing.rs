@@ -32,7 +32,10 @@ impl Device {
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
             if self.dma.is_dma_running() && !self.dma.is_hdma_running() {
-                if let Some(channel) = self.dma.get_first_dma_channel_id() {
+                if self.dma.ahead_cycles > 0 {
+                    self.dma.ahead_cycles -= i32::from(N)
+                } else {
+                    let channel = self.dma.get_first_dma_channel_id().unwrap();
                     self.do_dma(channel)
                 }
             } else {
@@ -72,16 +75,16 @@ impl Device {
             // > Internal operation CPU cycles always take 6 master cycles
             // source: <https://wiki.superfamicom.org/memory-mapping>
             let cycles = self.dispatch_instruction() * 6 + self.memory_cycles;
-            self.master_cycle += cycles;
+            self.cpu_cycles += cycles;
             self.cpu_ahead_cycles += cycles as i32;
             while self.apu_cycles * APU_CPU_TIMING_PROPORTION.0
-                < self.master_cycle * APU_CPU_TIMING_PROPORTION.1
+                < self.cpu_cycles * APU_CPU_TIMING_PROPORTION.1
             {
                 self.apu_cycles += self.spc.dispatch_instruction();
-                while self.master_cycle >= APU_CPU_TIMING_PROPORTION.0
+                while self.cpu_cycles >= APU_CPU_TIMING_PROPORTION.0
                     && self.apu_cycles >= APU_CPU_TIMING_PROPORTION.1
                 {
-                    self.master_cycle -= APU_CPU_TIMING_PROPORTION.0;
+                    self.cpu_cycles -= APU_CPU_TIMING_PROPORTION.0;
                     self.apu_cycles -= APU_CPU_TIMING_PROPORTION.1;
                 }
             }

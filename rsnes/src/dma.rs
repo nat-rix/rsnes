@@ -84,6 +84,7 @@ pub struct Dma {
     channels: [Channel; 8],
     dma_enabled: u8,
     hdma_enabled: u8,
+    pub(crate) ahead_cycles: i32,
 }
 
 impl Dma {
@@ -92,6 +93,7 @@ impl Dma {
             channels: [Channel::new(); 8],
             dma_enabled: 0,
             hdma_enabled: 0,
+            ahead_cycles: 0,
         }
     }
 
@@ -127,6 +129,9 @@ impl Dma {
 
     pub fn enable_dma(&mut self, value: u8) {
         self.dma_enabled = value;
+        if self.is_dma_running() {
+            self.ahead_cycles += 18 + self.dma_enabled.count_ones() as i32 * 8
+        }
     }
 
     pub fn enable_hdma(&mut self, value: u8) {
@@ -158,7 +163,6 @@ impl Device {
                 _ => self.read_bus_b::<u8>(b_bus),
             };
             let addr = channel.a_bus;
-            // TODO: do not include cycles?
             match addr.addr {
                 0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c => (),
                 _ => self.write(addr, value),
@@ -187,7 +191,8 @@ impl Device {
             0b1000..=u8::MAX => unreachable!(),
         };
         for i in offsets {
-            self.transfer_dma_byte(channel_id, *i)
+            self.transfer_dma_byte(channel_id, *i);
+            self.dma.ahead_cycles += 8
         }
         let channel = self.dma.channels.get_mut(channel_id).unwrap();
         if channel.control & flags::FIEXD == 0 {
@@ -199,7 +204,7 @@ impl Device {
         }
         channel.size = channel.size.wrapping_sub(1);
         if channel.size == 0 {
-            self.dma.dma_enabled ^= 1 << channel_id
+            self.dma.dma_enabled ^= 1 << channel_id;
         }
     }
 }
