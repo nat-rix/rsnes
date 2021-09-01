@@ -9,9 +9,9 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 0, 0, 0,  // 1^
        6, 0, 8, 0, 0, 0, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 0, 0, 0, 0,  // 4^
+       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 3, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 0, 0, 0, 0, 0,  // 6^
+       6, 0, 0, 0, 3, 0, 0, 0,   0, 2, 0, 6, 0, 0, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 3, 3, 0, 0,   0, 0, 0, 3, 4, 4, 4, 5,  // 8^
        0, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 4, 5, 5, 5,  // 9^
@@ -205,6 +205,10 @@ impl Device {
                 // PHK - Push PC Bank
                 self.push(self.cpu.regs.pc.bank)
             }
+            0x4c => {
+                // JMP - Jump absolute
+                self.cpu.regs.pc.addr = self.load()
+            }
             0x54 => {
                 // MVN - Block Move Negative
                 let [dst, src] = self.load::<u16>().to_bytes();
@@ -283,6 +287,11 @@ impl Device {
                     self.add_carry16(op1);
                     cycles += 1;
                 }
+            }
+            0x6b => {
+                // RTL - Return from subroutine long
+                self.cpu.regs.pc = self.pull();
+                self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(1);
             }
             0x70 => {
                 // BVS - Branch if Overflow is set
