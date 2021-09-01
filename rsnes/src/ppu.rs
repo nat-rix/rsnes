@@ -3,25 +3,25 @@ pub const VRAM_SIZE: usize = 0x8000;
 #[derive(Debug, Clone)]
 pub struct Ppu {
     vram: [u16; VRAM_SIZE],
-    vram_addr: u16,
     vram_addr_unmapped: u16,
     /// A value between 0 and 15 with 15 being maximum brightness
     brightness: u8,
     obj_size: ObjectSize,
     remap_mode: RemapMode,
     vram_increment_amount: u8,
+    increment_first: bool,
 }
 
 impl Ppu {
     pub fn new() -> Self {
         Self {
             vram: [0; VRAM_SIZE],
-            vram_addr: 0,
             vram_addr_unmapped: 0,
             brightness: 0x0f,
             obj_size: ObjectSize::O8S16,
             remap_mode: RemapMode::NoRemap,
             vram_increment_amount: 1,
+            increment_first: true,
         }
     }
 
@@ -52,32 +52,53 @@ impl Ppu {
             }
             0x15 => {
                 // VMAIN - Video Port Control
-                // TODO: increment mode
+                self.increment_first = val & 0x80 == 0;
                 self.vram_increment_amount = match val & 0b11 {
                     0 => 1,
                     1 => 32,
                     _ => 128,
                 };
                 self.remap_mode = RemapMode::from_bits(val >> 2);
-                self.update_vram_addr();
             }
             0x16 => {
                 // VMADDL
                 self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff00) | u16::from(val);
-                self.update_vram_addr();
             }
             0x17 => {
                 // VMADDH
                 self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff) | (u16::from(val) << 8);
-                self.update_vram_addr();
+            }
+            0x18 => {
+                // VMDATAL
+                let word = self.get_vram_word_mut(self.vram_addr_unmapped);
+                *word = (*word & 0xff00) | u16::from(val);
+                if self.increment_first {
+                    self.vram_addr_unmapped = self
+                        .vram_addr_unmapped
+                        .wrapping_add(self.vram_increment_amount.into());
+                }
+            }
+            0x19 => {
+                // VMDATAH
+                let word = self.get_vram_word_mut(self.vram_addr_unmapped);
+                *word = (*word & 0xff) | (u16::from(val) << 8);
+                if !self.increment_first {
+                    self.vram_addr_unmapped = self
+                        .vram_addr_unmapped
+                        .wrapping_add(self.vram_increment_amount.into());
+                }
             }
             0x34.. => unreachable!(),
             _ => todo!("write to unknown PPU register 0x21{:02x}", id),
         }
     }
 
-    pub fn update_vram_addr(&mut self) {
-        self.vram_addr = self.remap_mode.remap(self.vram_addr_unmapped);
+    fn get_vram_word_mut(&mut self, index: u16) -> &mut u16 {
+        self.vram
+            .get_mut(usize::from(
+                self.remap_mode.remap(self.vram_addr_unmapped) & 0x7fff,
+            ))
+            .unwrap()
     }
 }
 

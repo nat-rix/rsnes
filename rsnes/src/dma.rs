@@ -179,6 +179,11 @@ impl Device {
     }
 
     pub fn do_dma(&mut self, channel_id: usize) {
+        // TODO: this all may be optimized, because multiple reads on the same address
+        // (FIXED mode) are not necessary in most cases. So check for this cases!
+        // One thing I could imagine (that would be nicely optimizable):
+        // Maybe FIXED mode writes always the same data even if two reads
+        // would result in different data
         let channel = self.dma.channels.get(channel_id).unwrap();
         println!("doing dma at channel {}: {:#?}", channel_id, channel);
         let offsets: &[u8] = match channel.control & flags::MODE {
