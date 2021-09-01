@@ -32,7 +32,9 @@ impl Device {
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
             if self.dma.is_dma_running() && !self.dma.is_hdma_running() {
-                self.dma.do_dma();
+                if let Some(channel) = self.dma.get_first_dma_channel_id() {
+                    self.do_dma(channel)
+                }
             } else {
                 self.run_cpu();
             }

@@ -154,7 +154,7 @@ pub struct Device {
     pub(crate) dma: Dma,
     cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
-    open_bus: u8,
+    pub(crate) open_bus: u8,
     ram: [u8; RAM_SIZE],
     wram_addr: Addr24,
     pub(crate) master_cycle: Cycles,
@@ -257,6 +257,23 @@ impl Device {
 }
 
 impl Device {
+    pub fn read_bus_b<D: Data>(&self, addr: u8) -> D {
+        match addr {
+            0x34..=0x3f => {
+                let mut data = <D::Arr as Default>::default();
+                for (i, d) in data.as_mut().iter_mut().enumerate() {
+                    *d = self
+                        .ppu
+                        .read_register(addr.wrapping_add(i as u8) & 0xff)
+                        .unwrap_or(self.open_bus)
+                }
+                D::from_bytes(&data)
+            }
+            0x40..=0x43 => D::parse(&self.spc.output, (addr & 0b11) as usize),
+            _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
+        }
+    }
+
     /// Read the mapped memory at the specified address
     ///
     /// # Note
@@ -283,22 +300,7 @@ impl Device {
                 }
                 0x2100..=0x21ff => {
                     // address bus B
-                    match addr.addr {
-                        0x2134..=0x213f => {
-                            let mut data = <D::Arr as Default>::default();
-                            for (i, d) in data.as_mut().iter_mut().enumerate() {
-                                *d = self
-                                    .ppu
-                                    .read_register(
-                                        ((addr.addr as usize).wrapping_add(i) & 0xff) as u8,
-                                    )
-                                    .unwrap_or(self.open_bus)
-                            }
-                            D::from_bytes(&data)
-                        }
-                        0x2140..=0x2143 => D::parse(&self.spc.output, (addr.addr & 0b11) as usize),
-                        _ => todo!("unimplemented address bus B read at 0x{:04x}", addr.addr),
-                    }
+                    self.read_bus_b((addr.addr & 0xff) as u8)
                 }
                 0x4000..=0x43ff => {
                     // internal CPU registers
@@ -330,6 +332,20 @@ impl Device {
             .unwrap_or_else(|| D::from_open_bus(self.open_bus))
     }
 
+    pub fn write_bus_b<D: Data>(&mut self, addr: u8, value: D) {
+        for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
+            let addr = addr.wrapping_add(i as u8);
+            match addr {
+                0x00..=0x33 => self.ppu.write_register(addr, *d),
+                0x40..=0x43 => self.spc.input[(addr & 0b11) as usize] = *d,
+                0x81 => self.wram_addr.addr = (self.wram_addr.addr & 0xff00) | *d as u16,
+                0x82 => self.wram_addr.addr = (self.wram_addr.addr & 0xff) | ((*d as u16) << 8),
+                0x83 => self.wram_addr.bank = *d,
+                _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
+            }
+        }
+    }
+
     /// Write the mapped memory at the specified address
     ///
     /// # Note
@@ -356,22 +372,7 @@ impl Device {
                 }
                 0x2100..=0x21ff => {
                     // address bus B
-                    for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
-                        let addr = (addr.addr.wrapping_add(i as u16) & 0xff) as u8;
-                        match addr {
-                            0x00..=0x33 => self.ppu.write_register(addr, *d),
-                            0x40..=0x43 => self.spc.input[(addr & 0b11) as usize] = *d,
-                            0x81 => {
-                                self.wram_addr.addr = (self.wram_addr.addr & 0xff00) | *d as u16
-                            }
-                            0x82 => {
-                                self.wram_addr.addr =
-                                    (self.wram_addr.addr & 0xff) | ((*d as u16) << 8)
-                            }
-                            0x83 => self.wram_addr.bank = *d,
-                            _ => todo!("unimplemented address bus B read at 0x21{:04x}", addr),
-                        }
-                    }
+                    self.write_bus_b((addr.addr & 0xff) as u8, value)
                 }
                 0x4000..=0x43ff => {
                     // internal CPU registers

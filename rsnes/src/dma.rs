@@ -1,6 +1,4 @@
-use crate::device::Addr24;
-
-pub const CHANNEL_COUNT: usize = 8;
+use crate::device::{Addr24, Device};
 
 pub mod flags {
     pub const MODE: u8 = 0b111;
@@ -62,7 +60,7 @@ impl Channel {
             0 => self.control = value,
             1 => self.b_bus = value,
             2 => self.a_bus.addr = (self.a_bus.addr & 0xff00) | value as u16,
-            3 => self.a_bus.addr = (self.a_bus.addr & 0xff) | ((value as u16) << 8),
+            3 => self.a_bus.addr = (self.a_bus.addr & 0xff) | (u16::from(value) << 8),
             4 => self.a_bus.bank = value,
             5 => self.size = (self.size & 0xff00) | value as u16,
             6 => self.size = (self.size & 0xff) | ((value as u16) << 8),
@@ -83,7 +81,7 @@ impl Channel {
 
 #[derive(Debug, Clone)]
 pub struct Dma {
-    channels: [Channel; CHANNEL_COUNT],
+    channels: [Channel; 8],
     dma_enabled: u8,
     hdma_enabled: u8,
 }
@@ -91,7 +89,7 @@ pub struct Dma {
 impl Dma {
     pub fn new() -> Self {
         Self {
-            channels: [Channel::new(); CHANNEL_COUNT],
+            channels: [Channel::new(); 8],
             dma_enabled: 0,
             hdma_enabled: 0,
         }
@@ -104,13 +102,19 @@ impl Dma {
     /// Read 8-bit from channel transfer values
     pub fn read(&self, addr: u16) -> Option<u8> {
         let channel = (addr >> 4) & 0b111;
-        self.channels[channel as usize].read((addr & 0xf) as u8)
+        self.channels
+            .get(channel as usize)
+            .unwrap()
+            .read((addr & 0xf) as u8)
     }
 
     /// Write 8-bit to Channel transfer values
     pub fn write(&mut self, addr: u16, value: u8) {
         let channel = (addr >> 4) & 0b111;
-        self.channels[channel as usize].write((addr & 0xf) as u8, value)
+        self.channels
+            .get_mut(channel as usize)
+            .unwrap()
+            .write((addr & 0xf) as u8, value)
     }
 
     pub const fn is_dma_running(&self) -> bool {
@@ -129,11 +133,73 @@ impl Dma {
         self.hdma_enabled = value;
     }
 
-    pub fn do_dma(&mut self) {
-        todo!("do dma stuff")
+    pub fn get_first_dma_channel_id(&mut self) -> Option<usize> {
+        if let id @ 0..=7 = self.dma_enabled.trailing_zeros() {
+            Some(id as usize)
+        } else {
+            None
+        }
     }
 
     pub fn do_hdma(&mut self) {
         todo!("do hdma stuff")
+    }
+}
+
+impl Device {
+    fn transfer_dma_byte(&mut self, channel_id: usize, b_bus_offset: u8) {
+        let channel = self.dma.channels.get(channel_id).unwrap();
+        let b_bus = channel.b_bus.wrapping_add(b_bus_offset);
+        if channel.control & flags::PPU_TO_CPU > 0 {
+            // PPU -> CPU
+            let value = match b_bus {
+                // TODO: is this really open_bus?
+                0x80..=0x83 => self.open_bus,
+                _ => self.read_bus_b::<u8>(b_bus),
+            };
+            let addr = channel.a_bus;
+            // TODO: do not include cycles?
+            match addr.addr {
+                0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c => (),
+                _ => self.write(addr, value),
+            }
+        } else {
+            // CPU -> PPU
+            let addr = channel.a_bus;
+            let value = match addr.addr {
+                0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c => self.open_bus,
+                _ => self.read::<u8>(addr),
+            };
+            self.write_bus_b(b_bus, value)
+        }
+    }
+
+    pub fn do_dma(&mut self, channel_id: usize) {
+        let channel = self.dma.channels.get(channel_id).unwrap();
+        println!("doing dma at channel {}: {:#?}", channel_id, channel);
+        let offsets: &[u8] = match channel.control & flags::MODE {
+            0b000 => &[0],
+            0b001 => &[0, 1],
+            0b010 | 0b110 => &[0, 0],
+            0b011 | 0b111 => &[0, 0, 1, 1],
+            0b100 => &[0, 1, 2, 3],
+            0b101 => &[0, 1, 0, 1],
+            0b1000..=u8::MAX => unreachable!(),
+        };
+        for i in offsets {
+            self.transfer_dma_byte(channel_id, *i)
+        }
+        let channel = self.dma.channels.get_mut(channel_id).unwrap();
+        if channel.control & flags::FIEXD == 0 {
+            if channel.control & flags::DECREMENT > 0 {
+                channel.a_bus.addr = channel.a_bus.addr.wrapping_sub(1)
+            } else {
+                channel.a_bus.addr = channel.a_bus.addr.wrapping_add(1)
+            }
+        }
+        channel.size = channel.size.wrapping_sub(1);
+        if channel.size == 0 {
+            self.dma.dma_enabled ^= 1 << channel_id
+        }
     }
 }
