@@ -157,12 +157,13 @@ impl Device {
         let b_bus = channel.b_bus.wrapping_add(b_bus_offset);
         if channel.control & flags::PPU_TO_CPU > 0 {
             // PPU -> CPU
-            let value = match b_bus {
-                // TODO: is this really open_bus?
-                0x80..=0x83 => self.open_bus,
-                _ => self.read_bus_b::<u8>(b_bus),
-            };
             let addr = channel.a_bus;
+            let value = if (0x2180..=0x2183).contains(&addr.addr) && (0x80..=0x83).contains(&b_bus)
+            {
+                self.open_bus
+            } else {
+                self.read_bus_b::<u8>(b_bus)
+            };
             match addr.addr {
                 0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c => (),
                 _ => self.write(addr, value),
@@ -170,8 +171,11 @@ impl Device {
         } else {
             // CPU -> PPU
             let addr = channel.a_bus;
-            let value = match addr.addr {
-                0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c => self.open_bus,
+            let value = match (addr.bank, addr.addr) {
+                (
+                    0x00..=0x3f | 0x80..=0xbf,
+                    0x2100..=0x21ff | 0x4300..=0x437f | 0x420b | 0x420c,
+                ) => self.open_bus,
                 _ => self.read::<u8>(addr),
             };
             self.write_bus_b(b_bus, value)
