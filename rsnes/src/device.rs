@@ -1,6 +1,7 @@
 //! The SNES/Famicom device
 
 use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700, timing::Cycles};
+use core::cell::Cell;
 
 const RAM_SIZE: usize = 0x20000;
 
@@ -156,7 +157,7 @@ pub struct Device {
     /// <https://wiki.superfamicom.org/open-bus>
     pub(crate) open_bus: u8,
     ram: [u8; RAM_SIZE],
-    wram_addr: Addr24,
+    wram_addr: Cell<u32>,
     pub(crate) cpu_cycles: Cycles,
     pub(crate) memory_cycles: Cycles,
     pub(crate) apu_cycles: u32,
@@ -180,7 +181,7 @@ impl Device {
             cartridge: None,
             open_bus: 0,
             ram: [0; RAM_SIZE],
-            wram_addr: Addr24::default(),
+            wram_addr: Cell::new(0),
             cpu_cycles: 0,
             memory_cycles: 0,
             apu_cycles: 0,
@@ -256,20 +257,22 @@ impl Device {
 
 impl Device {
     pub fn read_bus_b<D: Data>(&self, addr: u8) -> D {
-        match addr {
-            0x34..=0x3f => {
-                let mut data = <D::Arr as Default>::default();
-                for (i, d) in data.as_mut().iter_mut().enumerate() {
-                    *d = self
-                        .ppu
-                        .read_register(addr.wrapping_add(i as u8) & 0xff)
-                        .unwrap_or(self.open_bus)
+        let mut data = <D::Arr as Default>::default();
+
+        for (i, d) in data.as_mut().iter_mut().enumerate() {
+            let addr = addr.wrapping_add(i as u8);
+            *d = match addr {
+                0x34..=0x3f => self.ppu.read_register(addr).unwrap_or(self.open_bus),
+                0x40..=0x43 => self.spc.output[(addr & 0b11) as usize],
+                0x80 => {
+                    let res = self.ram[self.wram_addr.get() as usize];
+                    self.increment_wram_addr();
+                    res
                 }
-                D::from_bytes(&data)
+                _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
             }
-            0x40..=0x43 => D::parse(&self.spc.output, (addr & 0b11) as usize),
-            _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
         }
+        D::from_bytes(&data)
     }
 
     /// Read the mapped memory at the specified address
@@ -330,16 +333,30 @@ impl Device {
             .unwrap_or_else(|| D::from_open_bus(self.open_bus))
     }
 
+    fn increment_wram_addr(&self) {
+        self.wram_addr.set(self.wram_addr.get().wrapping_add(1));
+    }
+
     pub fn write_bus_b<D: Data>(&mut self, addr: u8, value: D) {
         for (i, d) in value.to_bytes().as_ref().iter().enumerate() {
             let addr = addr.wrapping_add(i as u8);
             match addr {
                 0x00..=0x33 => self.ppu.write_register(addr, *d),
                 0x40..=0x43 => self.spc.input[(addr & 0b11) as usize] = *d,
-                0x81 => self.wram_addr.addr = (self.wram_addr.addr & 0xff00) | *d as u16,
-                0x82 => self.wram_addr.addr = (self.wram_addr.addr & 0xff) | ((*d as u16) << 8),
-                0x83 => self.wram_addr.bank = *d,
-                _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
+                0x80 => {
+                    self.ram[(self.wram_addr.get() & 0x1ffff) as usize] = *d;
+                    self.increment_wram_addr();
+                }
+                0x81 => self
+                    .wram_addr
+                    .set((self.wram_addr.get() & 0xffff00) | u32::from(*d)),
+                0x82 => self
+                    .wram_addr
+                    .set((self.wram_addr.get() & 0xff00ff) | (u32::from(*d) << 8)),
+                0x83 => self
+                    .wram_addr
+                    .set((self.wram_addr.get() & 0xffff) | (u32::from(*d & 1) << 16)),
+                _ => todo!("unimplemented address bus B write at 0x21{:02x}", addr),
             }
         }
     }
