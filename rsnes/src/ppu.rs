@@ -1,4 +1,4 @@
-use crate::oam::Oam;
+use crate::oam::{CgRam, Oam};
 
 pub const VRAM_SIZE: usize = 0x8000;
 
@@ -99,6 +99,7 @@ pub struct Mode7Settings {
 #[derive(Debug, Clone)]
 pub struct Ppu {
     pub(crate) oam: Oam,
+    cgram: CgRam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
     /// A value between 0 and 15 with 15 being maximum brightness
@@ -126,6 +127,7 @@ impl Ppu {
     pub const fn new() -> Self {
         Self {
             oam: Oam::new(),
+            cgram: CgRam::new(),
             vram: [0; VRAM_SIZE],
             vram_addr_unmapped: 0,
             brightness: 0x0f,
@@ -253,6 +255,14 @@ impl Ppu {
                     y_mirror: val & 2 > 0,
                     fill_zeros: Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0),
                 }
+            }
+            0x21 => {
+                // CGADD
+                self.cgram.set_addr(val)
+            }
+            0x22 => {
+                // CGADD
+                self.cgram.write(val)
             }
             0x23..=0x24 => {
                 // WnmSEL

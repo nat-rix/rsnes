@@ -63,3 +63,35 @@ impl Oam {
         self.addr_inc = self.addr_inc.wrapping_add(1);
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct CgRam {
+    data: [u8; 512],
+    // 9-bit value
+    addr: u16,
+    stashed_write: u8,
+}
+
+impl CgRam {
+    pub const fn new() -> Self {
+        Self {
+            data: [0; 512],
+            addr: 0,
+            stashed_write: 0,
+        }
+    }
+
+    pub fn set_addr(&mut self, addr: u8) {
+        self.addr = u16::from(addr) << 1;
+    }
+
+    pub fn write(&mut self, value: u8) {
+        if self.addr & 1 == 0 {
+            self.stashed_write = value
+        } else {
+            self.data[usize::from(self.addr & 0x1fe)] = self.stashed_write;
+            self.data[usize::from(self.addr & 0x1ff)] = value
+        }
+        self.addr = self.addr.wrapping_add(1)
+    }
+}
