@@ -11,7 +11,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 3, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 0, 6, 0, 0, 0, 0,  // 6^
+       6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 0, 6, 0, 4, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
        3, 0, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
@@ -393,6 +393,19 @@ impl Device {
                 // RTL - Return from subroutine long
                 self.cpu.regs.pc = self.pull();
                 self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(1);
+            }
+            0x6d => {
+                // ADC - Add absolute with Carry
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
             }
             0x70 => {
                 // BVS - Branch if Overflow is set

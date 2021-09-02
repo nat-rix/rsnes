@@ -3,6 +3,17 @@ use crate::oam::Oam;
 pub const VRAM_SIZE: usize = 0x8000;
 
 #[derive(Debug, Clone, Copy)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Color {
+    pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Background {
     tilemap_addr: u8,
     base_addr: u8,
@@ -26,6 +37,11 @@ impl Background {
 #[derive(Debug, Clone, Copy)]
 pub struct Layer {
     mask_logic: MaskLogic,
+    window1: bool,
+    window2: bool,
+    window1_inversion: bool,
+    window2_inversion: bool,
+    color_math: bool,
     // not on color_layer
     main_screen: bool,
     // not on color_layer
@@ -40,6 +56,11 @@ impl Layer {
     pub const fn new() -> Self {
         Self {
             mask_logic: MaskLogic::Or,
+            window1: false,
+            window2: false,
+            window1_inversion: false,
+            window2_inversion: false,
+            color_math: false,
             main_screen: false,
             sub_screen: false,
             main_screen_masked: false,
@@ -93,6 +114,12 @@ pub struct Ppu {
     obj_layer: Layer,
     color_layer: Layer,
     mode7_settings: Mode7Settings,
+    direct_color_mode: bool,
+    add_subscreen: bool,
+    color_behaviour: u8,
+    subtract_color: bool,
+    half_color: bool,
+    fixed_color: Color,
 }
 
 impl Ppu {
@@ -117,6 +144,12 @@ impl Ppu {
                 y_mirror: false,
                 fill_zeros: None,
             },
+            direct_color_mode: false,
+            add_subscreen: false,
+            color_behaviour: 0,
+            subtract_color: false,
+            half_color: false,
+            fixed_color: Color::BLACK,
         }
     }
 
@@ -221,6 +254,29 @@ impl Ppu {
                     fill_zeros: Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0),
                 }
             }
+            0x23..=0x24 => {
+                // WnmSEL
+                let mut val = val;
+                for i in 0..2 {
+                    let bg = &mut self.bgs[usize::from(i + (!id & 2))];
+                    bg.layer.window1_inversion = val & 1 > 0;
+                    bg.layer.window1 = val & 2 > 0;
+                    bg.layer.window2_inversion = val & 4 > 0;
+                    bg.layer.window2 = val & 8 > 0;
+                    val >>= 4;
+                }
+            }
+            0x25 => {
+                // WOBJSEL
+                let mut val = val;
+                for layer in [&mut self.obj_layer, &mut self.color_layer] {
+                    layer.window1_inversion = val & 1 > 0;
+                    layer.window1 = val & 2 > 0;
+                    layer.window2_inversion = val & 4 > 0;
+                    layer.window2 = val & 8 > 0;
+                    val >>= 4;
+                }
+            }
             0x2a => {
                 // WBGLOG
                 for i in 0..4 {
@@ -245,6 +301,35 @@ impl Ppu {
                     f(&mut bg.layer, val & (1 << i) > 0)
                 }
                 f(&mut self.obj_layer, val & 0x10 > 0)
+            }
+            0x30 => {
+                // CGWSEL
+                self.direct_color_mode = val & 1 > 0;
+                self.add_subscreen = val & 2 > 0;
+                self.color_behaviour = val >> 4;
+            }
+            0x31 => {
+                // CGADSUB
+                self.bgs[0].layer.color_math = val & 1 > 0;
+                self.bgs[1].layer.color_math = val & 2 > 0;
+                self.bgs[2].layer.color_math = val & 4 > 0;
+                self.bgs[3].layer.color_math = val & 8 > 0;
+                self.obj_layer.color_math = val & 0x10 > 0;
+                self.color_layer.color_math = val & 0x20 > 0;
+                self.half_color = val & 0x40 > 0;
+                self.subtract_color = val & 0x80 > 0;
+            }
+            0x32 => {
+                // COLDATA
+                if val & 0x20 > 0 {
+                    self.fixed_color.r = val
+                }
+                if val & 0x40 > 0 {
+                    self.fixed_color.g = val
+                }
+                if val & 0x80 > 0 {
+                    self.fixed_color.b = val
+                }
             }
             0x33 => {
                 // SETINI
