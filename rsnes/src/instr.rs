@@ -20,7 +20,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 2, 0, 4, 0, 0,  // f^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
@@ -356,7 +356,6 @@ impl Device {
             }
             0x65 => {
                 // ADC - DP Add with Carry
-                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 let addr = self.load_direct(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
@@ -381,7 +380,6 @@ impl Device {
             }
             0x69 => {
                 // ADC -  immediate Add with Carry
-                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 if self.cpu.is_reg8() {
                     let op1 = self.load::<u8>();
                     self.add_carry8(op1);
@@ -423,7 +421,6 @@ impl Device {
             }
             0x7d => {
                 // ADC - Add with Carry
-                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 let addr = self.load_indexed_x(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
@@ -994,13 +991,12 @@ impl Device {
             }
             0xe9 => {
                 // SBC - Subtract with carry
-                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 if self.cpu.is_reg8() {
-                    let op1 = !self.load::<u8>();
-                    self.add_carry8(op1);
+                    let op1 = self.load::<u8>();
+                    self.sub_carry8(op1);
                 } else {
-                    let op1 = !self.load::<u16>();
-                    self.add_carry16(op1);
+                    let op1 = self.load::<u16>();
+                    self.sub_carry16(op1);
                     cycles += 1;
                 }
             }
@@ -1012,6 +1008,10 @@ impl Device {
             0xf0 => {
                 // BEQ - Branch if ZERO is set
                 self.branch_near(self.cpu.regs.status.has(Status::ZERO), &mut cycles)
+            }
+            0xf8 => {
+                // SED - Set Decimal flag
+                self.cpu.regs.status |= Status::DECIMAL
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
@@ -1025,14 +1025,13 @@ impl Device {
             }
             0xfd => {
                 // SBC - Subtract with carry
-                assert!(!self.cpu.regs.status.has(Status::DECIMAL)); // TODO: implement decimal
                 let addr = self.load_indexed_x(&mut cycles);
                 if self.cpu.is_reg8() {
-                    let op1 = !self.read::<u8>(addr);
-                    self.add_carry8(op1);
+                    let op1 = self.read::<u8>(addr);
+                    self.sub_carry8(op1);
                 } else {
-                    let op1 = !self.read::<u16>(addr);
-                    self.add_carry16(op1);
+                    let op1 = self.read::<u16>(addr);
+                    self.sub_carry16(op1);
                     cycles += 1;
                 }
             }
@@ -1041,30 +1040,146 @@ impl Device {
         cycles
     }
 
-    pub fn add_carry8(&mut self, op1: u8) {
+    fn generic_add_carry8<const GT1: u8, const GT2: u16>(
+        &mut self,
+        op1: u8,
+        fu8: fn(u8, u8) -> u8,
+        gt8: fn(&u8, &u8) -> bool,
+        fu16: fn(u16, u16) -> u16,
+        gt16: fn(&u16, &u16) -> bool,
+    ) {
         let op2 = self.cpu.regs.a8();
-        let (new, nc) = op1.overflowing_add(op2);
-        let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
-        let nc = nc ^ nc2;
-        self.cpu.regs.status.set_if(Status::CARRY, nc);
-        let op1v = op1 & 128;
-        let v = op1v == (op2 & 128) && op1v != (new & 128);
-        self.cpu.regs.status.set_if(Status::OVERFLOW, v);
-        self.cpu.update_nz8(new);
-        self.cpu.regs.set_a8(new);
+        if self.cpu.regs.status.has(Status::DECIMAL) {
+            let res = (op1 & 0xf)
+                .wrapping_add(op2 & 0xf)
+                .wrapping_add(self.cpu.regs.status.has(Status::CARRY) as _);
+            let res = if gt8(&res, &GT1) { fu8(res, 6) } else { res };
+            let carry = (res > 0xf) as u16;
+            let res = u16::from(op1 & 0xf0)
+                .wrapping_add((op2 & 0xf0).into())
+                .wrapping_add(carry << 4)
+                .wrapping_add((res & 0xf).into());
+            self.cpu.regs.status.set_if(
+                Status::OVERFLOW,
+                !(u16::from(op1) ^ u16::from(op2)) & (u16::from(op2) ^ res) & 0x80 > 0,
+            );
+            let res = if gt16(&res, &GT2) {
+                fu16(res, 0x60)
+            } else {
+                res
+            };
+            self.cpu.regs.status.set_if(Status::CARRY, res > 0xff);
+            let res = (res & 0xff) as u8;
+            self.cpu.update_nz8(res);
+            self.cpu.regs.set_a8(res);
+        } else {
+            let (new, nc) = op1.overflowing_add(op2);
+            let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
+            let nc = nc ^ nc2;
+            self.cpu.regs.status.set_if(Status::CARRY, nc);
+            let op1v = op1 & 128;
+            let v = op1v == (op2 & 128) && op1v != (new & 128);
+            self.cpu.regs.status.set_if(Status::OVERFLOW, v);
+            self.cpu.update_nz8(new);
+            self.cpu.regs.set_a8(new);
+        }
+    }
+
+    pub fn add_carry8(&mut self, op1: u8) {
+        self.generic_add_carry8::<9, 0x9f>(
+            op1,
+            u8::wrapping_add,
+            u8::gt,
+            u16::wrapping_add,
+            u16::gt,
+        )
+    }
+
+    pub fn sub_carry8(&mut self, op1: u8) {
+        self.generic_add_carry8::<0xf, 0xff>(
+            !op1,
+            u8::wrapping_sub,
+            u8::le,
+            u16::wrapping_sub,
+            u16::le,
+        )
+    }
+
+    fn generic_add_carry16<const GT1: u16, const GT2: u16, const GT3: u16, const GT4: u32>(
+        &mut self,
+        op1: u16,
+        f: fn(u16, u16) -> u16,
+        gt: fn(&u16, &u16) -> bool,
+        fu32: fn(u32, u32) -> u32,
+        gt32: fn(&u32, &u32) -> bool,
+    ) {
+        let op2 = self.cpu.regs.a;
+        if self.cpu.regs.status.has(Status::DECIMAL) {
+            let res = (op1 & 0xf)
+                .wrapping_add(op2 & 0xf)
+                .wrapping_add(self.cpu.regs.status.has(Status::CARRY) as _);
+            let res = if gt(&res, &GT1) { f(res, 6) } else { res };
+            let carry = (res > 0xf) as u16;
+            let res = (op1 & 0xf0)
+                .wrapping_add(op2 & 0xf0)
+                .wrapping_add(carry << 4)
+                .wrapping_add(res & 0xf);
+            let res = if gt(&res, &GT2) { f(res, 0x60) } else { res };
+            let carry = (res > 0xff) as u16;
+            let res = (op1 & 0xf00)
+                .wrapping_add(op2 & 0xf00)
+                .wrapping_add(carry << 8)
+                .wrapping_add(res & 0xff);
+            let res = if gt(&res, &GT3) { f(res, 0x600) } else { res };
+            let carry = (res > 0xfff) as u32;
+            let res = u32::from(op1 & 0xf000)
+                .wrapping_add((op2 & 0xf000).into())
+                .wrapping_add(carry << 12)
+                .wrapping_add((res & 0xfff).into());
+            self.cpu.regs.status.set_if(
+                Status::OVERFLOW,
+                !(u32::from(op1) ^ u32::from(op2)) & (u32::from(op2) ^ res) & 0x8000 > 0,
+            );
+            let res = if gt32(&res, &GT4) {
+                fu32(res, 0x6000)
+            } else {
+                res
+            };
+            self.cpu.regs.status.set_if(Status::CARRY, res > 0xffff);
+            let res = (res & 0xffff) as u16;
+            self.cpu.update_nz16(res);
+            self.cpu.regs.a = res
+        } else {
+            let (new, nc) = op1.overflowing_add(op2);
+            let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
+            let nc = nc ^ nc2;
+            self.cpu.regs.status.set_if(Status::CARRY, nc);
+            let op1v = op1 & 0x8000;
+            let v = op1v == (op2 & 0x8000) && op1v != (new & 0x8000);
+            self.cpu.regs.status.set_if(Status::OVERFLOW, v);
+            self.cpu.update_nz16(new);
+            self.cpu.regs.a = new;
+        }
     }
 
     pub fn add_carry16(&mut self, op1: u16) {
-        let op2 = self.cpu.regs.a;
-        let (new, nc) = op1.overflowing_add(op2);
-        let (new, nc2) = new.overflowing_add(self.cpu.regs.status.has(Status::CARRY) as _);
-        let nc = nc ^ nc2;
-        self.cpu.regs.status.set_if(Status::CARRY, nc);
-        let op1v = op1 & 0x8000;
-        let v = op1v == (op2 & 0x8000) && op1v != (new & 0x8000);
-        self.cpu.regs.status.set_if(Status::OVERFLOW, v);
-        self.cpu.update_nz16(new);
-        self.cpu.regs.a = new;
+        self.generic_add_carry16::<9, 0x9f, 0x9ff, 0x9fff>(
+            op1,
+            u16::wrapping_add,
+            u16::gt,
+            u32::wrapping_add,
+            u32::gt,
+        )
+    }
+
+    pub fn sub_carry16(&mut self, op1: u16) {
+        self.generic_add_carry16::<0xf, 0xff, 0xfff, 0xffff>(
+            !op1,
+            u16::wrapping_sub,
+            u16::le,
+            u32::wrapping_sub,
+            u32::le,
+        )
     }
 
     pub fn branch_near(&mut self, cond: bool, cycles: &mut Cycles) {
