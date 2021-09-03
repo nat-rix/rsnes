@@ -15,9 +15,9 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
        3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
-       2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 0, 4, 4, 0,  // a^
+       2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
        0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 0, 3, 0, 0,  // b^
-       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 0, 4, 0, 0,  // c^
+       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 6, 0,  // e^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 4, 0, 0,  // f^
@@ -811,6 +811,21 @@ impl Device {
                 self.cpu.regs.db = self.pull();
                 self.cpu.update_nz8(self.cpu.regs.db)
             }
+            0xac => {
+                // LDY - Load absolute into Y
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_idx8() {
+                    let y = self.read::<u8>(addr);
+                    self.cpu.update_nz8(y);
+                    self.cpu.regs.set_y8(y);
+                } else {
+                    let y = self.read::<u16>(addr);
+                    self.cpu.update_nz16(y);
+                    self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
             0xad => {
                 // LDA - Load absolute to A
                 let addr = self.load();
@@ -970,6 +985,20 @@ impl Device {
                 } else {
                     self.cpu.regs.x = self.cpu.regs.x.wrapping_sub(1);
                     self.cpu.update_nz16(self.cpu.regs.x);
+                }
+            }
+            0xcc => {
+                // CPY - Compare Y with absolute value
+                // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_idx8() {
+                    let val = self.read::<u8>(addr);
+                    self.compare8(self.cpu.regs.y8(), val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.compare16(self.cpu.regs.y, val);
+                    cycles += 1
                 }
             }
             0xcd => {
