@@ -3,6 +3,53 @@ use crate::oam::{CgRam, Oam};
 pub const VRAM_SIZE: usize = 0x8000;
 
 #[derive(Debug, Clone, Copy)]
+pub enum BgModeNum {
+    Mode0,
+    Mode1,
+    Mode2,
+    Mode3,
+    Mode4,
+    Mode5,
+    Mode6,
+    Mode7,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BgMode {
+    num: BgModeNum,
+    // only relevant to mode 1
+    bg3_priority: bool,
+    // only relevant to mode 7
+    extbg: bool,
+}
+
+impl BgMode {
+    pub const fn new() -> Self {
+        Self {
+            num: BgModeNum::Mode0,
+            bg3_priority: false,
+            extbg: false,
+        }
+    }
+
+    pub fn set_bits(&mut self, bits: u8) {
+        self.num = match bits & 7 {
+            0 => BgModeNum::Mode0,
+            1 => BgModeNum::Mode1,
+            2 => BgModeNum::Mode2,
+            3 => BgModeNum::Mode3,
+            4 => BgModeNum::Mode4,
+            5 => BgModeNum::Mode5,
+            6 => BgModeNum::Mode6,
+            7 => BgModeNum::Mode7,
+            _ => unreachable!(),
+        };
+        println!("set bg mode to {:?}", self.num);
+        self.bg3_priority = bits & 8 > 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -19,6 +66,8 @@ pub struct Background {
     base_addr: u8,
     x_mirror: bool,
     y_mirror: bool,
+    // otherwise it is 8x8
+    is_16x16_tiles: bool,
     layer: Layer,
 }
 
@@ -29,6 +78,7 @@ impl Background {
             base_addr: 0,
             x_mirror: false,
             y_mirror: false,
+            is_16x16_tiles: false,
             layer: Layer::new(),
         }
     }
@@ -121,6 +171,7 @@ pub struct Ppu {
     subtract_color: bool,
     half_color: bool,
     fixed_color: Color,
+    bg_mode: BgMode,
 }
 
 impl Ppu {
@@ -152,6 +203,7 @@ impl Ppu {
             subtract_color: false,
             half_color: false,
             fixed_color: Color::BLACK,
+            bg_mode: BgMode::new(),
         }
     }
 
@@ -191,6 +243,13 @@ impl Ppu {
             0x04 => {
                 // OAMDATA
                 self.oam.write(val)
+            }
+            0x05 => {
+                // BGMODE
+                self.bg_mode.set_bits(val);
+                for (i, bg) in self.bgs.iter_mut().enumerate() {
+                    bg.is_16x16_tiles = val & (1 << (i | 4)) > 0;
+                }
             }
             0x06 => {
                 // MOSAIC
@@ -353,9 +412,7 @@ impl Ppu {
                 if val & 8 > 0 {
                     todo!("pseudo-hires mode")
                 }
-                if val & 0x40 > 0 {
-                    todo!("mode 7 extra")
-                }
+                self.bg_mode.extbg = val & 0x40 > 0;
                 if val & 0x80 > 0 {
                     todo!("enable super imposing")
                 }
