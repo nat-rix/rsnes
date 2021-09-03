@@ -16,7 +16,7 @@ static CYCLES: [Cycles; 256] = [
        3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 0, 3, 0, 0,  // b^
+       0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 0,  // b^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 6, 0,  // e^
@@ -741,7 +741,7 @@ impl Device {
                 if self.cpu.is_idx8() {
                     let x = self.read::<u8>(addr);
                     self.cpu.update_nz8(x);
-                    self.cpu.regs.set_y8(x);
+                    self.cpu.regs.set_x8(x);
                 } else {
                     let x = self.read::<u16>(addr);
                     self.cpu.update_nz16(x);
@@ -848,7 +848,7 @@ impl Device {
                 if self.cpu.is_idx8() {
                     let x = self.read::<u8>(addr);
                     self.cpu.update_nz8(x);
-                    self.cpu.regs.set_y8(x);
+                    self.cpu.regs.set_x8(x);
                 } else {
                     let x = self.read::<u16>(addr);
                     self.cpu.update_nz16(x);
@@ -908,6 +908,20 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.y);
                 }
             }
+            0xbc => {
+                // LDY - Load absolute indexed, X into Y
+                let addr = self.load_indexed_x(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let y = self.read::<u8>(addr);
+                    self.cpu.update_nz8(y);
+                    self.cpu.regs.set_y8(y);
+                } else {
+                    let y = self.read::<u16>(addr);
+                    self.cpu.update_nz16(y);
+                    self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
             0xbd => {
                 // LDA - Load absolute indexed X value to A
                 let addr = self.load_indexed_x(&mut cycles);
@@ -919,6 +933,20 @@ impl Device {
                     self.cpu.regs.a = self.read(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0xbe => {
+                // LDX - Load absolute indexed, Y into X
+                let addr = self.load_indexed_y(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let x = self.read::<u8>(addr);
+                    self.cpu.update_nz8(x);
+                    self.cpu.regs.set_x8(x);
+                } else {
+                    let x = self.read::<u16>(addr);
+                    self.cpu.update_nz16(x);
+                    self.cpu.regs.x = x;
+                    cycles += 1;
                 }
             }
             0xc0 => {
