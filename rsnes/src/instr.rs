@@ -11,9 +11,9 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 3, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 0, 6, 0, 4, 0, 0,  // 6^
+       6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
-       3, 0, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
+       3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 0, 4, 4, 0,  // a^
        0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 0, 3, 0, 0,  // b^
@@ -95,6 +95,26 @@ impl Device {
             *cycles += 1
         }
         Addr24::new(0, self.cpu.regs.dp.wrapping_add(val.into()))
+    }
+
+    /// DP Indexed Indirect, X
+    pub fn load_dp_indexed_indirect_x(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let val = self.load::<u16>();
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        let addr = self
+            .cpu
+            .regs
+            .dp
+            .wrapping_add(if self.cpu.is_idx8() {
+                self.cpu.regs.x8().into()
+            } else {
+                self.cpu.regs.x
+            })
+            .wrapping_add(val);
+        let addr = self.read(Addr24::new(0, addr));
+        self.cpu.get_data_addr(addr)
     }
 
     /// DP Indirect Long Indexed, Y
@@ -260,12 +280,13 @@ impl Device {
                 // ROL - Rotate A left
                 if self.cpu.is_reg8() {
                     let val = self.cpu.regs.a8();
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | val << 1;
+                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
                     self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
                     self.cpu.update_nz8(res);
                     self.cpu.regs.set_a8(res);
                 } else {
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u16 | self.cpu.regs.a << 1;
+                    let res =
+                        self.cpu.regs.status.has(Status::CARRY) as u16 | (self.cpu.regs.a << 1);
                     self.cpu
                         .regs
                         .status
@@ -389,6 +410,25 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x6a => {
+                // ROR - Rotate A right
+                if self.cpu.is_reg8() {
+                    let val = self.cpu.regs.a8();
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u8) << 7) | (val >> 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    self.cpu.update_nz8(res);
+                    self.cpu.regs.set_a8(res);
+                } else {
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u16) << 15)
+                        | (self.cpu.regs.a >> 1);
+                    self.cpu
+                        .regs
+                        .status
+                        .set_if(Status::CARRY, self.cpu.regs.a & 1 > 0);
+                    self.cpu.update_nz16(res);
+                    self.cpu.regs.a = res;
+                }
+            }
             0x6b => {
                 // RTL - Return from subroutine long
                 self.cpu.regs.pc = self.pull();
@@ -447,6 +487,16 @@ impl Device {
             0x80 => {
                 // BRA - Branch always
                 self.branch_near(true, &mut cycles);
+            }
+            0x81 => {
+                // STA - Store A to DP Indexed Indirect, X
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
+                    cycles += 1;
+                }
             }
             0x84 => {
                 // STY - Store Y to direct page

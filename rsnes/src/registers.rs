@@ -3,6 +3,12 @@ use crate::device::Device;
 impl Device {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
+            0x4210 => {
+                // NMI Flag & CPU version
+                // TODO: check if version 2 is appropriate
+                let version = 2;
+                Some(((self.nmi_vblank_bit.replace(false) as u8) << 7) | version)
+            }
             0x4300..=0x43ff => {
                 // DMA Registers
                 self.dma.read(id)

@@ -181,6 +181,7 @@ pub struct Device {
     pub(crate) irq_time_v: u16,
     pub(crate) shall_irq: bool,
     pub(crate) shall_nmi: bool,
+    pub(crate) nmi_vblank_bit: Cell<bool>,
 }
 
 impl Device {
@@ -207,6 +208,7 @@ impl Device {
             irq_time_v: 0x1ff,
             shall_irq: false,
             shall_nmi: false,
+            nmi_vblank_bit: Cell::new(false),
         }
     }
 
@@ -271,6 +273,7 @@ impl Device {
     }
 
     pub fn nmi(&mut self) -> u32 {
+        self.cpu.in_nmi = true;
         self.interrupt(0xffea)
     }
 
@@ -283,7 +286,9 @@ impl Device {
         self.push(self.cpu.regs.status.0);
         self.cpu.regs.status |= Status::IRQ_DISABLE;
         self.cpu.regs.status &= !Status::DECIMAL;
-        self.cpu.regs.pc = Addr24::new(0, vector);
+        let addr = self.read(Addr24::new(0, vector));
+        println!("interrupting into 00:{:04x}", addr);
+        self.cpu.regs.pc.addr = addr;
         8
     }
 }

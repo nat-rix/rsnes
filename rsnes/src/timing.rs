@@ -52,10 +52,12 @@ impl Device {
                     || (self.scanline_nr..self.scanline_nr).contains(&self.irq_time_v))
                 && (h_irq_enabled || !v_irq_enabled || (0..N).contains(&self.irq_time_h))
                 && (h_irq_enabled || v_irq_enabled);
-        self.shall_nmi = self.shall_nmi
-            || (self.cpu.nmitimen & 0x80 > 0
+        self.nmi_vblank_bit.set(
+            self.cpu.nmitimen & 0x80 > 0
                 && self.new_scanline
-                && (self.scanline_nr == 0xe1 || self.ppu.overscan && self.scanline_nr == 0xf0));
+                && (self.scanline_nr == 0xe1 || self.ppu.overscan && self.scanline_nr == 0xf0),
+        );
+        self.shall_nmi = self.shall_nmi || self.nmi_vblank_bit.get();
         self.update_counters::<N>();
     }
 

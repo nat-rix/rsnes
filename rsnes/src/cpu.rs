@@ -160,6 +160,7 @@ pub struct Cpu {
     pub(crate) latch_line: bool,
     pub(crate) pio: u8,
     pub(crate) access_speed: bool,
+    pub(crate) in_nmi: bool,
 }
 
 impl Cpu {
@@ -180,6 +181,7 @@ impl Cpu {
             latch_line: false,
             pio: 0,
             access_speed: false,
+            in_nmi: false,
         }
     }
 
