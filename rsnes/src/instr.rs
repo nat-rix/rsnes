@@ -8,18 +8,18 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 7, 0, 0, 3, 0, 6,   3, 0, 2, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
        6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 0, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 0, 3, 3, 0, 0, 0,  // 4^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 0, 0, 0,  // 3^
+       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 0, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
        3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 0,  // b^
+       2, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 0,  // b^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
-       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 6, 0,  // e^
+       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 4, 0, 6, 0,  // e^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -303,6 +303,17 @@ impl Device {
                 // SEC - Set Carry Flag
                 self.cpu.regs.status |= Status::CARRY
             }
+            0x3a => {
+                // DEC/DEA - Decrement A
+                if self.cpu.is_reg8() {
+                    let a = self.cpu.regs.a8().wrapping_sub(1);
+                    self.cpu.regs.set_a8(a);
+                    self.cpu.update_nz8(a)
+                } else {
+                    self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
+                    self.cpu.update_nz16(self.cpu.regs.a)
+                }
+            }
             0x48 => {
                 // PHK - Push A
                 if self.cpu.is_reg8() {
@@ -310,6 +321,23 @@ impl Device {
                 } else {
                     self.push(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0x4a => {
+                // LSR - SHR on A
+                if self.cpu.is_reg8() {
+                    let val = self.cpu.regs.a8();
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu
+                        .regs
+                        .status
+                        .set_if(Status::CARRY, self.cpu.regs.a & 1 > 0);
+                    self.cpu.regs.a = self.cpu.regs.a >> 1;
+                    self.cpu.update_nz16(self.cpu.regs.a);
                 }
             }
             0x4b => {
@@ -856,6 +884,10 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xb0 => {
+                // BCS/BGE - Branch if carry set
+                self.branch_near(self.cpu.regs.status.has(Status::CARRY), &mut cycles)
+            }
             0xb2 => {
                 // LDA - Load DP indirect value to A
                 let addr = self.load_dp_indirect(&mut cycles);
@@ -1124,6 +1156,20 @@ impl Device {
                 // XBA - Swap the A Register
                 self.cpu.regs.a = self.cpu.regs.a.swap_bytes();
                 self.cpu.update_nz8(self.cpu.regs.a8())
+            }
+            0xec => {
+                // CPX - Compare X with absolute value
+                // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_idx8() {
+                    let val = self.read::<u8>(addr);
+                    self.compare8(self.cpu.regs.x8(), val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.compare16(self.cpu.regs.x, val);
+                    cycles += 1
+                }
             }
             0xee => {
                 // INC - Increment absolute
