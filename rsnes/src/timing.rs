@@ -31,6 +31,7 @@ impl Device {
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
+            assert!(!self.dma.is_hdma_running());
             if self.dma.is_dma_running() && !self.dma.is_hdma_running() {
                 if self.dma.ahead_cycles > 0 {
                     self.dma.ahead_cycles -= i32::from(N)
@@ -42,6 +43,19 @@ impl Device {
                 self.run_cpu();
             }
         }
+        let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
+        let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
+        self.shall_irq = self.shall_irq
+            || (!h_irq_enabled
+                || (self.scanline_cycle..self.scanline_cycle + N).contains(&self.irq_time_h))
+                && (!v_irq_enabled
+                    || (self.scanline_nr..self.scanline_nr).contains(&self.irq_time_v))
+                && (h_irq_enabled || !v_irq_enabled || (0..N).contains(&self.irq_time_h))
+                && (h_irq_enabled || v_irq_enabled);
+        self.shall_nmi = self.shall_nmi
+            || (self.cpu.nmitimen & 0x80 > 0
+                && self.new_scanline
+                && (self.scanline_nr == 0xe1 || self.ppu.overscan && self.scanline_nr == 0xf0));
         self.update_counters::<N>();
     }
 
@@ -72,9 +86,17 @@ impl Device {
     pub fn run_cpu(&mut self) {
         while self.cpu_ahead_cycles <= 0 {
             self.memory_cycles = 0;
-            // > Internal operation CPU cycles always take 6 master cycles
-            // source: <https://wiki.superfamicom.org/memory-mapping>
-            let cycles = self.dispatch_instruction() * 6 + self.memory_cycles;
+            let cycles = (if self.shall_nmi {
+                self.shall_nmi = false;
+                self.nmi()
+            } else if self.shall_irq {
+                self.shall_irq = false;
+                self.irq()
+            } else {
+                // > Internal operation CPU cycles always take 6 master cycles
+                // source: <https://wiki.superfamicom.org/memory-mapping>
+                self.dispatch_instruction() * 6
+            }) + self.memory_cycles;
             self.cpu_cycles += cycles;
             self.cpu_ahead_cycles += cycles as i32;
             while self.apu_cycles * APU_CPU_TIMING_PROPORTION.0

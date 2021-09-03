@@ -213,7 +213,7 @@ impl Device {
         }
         channel.size = channel.size.wrapping_sub(1);
         if channel.size == 0 {
-            self.dma.dma_enabled ^= 1 << channel_id;
+            self.dma.dma_enabled &= !(1 << channel_id);
         }
     }
 }

@@ -1,6 +1,13 @@
 //! The SNES/Famicom device
 
-use crate::{cartridge::Cartridge, cpu::Cpu, dma::Dma, ppu::Ppu, spc700::Spc700, timing::Cycles};
+use crate::{
+    cartridge::Cartridge,
+    cpu::{Cpu, Status},
+    dma::Dma,
+    ppu::Ppu,
+    spc700::Spc700,
+    timing::Cycles,
+};
 use core::cell::Cell;
 
 const RAM_SIZE: usize = 0x20000;
@@ -169,6 +176,11 @@ pub struct Device {
     pub(crate) new_scanline: bool,
     pub(crate) new_frame: bool,
     pub(crate) do_hdma: bool,
+    // multiplied by 4
+    pub(crate) irq_time_h: u16,
+    pub(crate) irq_time_v: u16,
+    pub(crate) shall_irq: bool,
+    pub(crate) shall_nmi: bool,
 }
 
 impl Device {
@@ -191,6 +203,10 @@ impl Device {
             new_scanline: true,
             new_frame: true,
             do_hdma: false,
+            irq_time_h: 0x7fc,
+            irq_time_v: 0x1ff,
+            shall_irq: false,
+            shall_nmi: false,
         }
     }
 
@@ -252,6 +268,23 @@ impl Device {
             *d = self.read(Addr24::new(0, self.cpu.regs.sp));
         }
         D::from_bytes(&arr)
+    }
+
+    pub fn nmi(&mut self) -> u32 {
+        self.interrupt(0xffea)
+    }
+
+    pub fn irq(&mut self) -> u32 {
+        self.interrupt(0xffee)
+    }
+
+    pub fn interrupt(&mut self, vector: u16) -> u32 {
+        self.push(self.cpu.regs.pc);
+        self.push(self.cpu.regs.status.0);
+        self.cpu.regs.status |= Status::IRQ_DISABLE;
+        self.cpu.regs.status &= !Status::DECIMAL;
+        self.cpu.regs.pc = Addr24::new(0, vector);
+        8
     }
 }
 

@@ -19,7 +19,7 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 0, 3, 0, 0,  // b^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 0, 4, 0, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
-       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 0, 0,  // e^
+       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 0, 0, 6, 0,  // e^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 4, 0, 0,  // f^
 ];
 
@@ -1017,6 +1017,21 @@ impl Device {
                 // XBA - Swap the A Register
                 self.cpu.regs.a = self.cpu.regs.a.swap_bytes();
                 self.cpu.update_nz8(self.cpu.regs.a8())
+            }
+            0xee => {
+                // INC - Increment absolute
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr).wrapping_add(1);
+                    self.write::<u8>(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr).wrapping_add(1);
+                    self.write::<u16>(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
+                }
             }
             0xf0 => {
                 // BEQ - Branch if ZERO is set
