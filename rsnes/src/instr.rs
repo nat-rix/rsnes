@@ -7,9 +7,9 @@ static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 3, 0, 6,   3, 0, 2, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
-       6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 0, 0, 0, 0, 0, 0,  // 2^
+       6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 0, 0, 0, 4, 0, 0,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 0, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 0, 0, 0,  // 4^
+       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 4, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
        0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
@@ -295,6 +295,19 @@ impl Device {
                     self.cpu.regs.a = res;
                 }
             }
+            0x2d => {
+                // AND - AND absolute on A
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                }
+            }
             0x30 => {
                 // BMI - Branch if Negative Flag set
                 self.branch_near(self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
@@ -347,6 +360,19 @@ impl Device {
             0x4c => {
                 // JMP - Jump absolute
                 self.cpu.regs.pc.addr = self.load()
+            }
+            0x4d => {
+                // EOR - XOR absolute on A
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                }
             }
             0x54 => {
                 // MVN - Block Move Negative
