@@ -1,4 +1,5 @@
 use crate::oam::{CgRam, Oam};
+use core::mem::replace;
 
 pub const VRAM_SIZE: usize = 0x8000;
 
@@ -68,6 +69,9 @@ pub struct Background {
     y_mirror: bool,
     // otherwise it is 8x8
     is_16x16_tiles: bool,
+    scroll_prev: u8,
+    scroll_prev_h: u8,
+    scroll: [u16; 2],
     layer: Layer,
 }
 
@@ -79,6 +83,9 @@ impl Background {
             x_mirror: false,
             y_mirror: false,
             is_16x16_tiles: false,
+            scroll_prev: 0,
+            scroll_prev_h: 0,
+            scroll: [0; 2],
             layer: Layer::new(),
         }
     }
@@ -144,6 +151,18 @@ pub struct Mode7Settings {
     x_mirror: bool,
     y_mirror: bool,
     fill_zeros: Option<bool>,
+    prev: u8,
+    offset: [i16; 2],
+}
+
+impl Mode7Settings {
+    pub fn write_offset(&mut self, is_vertical: bool, val: u8) {
+        let i = is_vertical as usize;
+        self.offset[i] = i16::from(replace(&mut self.prev, val)) | (i16::from(val) << 8);
+        if self.offset[i] & 0x1000 > 0 {
+            self.offset[i] |= -0x2000
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +215,8 @@ impl Ppu {
                 x_mirror: false,
                 y_mirror: false,
                 fill_zeros: None,
+                prev: 0,
+                offset: [0; 2],
             },
             direct_color_mode: false,
             add_subscreen: false,
@@ -264,10 +285,25 @@ impl Ppu {
                 bg.x_mirror = val & 1 > 0;
             }
             0x0b..=0x0c => {
+                // BGnmNBA
                 let val = val & 0x77;
                 let id = usize::from(!id & 2);
                 self.bgs[id].base_addr = val >> 4;
                 self.bgs[id | 1].base_addr = val & 7;
+            }
+            0x0d..=0x14 => {
+                // M7xOFS and BGnxOFS
+                if (0x0d..=0x14).contains(&id) {
+                    self.mode7_settings.write_offset(id & 1 == 0, val)
+                }
+                let bg = &mut self.bgs[usize::from(((id - 5) >> 1) & 3)];
+                let old = replace(&mut bg.scroll_prev, val);
+                bg.scroll[usize::from(!id & 1)] = u16::from(val)
+                    | u16::from(if id & 1 > 0 {
+                        (old & 0xf8) | replace(&mut bg.scroll_prev_h, val) & 7
+                    } else {
+                        old
+                    });
             }
             0x15 => {
                 // VMAIN - Video Port Control
@@ -309,11 +345,9 @@ impl Ppu {
             }
             0x1a => {
                 // M7SEL
-                self.mode7_settings = Mode7Settings {
-                    x_mirror: val & 1 > 0,
-                    y_mirror: val & 2 > 0,
-                    fill_zeros: Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0),
-                }
+                self.mode7_settings.x_mirror = val & 1 > 0;
+                self.mode7_settings.y_mirror = val & 2 > 0;
+                self.mode7_settings.fill_zeros = Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0);
             }
             0x21 => {
                 // CGADD

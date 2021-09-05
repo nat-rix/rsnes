@@ -36,7 +36,7 @@ impl Device {
                 // TODO: implement expected behavior
                 self.cpu.nmitimen = val;
                 println!(
-                    "autojoipad is now {}",
+                    "autojoypad is now {}",
                     ["disabled", "enabled"][self.is_auto_joypad() as usize]
                 );
             }
