@@ -9,6 +9,10 @@ impl Device {
                 let version = 2;
                 Some(((self.nmi_vblank_bit.replace(false) as u8) << 7) | version)
             }
+            0x4218..=0x421f => {
+                // JOYnL/JOYnH
+                Some(self.controllers.access(id))
+            }
             0x4300..=0x43ff => {
                 // DMA Registers
                 self.dma.read(id)
@@ -17,23 +21,30 @@ impl Device {
         }
     }
 
+    pub const fn is_auto_joypad(&self) -> bool {
+        self.cpu.nmitimen & 1 > 0
+    }
+
     pub fn write_internal_register(&mut self, id: u16, val: u8) {
         match id {
             0x4016 => {
                 // JOYSER0 - NES-style Joypad access
-                self.cpu.latch_line = val & 1 > 0;
+                self.controllers.set_strobe(val & 1 > 0)
             }
             0x4200 => {
                 // NMITIMEN - Interrupt Enable Flags
                 // TODO: implement expected behavior
-                self.cpu.nmitimen = val
+                self.cpu.nmitimen = val;
+                println!(
+                    "autojoipad is now {}",
+                    ["disabled", "enabled"][self.is_auto_joypad() as usize]
+                );
             }
             0x4201 => {
                 // WRIO - Programmable I/O-Port
-                if self.cpu.pio & 0x80 > 0 && val & 0x80 == 0 {
+                if self.controllers.set_pio(val) {
                     // TODO: latch ppu counters
                 }
-                self.cpu.pio = val;
             }
             0x420b => {
                 // MDMAEN - DMA Enable

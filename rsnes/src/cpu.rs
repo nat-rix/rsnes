@@ -157,8 +157,6 @@ impl Not for Status {
 pub struct Cpu {
     pub regs: Regs,
     pub(crate) nmitimen: u8,
-    pub(crate) latch_line: bool,
-    pub(crate) pio: u8,
     pub(crate) access_speed: bool,
     pub(crate) in_nmi: bool,
 }
@@ -178,8 +176,6 @@ impl Cpu {
                 is_emulation: true,
             },
             nmitimen: 0,
-            latch_line: false,
-            pio: 0,
             access_speed: false,
             in_nmi: false,
         }

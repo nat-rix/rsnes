@@ -19,14 +19,18 @@ impl Device {
         if self.new_frame {
             self.dma.reset_hdma();
         }
+        let vend = if self.ppu.overscan { 0xf0 } else { 0xe1 };
         if self.do_hdma {
             self.do_hdma = false;
-            if self.dma.is_hdma_running()
-                && (self.scanline_nr <= 0xe1 || (self.ppu.overscan && self.scanline_nr <= 0xf0))
-            {
+            if self.dma.is_hdma_running() && (self.scanline_nr <= vend) {
                 self.dma.do_hdma();
             }
         }
+        if self.is_auto_joypad() && self.new_scanline && self.scanline_nr == vend + 2 {
+            self.controllers.auto_joypad_timer = 4224;
+            self.controllers.auto_joypad()
+        }
+        self.controllers.auto_joypad_timer -= self.controllers.auto_joypad_timer.min(N);
         // > The CPU is paused for 40 cycles beginning about 536 cycles
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
@@ -52,11 +56,8 @@ impl Device {
                     || (self.scanline_nr..self.scanline_nr).contains(&self.irq_time_v))
                 && (h_irq_enabled || !v_irq_enabled || (0..N).contains(&self.irq_time_h))
                 && (h_irq_enabled || v_irq_enabled);
-        self.nmi_vblank_bit.set(
-            self.cpu.nmitimen & 0x80 > 0
-                && self.new_scanline
-                && (self.scanline_nr == 0xe1 || self.ppu.overscan && self.scanline_nr == 0xf0),
-        );
+        self.nmi_vblank_bit
+            .set(self.cpu.nmitimen & 0x80 > 0 && self.new_scanline && self.scanline_nr == vend);
         self.shall_nmi = self.shall_nmi || self.nmi_vblank_bit.get();
         self.update_counters::<N>();
     }

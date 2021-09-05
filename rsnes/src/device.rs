@@ -2,6 +2,7 @@
 
 use crate::{
     cartridge::Cartridge,
+    controller::ControllerPorts,
     cpu::{Cpu, Status},
     dma::Dma,
     ppu::Ppu,
@@ -160,6 +161,7 @@ pub struct Device {
     pub(crate) spc: Spc700,
     pub(crate) ppu: Ppu,
     pub(crate) dma: Dma,
+    pub(crate) controllers: ControllerPorts,
     cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
     pub(crate) open_bus: u8,
@@ -191,6 +193,7 @@ impl Device {
             spc: Spc700::new(),
             ppu: Ppu::new(),
             dma: Dma::new(),
+            controllers: ControllerPorts::new(),
             cartridge: None,
             open_bus: 0,
             ram: [0; RAM_SIZE],
