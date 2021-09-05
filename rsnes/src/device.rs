@@ -285,7 +285,11 @@ impl Device {
     }
 
     pub fn interrupt(&mut self, vector: u16) -> u32 {
-        self.push(self.cpu.regs.pc);
+        if self.cpu.regs.is_emulation {
+            self.push(self.cpu.regs.pc.addr)
+        } else {
+            self.push(self.cpu.regs.pc)
+        }
         self.push(self.cpu.regs.status.0);
         self.cpu.regs.status |= Status::IRQ_DISABLE;
         self.cpu.regs.status &= !Status::DECIMAL;

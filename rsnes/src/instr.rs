@@ -12,15 +12,15 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 4, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 0, 0, 4, 0, 0,  // 7^
+       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 4, 0, 4, 0, 0,  // 7^
        3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
        2, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 0,  // b^
-       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 0, 0,  // c^
+       2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 4, 0, 6, 0,  // e^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 0, 2, 0, 4, 0, 0,  // f^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 4, 2, 0, 4, 0, 0,  // f^
 ];
 
 impl Device {
@@ -327,6 +327,16 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.a)
                 }
             }
+            0x40 => {
+                // RTI - Return from interrupt
+                self.cpu.in_nmi = false;
+                self.cpu.regs.status.0 = self.pull();
+                self.cpu.update_status();
+                self.cpu.regs.pc.addr = self.pull();
+                if !self.cpu.regs.is_emulation {
+                    self.cpu.regs.pc.bank = self.pull();
+                }
+            }
             0x48 => {
                 // PHK - Push A
                 if self.cpu.is_reg8() {
@@ -399,7 +409,6 @@ impl Device {
             }
             0x58 => {
                 // CLI - Clear IRQ_DISABLE
-                // TODO: implement interrupts
                 self.cpu.regs.status &= !Status::IRQ_DISABLE
             }
             0x5a => {
@@ -1101,6 +1110,21 @@ impl Device {
                     cycles += 1
                 }
             }
+            0xce => {
+                // DEC - Decrement absolute
+                let addr = self.load();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr).wrapping_sub(1);
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val)
+                } else {
+                    let val = self.read::<u16>(addr).wrapping_sub(1);
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
+                }
+            }
             0xd0 => {
                 // BNE - Branch if Zero Flag Clear
                 self.branch_near(!self.cpu.regs.status.has(Status::ZERO), &mut cycles)
@@ -1219,6 +1243,19 @@ impl Device {
             0xf8 => {
                 // SED - Set Decimal flag
                 self.cpu.regs.status |= Status::DECIMAL
+            }
+            0xfa => {
+                // PLX - Pull X
+                if self.cpu.is_idx8() {
+                    let x = self.pull();
+                    self.cpu.regs.set_x8(x);
+                    self.cpu.update_nz8(x);
+                } else {
+                    let x = self.pull();
+                    self.cpu.regs.x = x;
+                    self.cpu.update_nz16(x);
+                    cycles += 1
+                }
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
