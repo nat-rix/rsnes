@@ -12,11 +12,11 @@ static CYCLES: [Cycles; 256] = [
        0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 4, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       0, 0, 0, 0, 2, 0, 0, 0,   2, 0, 4, 4, 0, 4, 0, 0,  // 7^
-       3, 6, 0, 0, 3, 3, 3, 0,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
+       0, 0, 0, 0, 2, 0, 0, 0,   2, 4, 4, 4, 0, 4, 0, 0,  // 7^
+       3, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       2, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 0,  // b^
+       2, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 5,  // b^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 4, 0, 6, 0,  // e^
@@ -523,6 +523,18 @@ impl Device {
                 // SEI - Set the Interrupt Disable flag
                 self.cpu.regs.status |= Status::IRQ_DISABLE
             }
+            0x79 => {
+                // ADC - Add with Carry Absolute Indexed, Y
+                let addr = self.load_indexed_y(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
+            }
             0x7a => {
                 // PLY - Pull Y
                 if self.cpu.is_idx8() {
@@ -589,6 +601,16 @@ impl Device {
                 } else {
                     self.write::<u16>(addr, self.cpu.regs.x);
                     cycles += 1;
+                }
+            }
+            0x87 => {
+                // STA - Store A to DP Inirect long
+                let addr = self.load_dp_indirect_long(&mut cycles);
+                if self.cpu.is_reg8() {
+                    self.write(addr, self.cpu.regs.a8())
+                } else {
+                    self.write(addr, self.cpu.regs.a);
+                    cycles += 1
                 }
             }
             0x88 => {
@@ -1014,6 +1036,19 @@ impl Device {
                     self.cpu.update_nz16(x);
                     self.cpu.regs.x = x;
                     cycles += 1;
+                }
+            }
+            0xbf => {
+                // LDA - Load absolute long indexed X value to A
+                let addr = self.load_long_indexed_x();
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a = self.read(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
                 }
             }
             0xc0 => {
