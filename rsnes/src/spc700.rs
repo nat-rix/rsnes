@@ -25,15 +25,15 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 0, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 4, 0, 0,  // 4^
        0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 0, 3,  // 5^
-       2, 0, 4, 0, 0, 5, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
-       0, 0, 4, 0, 0, 5, 0, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
-       2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
+       2, 0, 4, 0, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
+       0, 0, 4, 0, 0, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
+       2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 5, 2, 4, 5,  // 8^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2,12, 5,  // 9^
-       3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 0, 2, 4, 4,  // a^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
+       3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
+       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 4,  // b^
        3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 4, 0, 5, 6, 0, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 0, 3, 4, 0, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 4, 0, 3, 4, 3, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
        2, 0, 4, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
@@ -376,6 +376,12 @@ impl Spc700 {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
             }
+            0x65 => {
+                // CMP - A - (imm[16-bit])
+                let addr = self.load16();
+                let val = self.read(addr);
+                self.compare(self.a, val)
+            }
             0x68 => {
                 // CMP - A - imm
                 let val = self.load();
@@ -401,6 +407,12 @@ impl Spc700 {
             0x75 => {
                 // CMP - A - (imm[16-bit]+X)
                 let addr = self.load16().wrapping_add(self.x.into());
+                let val = self.read(addr);
+                self.compare(self.a, val)
+            }
+            0x76 => {
+                // CMP - A - (imm[16-bit]+Y)
+                let addr = self.load16().wrapping_add(self.y.into());
                 let val = self.read(addr);
                 self.compare(self.a, val)
             }
@@ -447,6 +459,13 @@ impl Spc700 {
                 // DEC - Decrement (imm)
                 let addr = self.load();
                 let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_sub(1);
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
+            0x8c => {
+                // DEC - (imm[16-bit])--
+                let addr = self.load16();
                 let val = self.read(addr).wrapping_sub(1);
                 self.write(addr, val);
                 self.update_nz8(val)
@@ -527,6 +546,13 @@ impl Spc700 {
                 self.write(addr, val);
                 self.update_nz8(val)
             }
+            0xac => {
+                // INC - (imm[16-bit])++
+                let addr = self.load16();
+                let val = self.read(addr).wrapping_add(1);
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
             0xad => {
                 // CMP - Y - IMM
                 let val = self.load();
@@ -563,6 +589,12 @@ impl Spc700 {
             0xbd => {
                 // MOV - SP := X
                 self.sp = self.x
+            }
+            0xbf => {
+                // MOV - A := (X++)
+                self.a = self.read_small(self.x);
+                self.x = self.x.wrapping_add(1);
+                self.update_nz8(self.a)
             }
             0xc0 => {
                 // DI - Clear INTERRUPT_ENABLE
@@ -696,6 +728,11 @@ impl Spc700 {
             0xe0 => {
                 // CLRV - Clear OVERFLOW and HALF_CARRY
                 self.status &= !(flags::OVERFLOW | flags::HALF_CARRY)
+            }
+            0xe6 => {
+                // MOV - A := (X)
+                self.a = self.read_small(self.x);
+                self.update_nz8(self.a)
             }
             0xe7 => {
                 // MOV - A := ((imm[16-bit]+X)[16-bit])
