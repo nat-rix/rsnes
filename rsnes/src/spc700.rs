@@ -20,21 +20,21 @@ static ROM: [u8; 64] = [
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 0, 4, 0, 0, 0, 0, 0,   2, 6, 0, 0, 0, 4, 0, 0,  // 0^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 4,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
+       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 0, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 4,  // 2^
+       2, 0, 4, 0, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 4, 0, 0,  // 4^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 5, 0, 2, 0, 3,  // 5^
+       0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 0, 3,  // 5^
        2, 0, 4, 0, 0, 5, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
-       0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 5, 0, 0, 2, 3, 0,  // 7^
+       0, 0, 4, 0, 0, 5, 0, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2,12, 0,  // 9^
+       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2,12, 5,  // 9^
        3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 0, 2, 4, 4,  // a^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
+       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 0, 0, 5, 6, 0, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 4, 0, 5, 6, 0, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
        2, 0, 4, 0, 3, 4, 0, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
-       2, 0, 0, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
+       2, 0, 4, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -219,6 +219,12 @@ impl Spc700 {
                 let addr = self.get_small(addr);
                 self.write(addr, self.read(addr) | 1 << (op >> 5))
             }
+            0x12 | 0x32 | 0x52 | 0x72 | 0x92 | 0xb2 | 0xd2 | 0xf2 => {
+                // CLR1 - (imm) &= ~(1 << ?)
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                self.write(addr, self.read(addr) & !(1 << (op >> 5)))
+            }
             0x08 => {
                 // OR - A |= imm
                 self.a |= self.load();
@@ -267,6 +273,12 @@ impl Spc700 {
                 // CLRP - Clear ZERO_PAGE
                 self.status &= !flags::ZERO_PAGE
             }
+            0x24 => {
+                // AND - A &= (imm)
+                let addr = self.load();
+                self.a &= self.read_small(addr);
+                self.update_nz8(self.a)
+            }
             0x28 => {
                 // AND - A &= imm
                 self.a &= self.load();
@@ -285,6 +297,12 @@ impl Spc700 {
                 // BMI - Branch if SIGN is set
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::SIGN > 0, &mut cycles)
+            }
+            0x34 => {
+                // AND - A &= (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                self.a &= self.read_small(addr);
+                self.update_nz8(self.a)
             }
             0x3a => {
                 // INCW - (imm)[16-bit]++
@@ -332,6 +350,12 @@ impl Spc700 {
                 let val = val >> 1;
                 self.write(addr, val);
                 self.update_nz8(val)
+            }
+            0x5c => {
+                // LSR - A >>= 1
+                self.set_status(self.a & 1 > 0, flags::CARRY);
+                self.a >>= 1;
+                self.update_nz8(self.a)
             }
             0x5d => {
                 // MOV - X := A
@@ -392,6 +416,12 @@ impl Spc700 {
                 let val = self.read16_small(addr);
                 let val = self.adc16(self.ya(), val);
                 self.set_ya(val);
+            }
+            0x7c => {
+                // ROR - A >>= 1
+                self.set_status(self.a & 1 > 0, flags::CARRY);
+                self.a = ((self.a & 0xfe) | (self.status & flags::CARRY)).rotate_right(1);
+                self.update_nz8(self.a);
             }
             0x7d => {
                 // MOV - A := X
@@ -474,6 +504,11 @@ impl Spc700 {
                 self.update_nz8(self.a);
                 self.a = (rdiv & 0xff) as u8;
                 self.y = rmod;
+            }
+            0x9f => {
+                // XCN - A := (A >> 4) | (A << 4)
+                self.a = (self.a >> 4) | (self.a << 4);
+                self.update_nz8(self.a)
             }
             0xa0 => {
                 // EI - Set INTERRUPT_ENABLE
