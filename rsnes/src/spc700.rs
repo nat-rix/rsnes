@@ -19,22 +19,22 @@ static ROM: [u8; 64] = [
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 0^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 6,  // 1^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 4,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 8,  // 3^
+       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 0^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 4,  // 2^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 4^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 0,  // 5^
-       2, 0, 4, 0, 0, 0, 0, 2,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 3,  // 5^
+       2, 0, 4, 0, 0, 5, 0, 2,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
        0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
        2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2,12, 0,  // 9^
        3, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 0, 3, 4, 0, 0,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
-       2, 0, 0, 0, 4, 5, 0, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
+       2, 0, 4, 0, 3, 4, 0, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 0, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
 const F1_RESET: u8 = 0xb0;
@@ -140,6 +140,12 @@ impl Spc700 {
         u16::from_le_bytes([self.read_small(addr), self.read_small(addr.wrapping_add(1))])
     }
 
+    pub fn write16(&mut self, addr: u16, val: u16) {
+        let [a, b] = val.to_le_bytes();
+        self.write(addr, a);
+        self.write(addr.wrapping_add(1), b);
+    }
+
     pub fn write_small(&mut self, addr: u8, val: u8) {
         self.write(self.get_small(addr), val)
     }
@@ -213,6 +219,11 @@ impl Spc700 {
                 let addr = self.get_small(addr);
                 self.write(addr, self.read(addr) | 1 << (op >> 5))
             }
+            0x08 => {
+                // OR - A |= imm
+                self.a |= self.load();
+                self.update_nz8(self.a)
+            }
             0x0d => {
                 // PUSH - status
                 self.push(self.status)
@@ -221,6 +232,20 @@ impl Spc700 {
                 // BPL/JNS - Branch if SIGN not set
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::SIGN == 0, &mut cycles)
+            }
+            0x1a => {
+                // DECW - (imm)[16-bit]--
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read16(addr).wrapping_sub(1);
+                self.write16(addr, val);
+                self.update_nz16(val)
+            }
+            0x1c => {
+                // ASL - A <<= 1
+                self.set_status(self.a >= 0x80, flags::CARRY);
+                self.a <<= 1;
+                self.update_nz8(self.a)
             }
             0x1d => {
                 // DEC - X
@@ -236,6 +261,11 @@ impl Spc700 {
                 // CLRP - Clear ZERO_PAGE
                 self.status &= !flags::ZERO_PAGE
             }
+            0x28 => {
+                // AND - A &= imm
+                self.a &= self.load();
+                self.update_nz8(self.a)
+            }
             0x2d => {
                 // PUSH - A
                 self.push(self.a)
@@ -249,6 +279,14 @@ impl Spc700 {
                 // BMI - Branch if SIGN is set
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::SIGN > 0, &mut cycles)
+            }
+            0x3a => {
+                // INCW - (imm)[16-bit]++
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read16(addr).wrapping_add(1);
+                self.write16(addr, val);
+                self.update_nz16(val)
             }
             0x3d => {
                 // INC - X
@@ -280,6 +318,10 @@ impl Spc700 {
                 let val = self.read(addr);
                 self.compare(self.y, val)
             }
+            0x5f => {
+                // JMP - PC := imm[16-bit]
+                self.pc = self.load16();
+            }
             0x60 => {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
@@ -292,6 +334,15 @@ impl Spc700 {
             0x6d => {
                 // PUSH - Y
                 self.push(self.y)
+            }
+            0x6e => {
+                // DBNZ - (imm)--; JNZ
+                let addr = self.load();
+                let rel = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_sub(1);
+                self.write(addr, val);
+                self.branch_rel(rel, val > 0, &mut cycles)
             }
             0x6f => {
                 // RET - Return from subroutine
@@ -409,6 +460,11 @@ impl Spc700 {
                 // MOV - (X) := A; X++
                 self.write_small(self.x, self.a);
                 self.x = self.x.wrapping_add(1);
+            }
+            0xb0 => {
+                // BCS - Jump if CARRY set
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::CARRY > 0, &mut cycles)
             }
             0xba => {
                 // MOVW - YA := (imm)[16-bit]
@@ -551,6 +607,12 @@ impl Spc700 {
                 // CLRV - Clear OVERFLOW and HALF_CARRY
                 self.status &= !(flags::OVERFLOW | flags::HALF_CARRY)
             }
+            0xe7 => {
+                // MOV - A := ((imm[16-bit]+X)[16-bit])
+                let addr = self.load().wrapping_add(self.x);
+                self.a = self.read(self.read16_small(addr));
+                self.update_nz8(self.a);
+            }
             0xec => {
                 // MOV - Y := (imm[16-bit])
                 let addr = self.load16();
@@ -579,6 +641,12 @@ impl Spc700 {
             0xf5 => {
                 // MOV - A := (imm[16-bit]+X)
                 let addr = self.load16().wrapping_add(self.x.into());
+                self.a = self.read(addr);
+                self.update_nz8(self.a);
+            }
+            0xf6 => {
+                // MOV - A := (imm[16-bit]+Y)
+                let addr = self.load16().wrapping_add(self.y.into());
                 self.a = self.read(addr);
                 self.update_nz8(self.a);
             }
