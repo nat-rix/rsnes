@@ -19,20 +19,20 @@ static ROM: [u8; 64] = [
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 0,  // 0^
+       2, 0, 4, 0, 0, 0, 0, 0,   2, 6, 0, 0, 0, 4, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 4,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 4, 0, 0,  // 4^
-       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 0, 2, 0, 3,  // 5^
-       2, 0, 4, 0, 0, 5, 0, 2,   0, 0, 0, 0, 0, 4, 0, 5,  // 6^
-       0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 0, 0, 0, 2, 3, 0,  // 7^
+       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 4, 0, 0,  // 4^
+       0, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 5, 0, 2, 0, 3,  // 5^
+       2, 0, 4, 0, 0, 5, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
+       0, 0, 0, 0, 0, 5, 0, 0,   5, 0, 5, 0, 0, 2, 3, 0,  // 7^
        2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 5,  // 8^
-       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 0, 0, 2, 2,12, 0,  // 9^
-       3, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 2, 4, 4,  // a^
+       2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2,12, 0,  // 9^
+       3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 0, 2, 4, 4,  // a^
        2, 0, 0, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 0,  // b^
        3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 0, 0, 0, 6, 0, 7,   0, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 0, 0, 5, 6, 0, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
        2, 0, 4, 0, 3, 4, 0, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
        2, 0, 0, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
@@ -224,6 +224,12 @@ impl Spc700 {
                 self.a |= self.load();
                 self.update_nz8(self.a)
             }
+            0x09 => {
+                // OR - (imm) |= (imm)
+                let (src, dst) = (self.load(), self.load());
+                let dst = self.get_small(dst);
+                self.write(dst, self.read_small(src) | self.read(dst))
+            }
             0x0d => {
                 // PUSH - status
                 self.push(self.status)
@@ -303,9 +309,29 @@ impl Spc700 {
                 // SETP - Set ZERO_PAGE
                 self.status |= flags::ZERO_PAGE
             }
+            0x4b => {
+                // LSR - (imm) >>= 1
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr);
+                self.set_status(val & 1 > 0, flags::CARRY);
+                let val = val >> 1;
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
             0x4d => {
                 // PUSH - X
                 self.push(self.x)
+            }
+            0x5b => {
+                // LSR - (imm+X) >>= 1
+                let addr = self.load().wrapping_add(self.x);
+                let addr = self.get_small(addr);
+                let val = self.read(addr);
+                self.set_status(val & 1 > 0, flags::CARRY);
+                let val = val >> 1;
+                self.write(addr, val);
+                self.update_nz8(val)
             }
             0x5d => {
                 // MOV - X := A
@@ -360,6 +386,13 @@ impl Spc700 {
                 let a = self.read_small(a);
                 self.compare(a, b)
             }
+            0x7a => {
+                // ADDW - YA += (imm)[16-bit]
+                let addr = self.load();
+                let val = self.read16_small(addr);
+                let val = self.adc16(self.ya(), val);
+                self.set_ya(val);
+            }
             0x7d => {
                 // MOV - A := X
                 self.a = self.x;
@@ -407,6 +440,13 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::CARRY == 0, &mut cycles)
             }
+            0x9a => {
+                // SUBW - YA -= (imm)[16-bit]
+                let addr = self.load();
+                let val = self.read16_small(addr);
+                let val = self.adc16(self.ya(), !val);
+                self.set_ya(val);
+            }
             0x9c => {
                 // DEC - A
                 self.a = self.a.wrapping_sub(1);
@@ -438,6 +478,11 @@ impl Spc700 {
             0xa0 => {
                 // EI - Set INTERRUPT_ENABLE
                 self.status |= flags::INTERRUPT_ENABLE
+            }
+            0xa8 => {
+                // SBC - A -= imm + CARRY
+                let val = self.load();
+                self.a = self.adc(self.a, val);
             }
             0xab => {
                 // INC - Increment (imm)
@@ -541,6 +586,11 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::ZERO == 0, &mut cycles)
             }
+            0xd4 => {
+                // MOV - (imm+X) := A
+                let addr = self.load().wrapping_add(self.x);
+                self.write_small(addr, self.a)
+            }
             0xd5 => {
                 // MOV - (imm[16-bit]+X) := A
                 let addr = self.load16().wrapping_add(self.x.into());
@@ -551,6 +601,11 @@ impl Spc700 {
                 let addr = self.load();
                 let addr = self.read16_small(addr).wrapping_add(self.y.into());
                 self.write(addr, self.a);
+            }
+            0xd8 => {
+                // MOV - (imm) := X
+                let addr = self.load();
+                self.write_small(addr, self.x)
             }
             0xda => {
                 // MOVW - (imm)[16-bit] := YA
@@ -710,6 +765,20 @@ impl Spc700 {
         self.set_status(((a & 15) + (b & 15) + c) > 15, flags::HALF_CARRY);
         self.set_status(ov1 || ov2, flags::CARRY);
         self.update_nz8(res);
-        a
+        res
+    }
+
+    pub fn adc16(&mut self, a: u16, b: u16) -> u16 {
+        let c = u16::from(self.status & flags::CARRY);
+        let (res, ov1) = a.overflowing_add(b);
+        let (res, ov2) = res.overflowing_add(c);
+        self.set_status(
+            (a & 0x8000 == b & 0x8000) && (b & 0x8000 != res & 0x8000),
+            flags::OVERFLOW,
+        );
+        self.set_status(((a & 0xfff) + (b & 0xfff) + c) > 0xfff, flags::HALF_CARRY);
+        self.set_status(ov1 || ov2, flags::CARRY);
+        self.update_nz16(res);
+        res
     }
 }
