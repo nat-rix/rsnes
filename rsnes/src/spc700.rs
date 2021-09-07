@@ -53,6 +53,43 @@ pub mod flags {
     pub const SIGN: u8 = 0x80;
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Channel {}
+
+impl Channel {
+    pub const fn new() -> Self {
+        Self {}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Dsp {
+    // in milliseconds
+    echo_delay: u8,
+    source_dir_addr: u16,
+    echo_data_addr: u16,
+    channels: [Channel; 8],
+    pitch_modulation: u8,
+    echo_feedback: i8,
+    noise: u8,
+    echo: u8,
+}
+
+impl Dsp {
+    pub const fn new() -> Self {
+        Self {
+            echo_delay: 0,
+            source_dir_addr: 0,
+            echo_data_addr: 0,
+            channels: [Channel::new(); 8],
+            pitch_modulation: 0,
+            echo_feedback: 0,
+            noise: 0,
+            echo: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Spc700 {
     mem: [u8; MEMORY_SIZE],
@@ -60,6 +97,7 @@ pub struct Spc700 {
     pub input: [u8; 4],
     /// data, we send to the main processor
     pub output: [u8; 4],
+    dsp: Dsp,
 
     a: u8,
     x: u8,
@@ -70,7 +108,7 @@ pub struct Spc700 {
 }
 
 impl Spc700 {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
             let mut mem: [u8; MEMORY_SIZE] =
                 unsafe { core::mem::transmute([[[0x00u8; 32], [0xffu8; 32]]; 1024]) };
@@ -82,6 +120,7 @@ impl Spc700 {
             mem: POWER_UP_MEMORY,
             input: [0; 4],
             output: [0; 4],
+            dsp: Dsp::new(),
             a: 0,
             x: 0,
             y: 0,
@@ -116,15 +155,49 @@ impl Spc700 {
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0xffc0..=0xffff if self.is_rom_mapped() => ROM[(addr & 0x3f) as usize],
+            0xf3 => self.read_dsp_register(self.mem[0xf2]),
             0xf4..=0xf7 => self.input[(addr - 0xf4) as usize],
+            0xf0..=0xf1 | 0xf8..=0xff => {
+                todo!("reading SPC register 0x{:02x}", addr)
+            }
             addr => self.mem[addr as usize],
         }
     }
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
+            0xf3 => self.write_dsp_register(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
+            0xf0..=0xf1 | 0xf8..=0xff => {
+                todo!("writing SPC register 0x{:02x}", addr)
+            }
             addr => self.mem[addr as usize] = val,
+        }
+    }
+
+    pub fn read_dsp_register(&self, id: u8) -> u8 {
+        match id {
+            0x0d => self.dsp.echo_feedback as u8,
+            0x2d => self.dsp.pitch_modulation,
+            0x3d => self.dsp.noise,
+            0x4d => self.dsp.echo,
+            0x5d => (self.dsp.source_dir_addr >> 8) as u8,
+            0x6d => (self.dsp.echo_data_addr >> 8) as u8,
+            0x7d => self.dsp.echo_delay >> 4,
+            _ => todo!("read dsp register 0x{:02x}", id),
+        }
+    }
+
+    pub fn write_dsp_register(&mut self, id: u8, val: u8) {
+        match id {
+            0x0d => self.dsp.echo_feedback = val as i8,
+            0x2d => self.dsp.pitch_modulation = val & 0xfe,
+            0x3d => self.dsp.noise = val,
+            0x4d => self.dsp.echo = val,
+            0x5d => self.dsp.source_dir_addr = u16::from(val) << 8,
+            0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
+            0x7d => self.dsp.echo_delay = val << 4,
+            _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
         }
     }
 
