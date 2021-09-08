@@ -6,7 +6,8 @@
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
 //! - The first of the two official SNES documentation books
 
-use crate::timing::Cycles;
+use crate::timing::{Cycles, CPU_64KHZ_TIMING_PROPORTION as TIMING_PROPORTION};
+use core::cell::Cell;
 
 pub const MEMORY_SIZE: usize = 64 * 1024;
 
@@ -119,6 +120,12 @@ pub struct Spc700 {
     sp: u8,
     status: u8,
     pc: u16,
+
+    cpu_time: Cycles,
+    timer_max: [u16; 3],
+    // internal timer ticks ALL in 64kHz
+    timers: [u16; 3],
+    counters: [Cell<u8>; 3],
 }
 
 impl Spc700 {
@@ -141,6 +148,11 @@ impl Spc700 {
             sp: 0,
             pc: 0xffc0,
             status: 0,
+
+            cpu_time: 0,
+            timer_max: [0; 3],
+            timers: [0; 3],
+            counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
         }
     }
 
@@ -168,20 +180,19 @@ impl Spc700 {
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xffc0..=0xffff if self.is_rom_mapped() => ROM[(addr & 0x3f) as usize],
             0xf3 => self.read_dsp_register(self.mem[0xf2]),
-            0xf4..=0xf7 => self.input[(addr - 0xf4) as usize],
+            0xf4..=0xf7 => self.input[usize::from(addr - 0xf4)],
+            0xfd..=0xff => self.counters[usize::from(addr - 0xfd)].take(),
             0xf0..=0xf1 | 0xf8..=0xff => {
                 todo!("reading SPC register 0x{:02x}", addr)
             }
+            0xffc0..=0xffff if self.is_rom_mapped() => ROM[(addr & 0x3f) as usize],
             addr => self.mem[addr as usize],
         }
     }
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xf3 => self.write_dsp_register(self.mem[0xf2], val),
-            0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
             0xf1 => {
                 // TODO: Reset active timers & activate
                 if val & 0x10 > 0 {
@@ -191,6 +202,10 @@ impl Spc700 {
                     self.input[2..4].fill(0)
                 }
             }
+            0xf3 => self.write_dsp_register(self.mem[0xf2], val),
+            0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
+            0xfa | 0xfb => self.timer_max[usize::from(addr & 1)] = u16::from(val) << 3,
+            0xfc => self.timer_max[2] = val.into(),
             0xf0 | 0xf8..=0xff => {
                 todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
             }
@@ -214,7 +229,6 @@ impl Spc700 {
             0x6d => (self.dsp.echo_data_addr >> 8) as u8,
             0x7d => self.dsp.echo_delay >> 4,
 
-            0x20..=0xff => unreachable!(),
             _ => todo!("read dsp register 0x{:02x}", id),
         }
     }
@@ -235,7 +249,6 @@ impl Spc700 {
             0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
             0x7d => self.dsp.echo_delay = val << 4,
 
-            0x20..=0xff => unreachable!(),
             _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
         }
     }
@@ -964,5 +977,20 @@ impl Spc700 {
         self.set_status(ov1 || ov2, flags::CARRY);
         self.update_nz16(res);
         res
+    }
+
+    /// Tick in main CPU master cycles
+    pub fn tick(&mut self, n: u16) {
+        let delta = TIMING_PROPORTION.0.wrapping_mul(n.into());
+        self.cpu_time = self.cpu_time.wrapping_add(delta);
+        let div = self.cpu_time / TIMING_PROPORTION.1;
+        self.cpu_time -= div * TIMING_PROPORTION.1;
+        let div = (div & 0xff) as u8;
+        for i in 0..3 {
+            self.timers[i] = self.timers[i].wrapping_add(div.into());
+            let div = self.timers[i].checked_div(self.timer_max[i]).unwrap_or(0);
+            self.timers[i] = self.timers[i].checked_rem(self.timer_max[i]).unwrap_or(0);
+            self.counters[i].set(self.counters[i].get().wrapping_add((div & 0xff) as u8) & 0xf);
+        }
     }
 }
