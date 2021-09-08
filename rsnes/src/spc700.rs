@@ -45,7 +45,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
 ];
 
-const F1_RESET: u8 = 0xb0;
+const F0_RESET: u8 = 0x80;
 
 /// Flags
 pub mod flags {
@@ -142,6 +142,7 @@ pub struct Spc700 {
     timer_max: [u16; 3],
     // internal timer ticks ALL in 64kHz
     timers: [u16; 3],
+    timer_enable: u8,
     counters: [Cell<u8>; 3],
 }
 
@@ -150,7 +151,7 @@ impl Spc700 {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
             let mut mem: [u8; MEMORY_SIZE] =
                 unsafe { core::mem::transmute([[[0x00u8; 32], [0xffu8; 32]]; 1024]) };
-            mem[0xf1] = F1_RESET;
+            mem[0xf0] = F0_RESET;
             mem
         }
         const POWER_UP_MEMORY: [u8; MEMORY_SIZE] = generate_power_up_memory();
@@ -169,12 +170,13 @@ impl Spc700 {
             cpu_time: 0,
             timer_max: [0; 3],
             timers: [0; 3],
+            timer_enable: 0,
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
         }
     }
 
     pub fn reset(&mut self) {
-        self.mem[0xf1] = F1_RESET;
+        self.mem[0xf0] = F0_RESET;
         self.input = [0; 4];
         self.output = [0; 4];
         self.a = 0;
@@ -182,13 +184,13 @@ impl Spc700 {
         self.y = 0;
         self.sp = 0;
         // actually self.read16(0xfffe), but this will
-        // always result in 0xffc0, because mem[0xf1] = 0xb0
+        // always result in 0xffc0, because mem[0xf0] = 0x80
         self.pc = 0xffc0;
         self.status = 0;
     }
 
     pub const fn is_rom_mapped(&self) -> bool {
-        self.mem[0xf1] & 0x80 > 0
+        self.mem[0xf0] & 0x80 > 0
     }
 
     pub fn read16(&self, addr: u16) -> u16 {
@@ -200,7 +202,7 @@ impl Spc700 {
             0xf3 => self.read_dsp_register(self.mem[0xf2]),
             0xf4..=0xf7 => self.input[usize::from(addr - 0xf4)],
             0xfd..=0xff => self.counters[usize::from(addr - 0xfd)].take(),
-            0xf0..=0xf1 | 0xf8..=0xff => {
+            0xf1 | 0xf8..=0xff => {
                 todo!("reading SPC register 0x{:02x}", addr)
             }
             0xffc0..=0xffff if self.is_rom_mapped() => ROM[(addr & 0x3f) as usize],
@@ -211,19 +213,25 @@ impl Spc700 {
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
             0xf1 => {
-                // TODO: Reset active timers & activate
                 if val & 0x10 > 0 {
                     self.input[0..2].fill(0)
                 }
                 if val & 0x20 > 0 {
                     self.input[2..4].fill(0)
                 }
+                self.timer_enable = val & 7;
+                for i in 0..3 {
+                    if val & (1 << i) > 0 {
+                        self.counters[i].set(0);
+                        self.timers[i] = 0;
+                    }
+                }
             }
             0xf3 => self.write_dsp_register(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
             0xfa | 0xfb => self.timer_max[usize::from(addr & 1)] = u16::from(val) << 3,
             0xfc => self.timer_max[2] = val.into(),
-            0xf0 | 0xf8..=0xff => {
+            0xf8..=0xff => {
                 todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
             }
             addr => self.mem[addr as usize] = val,
@@ -1038,10 +1046,12 @@ impl Spc700 {
         self.cpu_time -= div * TIMING_PROPORTION.1;
         let div = (div & 0xff) as u8;
         for i in 0..3 {
-            self.timers[i] = self.timers[i].wrapping_add(div.into());
-            let div = self.timers[i].checked_div(self.timer_max[i]).unwrap_or(0);
-            self.timers[i] = self.timers[i].checked_rem(self.timer_max[i]).unwrap_or(0);
-            self.counters[i].set(self.counters[i].get().wrapping_add((div & 0xff) as u8) & 0xf);
+            if self.timer_enable & (1 << i) > 0 {
+                self.timers[i] = self.timers[i].wrapping_add(div.into());
+                let div = self.timers[i].checked_div(self.timer_max[i]).unwrap_or(0);
+                self.timers[i] = self.timers[i].checked_rem(self.timer_max[i]).unwrap_or(0);
+                self.counters[i].set(self.counters[i].get().wrapping_add((div & 0xff) as u8) & 0xf);
+            }
         }
     }
 }
