@@ -4,6 +4,7 @@
 //!
 //! - <https://wiki.superfamicom.org/spc700-reference>
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
+//! - The first of the two official SNES documentation books
 
 use crate::timing::Cycles;
 
@@ -14,6 +15,12 @@ static ROM: [u8; 64] = [
     0xCC, 0xF4, 0xD0, 0xFB, 0x2F, 0x19, 0xEB, 0xF4, 0xD0, 0xFC, 0x7E, 0xF4, 0xD0, 0x0B, 0xE4, 0xF5,
     0xCB, 0xF4, 0xD7, 0x00, 0xFC, 0xD0, 0xF3, 0xAB, 0x01, 0x10, 0xEF, 0x7E, 0xF4, 0x10, 0xEB, 0xBA,
     0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF,
+];
+
+/// Noise clock frequencies in Hz
+const FREQUENCIES: [u16; 32] = [
+    0, 16, 21, 25, 31, 42, 50, 63, 83, 100, 125, 167, 200, 250, 333, 400, 500, 667, 800, 1000,
+    1300, 1600, 2000, 2700, 3200, 4000, 5300, 6400, 8000, 10700, 16000, 32000,
 ];
 
 #[rustfmt::skip]
@@ -73,6 +80,10 @@ pub struct Dsp {
     echo_feedback: i8,
     noise: u8,
     echo: u8,
+    // FLG register (6c)
+    flags: u8,
+    master_volume: [i8; 2],
+    echo_volume: [i8; 2],
 }
 
 impl Dsp {
@@ -86,6 +97,9 @@ impl Dsp {
             echo_feedback: 0,
             noise: 0,
             echo: 0,
+            flags: 0,
+            master_volume: [0, 0],
+            echo_volume: [0, 0],
         }
     }
 }
@@ -168,8 +182,17 @@ impl Spc700 {
         match addr {
             0xf3 => self.write_dsp_register(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
-            0xf0..=0xf1 | 0xf8..=0xff => {
-                todo!("writing SPC register 0x{:02x}", addr)
+            0xf1 => {
+                // TODO: Reset active timers & activate
+                if val & 0x10 > 0 {
+                    self.input[0..2].fill(0)
+                }
+                if val & 0x20 > 0 {
+                    self.input[2..4].fill(0)
+                }
+            }
+            0xf0 | 0xf8..=0xff => {
+                todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
             }
             addr => self.mem[addr as usize] = val,
         }
@@ -177,6 +200,12 @@ impl Spc700 {
 
     pub fn read_dsp_register(&self, id: u8) -> u8 {
         match id {
+            0x0c => self.dsp.master_volume[0] as u8,
+            0x1c => self.dsp.master_volume[1] as u8,
+            0x2c => self.dsp.echo_volume[0] as u8,
+            0x3c => self.dsp.echo_volume[1] as u8,
+            0x6c => self.dsp.flags,
+
             0x0d => self.dsp.echo_feedback as u8,
             0x2d => self.dsp.pitch_modulation,
             0x3d => self.dsp.noise,
@@ -184,12 +213,20 @@ impl Spc700 {
             0x5d => (self.dsp.source_dir_addr >> 8) as u8,
             0x6d => (self.dsp.echo_data_addr >> 8) as u8,
             0x7d => self.dsp.echo_delay >> 4,
+
+            0x20..=0xff => unreachable!(),
             _ => todo!("read dsp register 0x{:02x}", id),
         }
     }
 
     pub fn write_dsp_register(&mut self, id: u8, val: u8) {
         match id {
+            0x0c => self.dsp.master_volume[0] = val as i8,
+            0x1c => self.dsp.master_volume[1] = val as i8,
+            0x2c => self.dsp.echo_volume[0] = val as i8,
+            0x3c => self.dsp.echo_volume[1] = val as i8,
+            0x6c => self.dsp.flags = val,
+
             0x0d => self.dsp.echo_feedback = val as i8,
             0x2d => self.dsp.pitch_modulation = val & 0xfe,
             0x3d => self.dsp.noise = val,
@@ -197,6 +234,8 @@ impl Spc700 {
             0x5d => self.dsp.source_dir_addr = u16::from(val) << 8,
             0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
             0x7d => self.dsp.echo_delay = val << 4,
+
+            0x20..=0xff => unreachable!(),
             _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
         }
     }
