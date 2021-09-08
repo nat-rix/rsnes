@@ -62,11 +62,24 @@ pub mod flags {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Channel {}
+pub struct Channel {
+    volume: [u8; 2],
+    // pitch (corresponds to `pitch * 125/8 Hz`)
+    pitch: u16,
+    source_number: u8,
+    adsr: [u8; 2],
+    gain: u8,
+}
 
 impl Channel {
     pub const fn new() -> Self {
-        Self {}
+        Self {
+            volume: [0; 2],
+            pitch: 0x1000,
+            source_number: 0,
+            adsr: [0; 2],
+            gain: 0,
+        }
     }
 }
 
@@ -81,6 +94,8 @@ pub struct Dsp {
     echo_feedback: i8,
     noise: u8,
     echo: u8,
+    fade_in: u8,
+    fade_out: u8,
     // FLG register (6c)
     flags: u8,
     master_volume: [i8; 2],
@@ -98,7 +113,9 @@ impl Dsp {
             echo_feedback: 0,
             noise: 0,
             echo: 0,
-            flags: 0,
+            fade_in: 0,
+            fade_out: 0,
+            flags: 0x80,
             master_volume: [0, 0],
             echo_volume: [0, 0],
         }
@@ -214,42 +231,76 @@ impl Spc700 {
     }
 
     pub fn read_dsp_register(&self, id: u8) -> u8 {
-        match id {
-            0x0c => self.dsp.master_volume[0] as u8,
-            0x1c => self.dsp.master_volume[1] as u8,
-            0x2c => self.dsp.echo_volume[0] as u8,
-            0x3c => self.dsp.echo_volume[1] as u8,
-            0x6c => self.dsp.flags,
+        let rid = id & 0x8f;
+        if rid < 0xa {
+            let channel = &self.dsp.channels[usize::from(id >> 4)];
+            match rid {
+                0 => channel.volume[0],
+                1 => channel.volume[1],
+                2 => (channel.pitch & 0xff) as u8,
+                3 => (channel.pitch >> 8) as u8,
+                4 => channel.source_number,
+                5 | 6 => channel.adsr[usize::from(!rid & 1)],
+                7 => channel.gain,
+                _ => todo!("read dsp register 0x{:02x}", id),
+            }
+        } else {
+            match id {
+                0x0c => self.dsp.master_volume[0] as u8,
+                0x1c => self.dsp.master_volume[1] as u8,
+                0x2c => self.dsp.echo_volume[0] as u8,
+                0x3c => self.dsp.echo_volume[1] as u8,
+                0x4c => self.dsp.fade_in,
+                0x5c => self.dsp.fade_out,
+                0x6c => self.dsp.flags,
 
-            0x0d => self.dsp.echo_feedback as u8,
-            0x2d => self.dsp.pitch_modulation,
-            0x3d => self.dsp.noise,
-            0x4d => self.dsp.echo,
-            0x5d => (self.dsp.source_dir_addr >> 8) as u8,
-            0x6d => (self.dsp.echo_data_addr >> 8) as u8,
-            0x7d => self.dsp.echo_delay >> 4,
+                0x0d => self.dsp.echo_feedback as u8,
+                0x2d => self.dsp.pitch_modulation,
+                0x3d => self.dsp.noise,
+                0x4d => self.dsp.echo,
+                0x5d => (self.dsp.source_dir_addr >> 8) as u8,
+                0x6d => (self.dsp.echo_data_addr >> 8) as u8,
+                0x7d => self.dsp.echo_delay >> 4,
 
-            _ => todo!("read dsp register 0x{:02x}", id),
+                _ => todo!("read dsp register 0x{:02x}", id),
+            }
         }
     }
 
     pub fn write_dsp_register(&mut self, id: u8, val: u8) {
-        match id {
-            0x0c => self.dsp.master_volume[0] = val as i8,
-            0x1c => self.dsp.master_volume[1] = val as i8,
-            0x2c => self.dsp.echo_volume[0] = val as i8,
-            0x3c => self.dsp.echo_volume[1] = val as i8,
-            0x6c => self.dsp.flags = val,
+        let rid = id & 0x8f;
+        if rid < 0xa {
+            let channel = &mut self.dsp.channels[usize::from(id >> 4)];
+            match rid {
+                0 => channel.volume[0] = val,
+                1 => channel.volume[1] = val,
+                2 => channel.pitch = (channel.pitch & 0xff00) | u16::from(val),
+                3 => channel.pitch = (channel.pitch & 0xff) | (u16::from(val) << 8),
+                4 => channel.source_number = val,
+                5 | 6 => channel.adsr[usize::from(!rid & 1)] = val,
+                7 => channel.gain = val,
+                _ => todo!("read dsp register 0x{:02x}", id),
+            }
+        } else {
+            match id {
+                0x0c => self.dsp.master_volume[0] = val as i8,
+                0x1c => self.dsp.master_volume[1] = val as i8,
+                0x2c => self.dsp.echo_volume[0] = val as i8,
+                0x3c => self.dsp.echo_volume[1] = val as i8,
+                0x4c => self.dsp.fade_in = val,
+                0x5c => self.dsp.fade_out = val,
+                0x6c => self.dsp.flags = val,
 
-            0x0d => self.dsp.echo_feedback = val as i8,
-            0x2d => self.dsp.pitch_modulation = val & 0xfe,
-            0x3d => self.dsp.noise = val,
-            0x4d => self.dsp.echo = val,
-            0x5d => self.dsp.source_dir_addr = u16::from(val) << 8,
-            0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
-            0x7d => self.dsp.echo_delay = val << 4,
+                0x0d => self.dsp.echo_feedback = val as i8,
+                0x2d => self.dsp.pitch_modulation = val & 0xfe,
+                0x3d => self.dsp.noise = val,
+                0x4d => self.dsp.echo = val,
+                0x5d => self.dsp.source_dir_addr = u16::from(val) << 8,
+                0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
+                0x7d => self.dsp.echo_delay = val << 4,
 
-            _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
+                _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
+            }
         }
     }
 
