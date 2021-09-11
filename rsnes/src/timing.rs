@@ -109,7 +109,7 @@ impl Device {
             while self.apu_cycles * APU_CPU_TIMING_PROPORTION.0
                 < self.cpu_cycles * APU_CPU_TIMING_PROPORTION.1
             {
-                self.apu_cycles += self.spc.dispatch_instruction();
+                self.apu_cycles += self.spc.run_cycle();
                 while self.cpu_cycles >= APU_CPU_TIMING_PROPORTION.0
                     && self.apu_cycles >= APU_CPU_TIMING_PROPORTION.1
                 {

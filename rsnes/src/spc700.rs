@@ -7,7 +7,7 @@
 //! - The first of the two official SNES documentation books
 
 use crate::timing::{Cycles, CPU_64KHZ_TIMING_PROPORTION as TIMING_PROPORTION};
-use core::cell::Cell;
+use core::{cell::Cell, mem::take};
 
 pub const MEMORY_SIZE: usize = 64 * 1024;
 
@@ -18,11 +18,92 @@ static ROM: [u8; 64] = [
     0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF,
 ];
 
+const GAUSS_INTERPOLATION_POINTS: [i32; 16 * 32] = [
+    0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000,
+    0x000, 0x000, 0x000, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001,
+    0x001, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x003, 0x003, 0x003, 0x003, 0x003,
+    0x004, 0x004, 0x004, 0x004, 0x004, 0x005, 0x005, 0x005, 0x005, 0x006, 0x006, 0x006, 0x006,
+    0x007, 0x007, 0x007, 0x008, 0x008, 0x008, 0x009, 0x009, 0x009, 0x00A, 0x00A, 0x00A, 0x00B,
+    0x00B, 0x00B, 0x00C, 0x00C, 0x00D, 0x00D, 0x00E, 0x00E, 0x00F, 0x00F, 0x00F, 0x010, 0x010,
+    0x011, 0x011, 0x012, 0x013, 0x013, 0x014, 0x014, 0x015, 0x015, 0x016, 0x017, 0x017, 0x018,
+    0x018, 0x019, 0x01A, 0x01B, 0x01B, 0x01C, 0x01D, 0x01D, 0x01E, 0x01F, 0x020, 0x020, 0x021,
+    0x022, 0x023, 0x024, 0x024, 0x025, 0x026, 0x027, 0x028, 0x029, 0x02A, 0x02B, 0x02C, 0x02D,
+    0x02E, 0x02F, 0x030, 0x031, 0x032, 0x033, 0x034, 0x035, 0x036, 0x037, 0x038, 0x03A, 0x03B,
+    0x03C, 0x03D, 0x03E, 0x040, 0x041, 0x042, 0x043, 0x045, 0x046, 0x047, 0x049, 0x04A, 0x04C,
+    0x04D, 0x04E, 0x050, 0x051, 0x053, 0x054, 0x056, 0x057, 0x059, 0x05A, 0x05C, 0x05E, 0x05F,
+    0x061, 0x063, 0x064, 0x066, 0x068, 0x06A, 0x06B, 0x06D, 0x06F, 0x071, 0x073, 0x075, 0x076,
+    0x078, 0x07A, 0x07C, 0x07E, 0x080, 0x082, 0x084, 0x086, 0x089, 0x08B, 0x08D, 0x08F, 0x091,
+    0x093, 0x096, 0x098, 0x09A, 0x09C, 0x09F, 0x0A1, 0x0A3, 0x0A6, 0x0A8, 0x0AB, 0x0AD, 0x0AF,
+    0x0B2, 0x0B4, 0x0B7, 0x0BA, 0x0BC, 0x0BF, 0x0C1, 0x0C4, 0x0C7, 0x0C9, 0x0CC, 0x0CF, 0x0D2,
+    0x0D4, 0x0D7, 0x0DA, 0x0DD, 0x0E0, 0x0E3, 0x0E6, 0x0E9, 0x0EC, 0x0EF, 0x0F2, 0x0F5, 0x0F8,
+    0x0FB, 0x0FE, 0x101, 0x104, 0x107, 0x10B, 0x10E, 0x111, 0x114, 0x118, 0x11B, 0x11E, 0x122,
+    0x125, 0x129, 0x12C, 0x130, 0x133, 0x137, 0x13A, 0x13E, 0x141, 0x145, 0x148, 0x14C, 0x150,
+    0x153, 0x157, 0x15B, 0x15F, 0x162, 0x166, 0x16A, 0x16E, 0x172, 0x176, 0x17A, 0x17D, 0x181,
+    0x185, 0x189, 0x18D, 0x191, 0x195, 0x19A, 0x19E, 0x1A2, 0x1A6, 0x1AA, 0x1AE, 0x1B2, 0x1B7,
+    0x1BB, 0x1BF, 0x1C3, 0x1C8, 0x1CC, 0x1D0, 0x1D5, 0x1D9, 0x1DD, 0x1E2, 0x1E6, 0x1EB, 0x1EF,
+    0x1F3, 0x1F8, 0x1FC, 0x201, 0x205, 0x20A, 0x20F, 0x213, 0x218, 0x21C, 0x221, 0x226, 0x22A,
+    0x22F, 0x233, 0x238, 0x23D, 0x241, 0x246, 0x24B, 0x250, 0x254, 0x259, 0x25E, 0x263, 0x267,
+    0x26C, 0x271, 0x276, 0x27B, 0x280, 0x284, 0x289, 0x28E, 0x293, 0x298, 0x29D, 0x2A2, 0x2A6,
+    0x2AB, 0x2B0, 0x2B5, 0x2BA, 0x2BF, 0x2C4, 0x2C9, 0x2CE, 0x2D3, 0x2D8, 0x2DC, 0x2E1, 0x2E6,
+    0x2EB, 0x2F0, 0x2F5, 0x2FA, 0x2FF, 0x304, 0x309, 0x30E, 0x313, 0x318, 0x31D, 0x322, 0x326,
+    0x32B, 0x330, 0x335, 0x33A, 0x33F, 0x344, 0x349, 0x34E, 0x353, 0x357, 0x35C, 0x361, 0x366,
+    0x36B, 0x370, 0x374, 0x379, 0x37E, 0x383, 0x388, 0x38C, 0x391, 0x396, 0x39B, 0x39F, 0x3A4,
+    0x3A9, 0x3AD, 0x3B2, 0x3B7, 0x3BB, 0x3C0, 0x3C5, 0x3C9, 0x3CE, 0x3D2, 0x3D7, 0x3DC, 0x3E0,
+    0x3E5, 0x3E9, 0x3ED, 0x3F2, 0x3F6, 0x3FB, 0x3FF, 0x403, 0x408, 0x40C, 0x410, 0x415, 0x419,
+    0x41D, 0x421, 0x425, 0x42A, 0x42E, 0x432, 0x436, 0x43A, 0x43E, 0x442, 0x446, 0x44A, 0x44E,
+    0x452, 0x455, 0x459, 0x45D, 0x461, 0x465, 0x468, 0x46C, 0x470, 0x473, 0x477, 0x47A, 0x47E,
+    0x481, 0x485, 0x488, 0x48C, 0x48F, 0x492, 0x496, 0x499, 0x49C, 0x49F, 0x4A2, 0x4A6, 0x4A9,
+    0x4AC, 0x4AF, 0x4B2, 0x4B5, 0x4B7, 0x4BA, 0x4BD, 0x4C0, 0x4C3, 0x4C5, 0x4C8, 0x4CB, 0x4CD,
+    0x4D0, 0x4D2, 0x4D5, 0x4D7, 0x4D9, 0x4DC, 0x4DE, 0x4E0, 0x4E3, 0x4E5, 0x4E7, 0x4E9, 0x4EB,
+    0x4ED, 0x4EF, 0x4F1, 0x4F3, 0x4F5, 0x4F6, 0x4F8, 0x4FA, 0x4FB, 0x4FD, 0x4FF, 0x500, 0x502,
+    0x503, 0x504, 0x506, 0x507, 0x508, 0x50A, 0x50B, 0x50C, 0x50D, 0x50E, 0x50F, 0x510, 0x511,
+    0x511, 0x512, 0x513, 0x514, 0x514, 0x515, 0x516, 0x516, 0x517, 0x517, 0x517, 0x518, 0x518,
+    0x518, 0x518, 0x518, 0x519, 0x519,
+];
+
 /// Noise clock frequencies in Hz
 const FREQUENCIES: [u16; 32] = [
     0, 16, 21, 25, 31, 42, 50, 63, 83, 100, 125, 167, 200, 250, 333, 400, 500, 667, 800, 1000,
     1300, 1600, 2000, 2700, 3200, 4000, 5300, 6400, 8000, 10700, 16000, 32000,
 ];
+
+const fn calculate_gain_noise_rates() -> [u16; 32] {
+    let mut rates = [0; 32];
+    macro_rules! gen_rates {
+        (t0, $n:expr) => {
+            rates[$n] = if $n < 0x1a {
+                let inv = 0x22 - $n;
+                let x = inv / 3;
+                let y = inv % 3;
+                (1 << (x - 2)) * y + (1 << x)
+            } else {
+                0x20 - $n
+            }
+        };
+        (t1, $off:expr) => {
+            gen_rates!(t0, $off);
+            gen_rates!(t0, $off + 1);
+        };
+        (t2, $off:expr) => {
+            gen_rates!(t1, $off);
+            gen_rates!(t1, $off + 2);
+            gen_rates!(t1, $off + 4);
+            gen_rates!(t1, $off + 6);
+        };
+        (t3, $off:expr) => {
+            gen_rates!(t2, $off);
+            gen_rates!(t2, $off + 8);
+            gen_rates!(t2, $off + 16);
+            gen_rates!(t2, $off + 24);
+        };
+    }
+    gen_rates!(t3, 0);
+    rates
+}
+
+const ADSR_GAIN_NOISE_RATES: [u16; 32] = calculate_gain_noise_rates();
+
+const DECODE_BUFFER_SIZE: usize = 3 + 16;
 
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
@@ -61,24 +142,151 @@ pub mod flags {
     pub const SIGN: u8 = 0x80;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+enum AdsrPeriod {
+    Attack = 0,
+    Decay = 1,
+    Sustain = 2,
+    Gain = 3,
+    Release = 4,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct StereoSample<T> {
+    pub l: T,
+    pub r: T,
+}
+
+impl<T> StereoSample<T> {
+    pub const fn new2(l: T, r: T) -> Self {
+        Self { l, r }
+    }
+}
+
+impl<T: Copy> StereoSample<T> {
+    pub fn new(val: T) -> Self {
+        Self { l: val, r: val }
+    }
+}
+
+impl StereoSample<i16> {
+    pub fn saturating_add32(&self, val: StereoSample<i32>) -> Self {
+        let clamped = val.clamp16();
+        Self {
+            l: self.l.saturating_add(clamped.l),
+            r: self.r.saturating_add(clamped.r),
+        }
+    }
+}
+
+impl StereoSample<i32> {
+    pub fn clamp16(self) -> StereoSample<i16> {
+        StereoSample {
+            l: self.l.clamp(-0x8000, 0x7fff) as i16,
+            r: self.r.clamp(-0x8000, 0x7fff) as i16,
+        }
+    }
+}
+
+impl<T: Into<i32>> StereoSample<T> {
+    pub fn to_i32(self) -> StereoSample<i32> {
+        StereoSample {
+            l: self.l.into(),
+            r: self.r.into(),
+        }
+    }
+}
+
+impl core::ops::Mul for StereoSample<i32> {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Self {
+            l: self.l * other.l,
+            r: self.r * other.r,
+        }
+    }
+}
+
+impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
+    type Output = StereoSample<T::Output>;
+    fn shr(self, rhs: R) -> Self::Output {
+        StereoSample {
+            l: self.l >> rhs,
+            r: self.r >> rhs,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Channel {
-    volume: [u8; 2],
+    volume: StereoSample<i8>,
     // pitch (corresponds to `pitch * 125/8 Hz`)
-    pitch: u16,
+    pitch: i16,
     source_number: u8,
+    dir_addr: u16,
+    data_addr: u16,
     adsr: [u8; 2],
-    gain: u8,
+    gain_mode: u8,
+    gain: u16,
+    vx_env: u8,
+    vx_out: u8,
+    sustain: u16,
+    unused: [u8; 3],
+
+    decode_buffer: [i16; DECODE_BUFFER_SIZE],
+    last_sample: i16,
+    pitch_counter: u16,
+    period: AdsrPeriod,
+    period_rate_map: [u16; 4],
+    rate_index: u16,
 }
 
 impl Channel {
     pub const fn new() -> Self {
         Self {
-            volume: [0; 2],
+            volume: StereoSample::new2(0, 0),
             pitch: 0x1000,
             source_number: 0,
+            dir_addr: 0,
+            data_addr: 0,
             adsr: [0; 2],
+            gain_mode: 0,
             gain: 0,
+            vx_env: 0,
+            vx_out: 0,
+            sustain: 0,
+            unused: [0; 3],
+            decode_buffer: [0; DECODE_BUFFER_SIZE],
+            last_sample: 0,
+            pitch_counter: 0,
+            period: AdsrPeriod::Attack,
+            period_rate_map: [0; 4],
+            rate_index: 0,
+        }
+    }
+
+    pub fn update_gain(&mut self, rate: u16) {
+        match self.period {
+            AdsrPeriod::Attack => {
+                self.gain = self
+                    .gain
+                    .saturating_add(if rate == 1 { 1024 } else { 32 })
+                    .min(0x7ff);
+                if self.gain > 0x7df {
+                    self.period = AdsrPeriod::Decay
+                }
+            }
+            AdsrPeriod::Decay | AdsrPeriod::Sustain => {
+                self.gain = self
+                    .gain
+                    .saturating_sub((self.gain.saturating_sub(1) >> 8) + 1);
+                if self.period == AdsrPeriod::Decay && self.gain < self.sustain {
+                    self.period = AdsrPeriod::Sustain
+                }
+            }
+            AdsrPeriod::Gain => todo!("gain mode"),
+            AdsrPeriod::Release => panic!("`update_gain` must not be called in release mode"),
         }
     }
 }
@@ -98,8 +306,9 @@ pub struct Dsp {
     fade_out: u8,
     // FLG register (6c)
     flags: u8,
-    master_volume: [i8; 2],
-    echo_volume: [i8; 2],
+    master_volume: StereoSample<i8>,
+    echo_volume: StereoSample<i8>,
+    unused: u8,
 }
 
 impl Dsp {
@@ -116,8 +325,9 @@ impl Dsp {
             fade_in: 0,
             fade_out: 0,
             flags: 0x80,
-            master_volume: [0, 0],
-            echo_volume: [0, 0],
+            master_volume: StereoSample::new2(0, 0),
+            echo_volume: StereoSample::new2(0, 0),
+            unused: 0,
         }
     }
 }
@@ -144,6 +354,7 @@ pub struct Spc700 {
     timers: [u16; 3],
     timer_enable: u8,
     counters: [Cell<u8>; 3],
+    dispatch_counter: u8,
 }
 
 impl Spc700 {
@@ -172,6 +383,7 @@ impl Spc700 {
             timers: [0; 3],
             timer_enable: 0,
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
+            dispatch_counter: 0,
         }
     }
 
@@ -243,26 +455,32 @@ impl Spc700 {
         if rid < 0xa {
             let channel = &self.dsp.channels[usize::from(id >> 4)];
             match rid {
-                0 => channel.volume[0],
-                1 => channel.volume[1],
+                0 => channel.volume.l as u8,
+                1 => channel.volume.r as u8,
                 2 => (channel.pitch & 0xff) as u8,
                 3 => (channel.pitch >> 8) as u8,
                 4 => channel.source_number,
                 5 | 6 => channel.adsr[usize::from(!rid & 1)],
-                7 => channel.gain,
+                7 => channel.gain_mode,
+                8 => channel.vx_env,
+                9 => channel.vx_out,
+                10 => channel.unused[0],
+                11 => channel.unused[1],
+                14 => channel.unused[2],
                 _ => todo!("read dsp register 0x{:02x}", id),
             }
         } else {
             match id {
-                0x0c => self.dsp.master_volume[0] as u8,
-                0x1c => self.dsp.master_volume[1] as u8,
-                0x2c => self.dsp.echo_volume[0] as u8,
-                0x3c => self.dsp.echo_volume[1] as u8,
+                0x0c => self.dsp.master_volume.l as u8,
+                0x1c => self.dsp.master_volume.r as u8,
+                0x2c => self.dsp.echo_volume.l as u8,
+                0x3c => self.dsp.echo_volume.r as u8,
                 0x4c => self.dsp.fade_in,
                 0x5c => self.dsp.fade_out,
                 0x6c => self.dsp.flags,
 
                 0x0d => self.dsp.echo_feedback as u8,
+                0x1d => self.dsp.unused,
                 0x2d => self.dsp.pitch_modulation,
                 0x3d => self.dsp.noise,
                 0x4d => self.dsp.echo,
@@ -280,30 +498,59 @@ impl Spc700 {
         if rid < 0xa {
             let channel = &mut self.dsp.channels[usize::from(id >> 4)];
             match rid {
-                0 => channel.volume[0] = val,
-                1 => channel.volume[1] = val,
-                2 => channel.pitch = (channel.pitch & 0xff00) | u16::from(val),
-                3 => channel.pitch = (channel.pitch & 0xff) | (u16::from(val) << 8),
-                4 => channel.source_number = val,
-                5 | 6 => channel.adsr[usize::from(!rid & 1)] = val,
-                7 => channel.gain = val,
+                0 => channel.volume.l = val as i8,
+                1 => channel.volume.r = val as i8,
+                2 => channel.pitch = (channel.pitch & 0x3f00) | i16::from(val),
+                3 => channel.pitch = (channel.pitch & 0xff) | (i16::from(val & 0x3f) << 8),
+                4 => {
+                    channel.source_number = val;
+                    channel.dir_addr = self.dsp.source_dir_addr.wrapping_add(u16::from(val) << 4);
+                }
+                5 => {
+                    channel.adsr[0] = val;
+                    channel.period_rate_map[AdsrPeriod::Attack as usize] =
+                        ADSR_GAIN_NOISE_RATES[usize::from(((val & 0xf) << 1) | 1)];
+                    channel.period_rate_map[AdsrPeriod::Decay as usize] =
+                        ADSR_GAIN_NOISE_RATES[usize::from(((val & 0x70) >> 3) | 0x10)];
+                }
+                6 => {
+                    channel.adsr[1] = val;
+                    channel.period_rate_map[AdsrPeriod::Sustain as usize] =
+                        ADSR_GAIN_NOISE_RATES[usize::from(val & 0x1f)];
+                    channel.sustain = (u16::from(val >> 5) + 1) * 0x100;
+                }
+                7 => channel.gain_mode = val,
+                8 => channel.vx_env = val,
+                9 => channel.vx_out = val,
+                10 => channel.unused[0] = val,
+                11 => channel.unused[1] = val,
+                14 => channel.unused[2] = val,
                 _ => todo!("read dsp register 0x{:02x}", id),
             }
         } else {
             match id {
-                0x0c => self.dsp.master_volume[0] = val as i8,
-                0x1c => self.dsp.master_volume[1] = val as i8,
-                0x2c => self.dsp.echo_volume[0] = val as i8,
-                0x3c => self.dsp.echo_volume[1] = val as i8,
+                0x0c => self.dsp.master_volume.l = val as i8,
+                0x1c => self.dsp.master_volume.r = val as i8,
+                0x2c => self.dsp.echo_volume.l = val as i8,
+                0x3c => self.dsp.echo_volume.r = val as i8,
                 0x4c => self.dsp.fade_in = val,
                 0x5c => self.dsp.fade_out = val,
                 0x6c => self.dsp.flags = val,
 
                 0x0d => self.dsp.echo_feedback = val as i8,
+                0x1d => self.dsp.unused = val,
                 0x2d => self.dsp.pitch_modulation = val & 0xfe,
                 0x3d => self.dsp.noise = val,
                 0x4d => self.dsp.echo = val,
-                0x5d => self.dsp.source_dir_addr = u16::from(val) << 8,
+                0x5d => {
+                    self.dsp.source_dir_addr = u16::from(val) << 8;
+                    for channel in &mut self.dsp.channels {
+                        channel.dir_addr = self
+                            .dsp
+                            .source_dir_addr
+                            .wrapping_add(u16::from(channel.source_number) << 4)
+                    }
+                }
                 0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
                 0x7d => self.dsp.echo_delay = val << 4,
 
@@ -388,6 +635,162 @@ impl Spc700 {
         } else {
             self.status &= !flag
         }
+    }
+
+    pub fn sound_cycle(&mut self) {
+        let process_kon_koff = self.dispatch_counter & 0x3f == 0;
+        let (fade_in, fade_out) = if process_kon_koff {
+            (take(&mut self.dsp.fade_in), take(&mut self.dsp.fade_out))
+        } else {
+            (0, 0)
+        };
+        if self.dsp.flags & 0x80 > 0 {
+            for channel in self.dsp.channels.iter_mut() {
+                channel.period = AdsrPeriod::Release;
+                channel.gain = 0;
+            }
+        }
+        let mut last_sample = 0;
+        let mut result = StereoSample::new(0i16);
+        for (i, channel) in self.dsp.channels.iter_mut().enumerate() {
+            if process_kon_koff {
+                if fade_out & (1 << i) > 0 {
+                    channel.period = AdsrPeriod::Release
+                } else if fade_in & (1 << i) > 0 {
+                    channel.data_addr = u16::from_le_bytes([
+                        self.mem[usize::from(channel.dir_addr)],
+                        self.mem[usize::from(channel.dir_addr.wrapping_add(1))],
+                    ]);
+                    channel.period = if channel.adsr[0] & 0x80 > 0 {
+                        AdsrPeriod::Attack
+                    } else {
+                        AdsrPeriod::Gain
+                    };
+                }
+            }
+            let step = if self.dsp.pitch_modulation & (1 << i) > 0 && i != 0 {
+                let factor = (last_sample >> 4) + 0x400;
+                ((i32::from(channel.pitch) * i32::from(factor)) >> 10) as u16
+            } else {
+                channel.pitch as u16
+            };
+            let (new_pitch_counter, ov) = channel.pitch_counter.overflowing_add(step);
+            channel.pitch_counter = new_pitch_counter;
+            if ov {
+                channel
+                    .decode_buffer
+                    .copy_within(DECODE_BUFFER_SIZE - 3..DECODE_BUFFER_SIZE, 0);
+                let header = self.mem[usize::from(channel.data_addr)];
+                for byte_id in 0..8 {
+                    let byte = self.mem[usize::from(channel.data_addr.wrapping_add(byte_id >> 1))];
+                    let index = byte_id << 1;
+                    use core::iter::once;
+                    for (nibble_id, sample) in once(byte >> 4).chain(once(byte & 0xf)).enumerate() {
+                        let sample = if sample & 8 > 0 {
+                            (sample | 0xf0) as i8
+                        } else {
+                            sample as i8
+                        };
+                        let sample = match header >> 4 {
+                            0 => i16::from(sample) >> 1,
+                            s @ 1..=12 => i16::from(sample) << (s - 1),
+                            13..=15 => todo!("what do values 13-15 mean? (stated as reserved)"),
+                            _ => unreachable!(),
+                        };
+                        let older = channel.decode_buffer[usize::from(index) + nibble_id + 1];
+                        let old = channel.decode_buffer[usize::from(index) + nibble_id + 2];
+                        let sample = match header & 0b1100 {
+                            0 => sample,
+                            0b0100 => sample.saturating_add(old).saturating_add(-old >> 4),
+                            0b1000 => sample
+                                .saturating_add(old)
+                                .saturating_add(old)
+                                .saturating_add((-old).saturating_mul(3) >> 5)
+                                .saturating_sub(older)
+                                .saturating_add(older >> 4),
+                            0b1100 => sample
+                                .saturating_add(old)
+                                .saturating_add(old)
+                                .saturating_add((-old).saturating_mul(13) >> 6)
+                                .saturating_sub(older)
+                                .saturating_add(older.saturating_mul(3) >> 4),
+                            _ => unreachable!(),
+                        };
+                        // this behaviour is documented by nocash FullSNES
+                        let sample = sample.clamp(-0x8000, 0x7fff);
+                        let sample = if sample > 0x3fff {
+                            -0x8000 + sample
+                        } else if sample < -0x4000 {
+                            -0x8000 - sample
+                        } else {
+                            sample
+                        };
+                        channel.decode_buffer[usize::from(index) + nibble_id + 3] = sample
+                    }
+                }
+            }
+            let interpolation_index = (channel.pitch_counter >> 4) & 0xff;
+            let brr_index = usize::from(channel.pitch_counter >> 12);
+            let sample = (GAUSS_INTERPOLATION_POINTS[usize::from(0xff - interpolation_index)]
+                * i32::from(channel.decode_buffer[brr_index]))
+                >> 10;
+            let sample = sample
+                + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x1ff - interpolation_index)]
+                    * i32::from(channel.decode_buffer[brr_index + 1]))
+                    >> 10);
+            let sample = sample
+                + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x100 + interpolation_index)]
+                    * i32::from(channel.decode_buffer[brr_index + 2]))
+                    >> 10);
+            let sample = sample
+                + ((GAUSS_INTERPOLATION_POINTS[usize::from(interpolation_index)]
+                    * i32::from(channel.decode_buffer[brr_index + 3]))
+                    >> 10);
+            let sample = (sample.clamp(-0x8000, 0x7fff) as i16) >> 1;
+            if let AdsrPeriod::Release = channel.period {
+                let (new_gain, ov) = channel.gain.overflowing_sub(8);
+                channel.gain = if ov || new_gain > 0x7ff { 0 } else { new_gain };
+            } else {
+                // `channel.period as usize` will always be < 4
+                let rate = channel.period_rate_map[channel.period as usize];
+                if channel.gain_mode & 0x80 == 0 && channel.adsr[0] & 0x80 == 0 {
+                    channel.gain = (channel.gain_mode & 0x7f).into()
+                } else if rate > 0 {
+                    channel.rate_index = channel.rate_index.wrapping_add(1);
+                    if channel.rate_index >= rate {
+                        channel.rate_index = 0;
+                        channel.update_gain(rate)
+                    }
+                }
+            }
+            debug_assert!(channel.gain < 0x800);
+            let sample = ((i32::from(sample) * i32::from(channel.gain)) >> 11) as i16;
+            channel.last_sample = sample;
+            last_sample = sample;
+            channel.vx_env = (channel.gain >> 4) as u8; // TODO: really `>> 4`?
+            channel.vx_out = (sample >> 7) as u8;
+            result = result.saturating_add32(
+                (StereoSample::new(i32::from(sample)) * channel.volume.to_i32()) >> 6,
+            );
+        }
+        let result = if self.dsp.flags & 0x40 > 0 {
+            StereoSample::new(0)
+        } else {
+            ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16()
+            // TODO: echo
+            // TODO: noise
+        };
+        if result.l != 0 || result.r != 0 {
+            println!("outputting sample {:?}", result);
+        }
+    }
+
+    pub fn run_cycle(&mut self) -> Cycles {
+        if self.dispatch_counter & 0x1f == 0 {
+            self.sound_cycle()
+        }
+        self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
+        self.dispatch_instruction()
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
