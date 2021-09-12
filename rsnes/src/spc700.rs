@@ -246,7 +246,7 @@ impl Channel {
     pub const fn new() -> Self {
         Self {
             volume: StereoSample::new2(0, 0),
-            pitch: 0x1000,
+            pitch: 0,
             source_number: 0,
             dir_addr: 0,
             data_addr: 0,
@@ -504,7 +504,7 @@ impl Spc700 {
                 3 => channel.pitch = (channel.pitch & 0xff) | (i16::from(val & 0x3f) << 8),
                 4 => {
                     channel.source_number = val;
-                    channel.dir_addr = self.dsp.source_dir_addr.wrapping_add(u16::from(val) << 4);
+                    channel.dir_addr = self.dsp.source_dir_addr.wrapping_add(u16::from(val) << 2);
                 }
                 5 => {
                     channel.adsr[0] = val;
@@ -548,7 +548,7 @@ impl Spc700 {
                         channel.dir_addr = self
                             .dsp
                             .source_dir_addr
-                            .wrapping_add(u16::from(channel.source_number) << 4)
+                            .wrapping_add(u16::from(channel.source_number) << 2)
                     }
                 }
                 0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
@@ -681,11 +681,14 @@ impl Spc700 {
                     .decode_buffer
                     .copy_within(DECODE_BUFFER_SIZE - 3..DECODE_BUFFER_SIZE, 0);
                 let header = self.mem[usize::from(channel.data_addr)];
-                for byte_id in 0..8 {
-                    let byte = self.mem[usize::from(channel.data_addr.wrapping_add(byte_id >> 1))];
+                channel.data_addr = channel.data_addr.wrapping_add(1);
+                for byte_id in 0usize..8 {
+                    let byte = self.mem[usize::from(channel.data_addr)];
+                    channel.data_addr = channel.data_addr.wrapping_add(1);
                     let index = byte_id << 1;
                     use core::iter::once;
                     for (nibble_id, sample) in once(byte >> 4).chain(once(byte & 0xf)).enumerate() {
+                        let index = index | nibble_id;
                         let sample = if sample & 8 > 0 {
                             (sample | 0xf0) as i8
                         } else {
@@ -697,8 +700,8 @@ impl Spc700 {
                             13..=15 => todo!("what do values 13-15 mean? (stated as reserved)"),
                             _ => unreachable!(),
                         };
-                        let older = channel.decode_buffer[usize::from(index) + nibble_id + 1];
-                        let old = channel.decode_buffer[usize::from(index) + nibble_id + 2];
+                        let older = channel.decode_buffer[index + 1];
+                        let old = channel.decode_buffer[index + 2];
                         let sample = match header & 0b1100 {
                             0 => sample,
                             0b0100 => sample.saturating_add(old).saturating_add(-old >> 4),
@@ -725,7 +728,7 @@ impl Spc700 {
                         } else {
                             sample
                         };
-                        channel.decode_buffer[usize::from(index) + nibble_id + 3] = sample
+                        channel.decode_buffer[index + 3] = sample
                     }
                 }
             }
