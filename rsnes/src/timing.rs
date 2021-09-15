@@ -8,14 +8,14 @@ use crate::device::{Addr24, Device};
 
 pub type Cycles = u32;
 
-// The SNES master clock runs at ca. (945/44) MHz which is ca. 21.477kHz;
+// The SNES master clock runs at ca. (945/44) MHz which is ca. 21_477kHz;
 // The APU runs at 1024kHz
 
 /// This is a fractional proportion between the cpu and apu clock speed
 const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
 
 /// This is a fractional proportion between the cpu and a 64kHz timer
-pub(crate) const CPU_64KHZ_TIMING_PROPORTION: (Cycles, Cycles) = (2816, 945);
+pub(crate) const CPU_64KHZ_TIMING_PROPORTION: (Cycles, Cycles) = (352, 118125);
 
 impl Device {
     pub fn run_cycle<const N: u16>(&mut self) {

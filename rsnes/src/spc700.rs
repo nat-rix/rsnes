@@ -222,7 +222,7 @@ impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
 pub struct Channel {
     volume: StereoSample<i8>,
     // pitch (corresponds to `pitch * 125/8 Hz`)
-    pitch: i16,
+    pitch: u16,
     source_number: u8,
     dir_addr: u16,
     data_addr: u16,
@@ -240,6 +240,8 @@ pub struct Channel {
     period: AdsrPeriod,
     period_rate_map: [u16; 4],
     rate_index: u16,
+    end_bit: bool,
+    loop_bit: bool,
 }
 
 impl Channel {
@@ -263,6 +265,8 @@ impl Channel {
             period: AdsrPeriod::Attack,
             period_rate_map: [0; 4],
             rate_index: 0,
+            end_bit: false,
+            loop_bit: false,
         }
     }
 
@@ -288,6 +292,11 @@ impl Channel {
             AdsrPeriod::Gain => todo!("gain mode"),
             AdsrPeriod::Release => panic!("`update_gain` must not be called in release mode"),
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.period = AdsrPeriod::Release;
+        self.gain = 0;
     }
 }
 
@@ -500,8 +509,8 @@ impl Spc700 {
             match rid {
                 0 => channel.volume.l = val as i8,
                 1 => channel.volume.r = val as i8,
-                2 => channel.pitch = (channel.pitch & 0x3f00) | i16::from(val),
-                3 => channel.pitch = (channel.pitch & 0xff) | (i16::from(val & 0x3f) << 8),
+                2 => channel.pitch = (channel.pitch & 0x3f00) | u16::from(val),
+                3 => channel.pitch = (channel.pitch & 0xff) | (u16::from(val & 0x3f) << 8),
                 4 => {
                     channel.source_number = val;
                     channel.dir_addr = self.dsp.source_dir_addr.wrapping_add(u16::from(val) << 2);
@@ -638,35 +647,34 @@ impl Spc700 {
     }
 
     pub fn sound_cycle(&mut self) {
-        let process_kon_koff = self.dispatch_counter & 0x3f == 0;
-        let (fade_in, fade_out) = if process_kon_koff {
-            (take(&mut self.dsp.fade_in), take(&mut self.dsp.fade_out))
+        let (fade_in, fade_out) = if self.dispatch_counter & 0x3f == 0 {
+            (take(&mut self.dsp.fade_in), self.dsp.fade_out)
         } else {
             (0, 0)
         };
         if self.dsp.flags & 0x80 > 0 {
             for channel in self.dsp.channels.iter_mut() {
-                channel.period = AdsrPeriod::Release;
-                channel.gain = 0;
+                channel.reset()
             }
         }
         let mut last_sample = 0;
         let mut result = StereoSample::new(0i16);
         for (i, channel) in self.dsp.channels.iter_mut().enumerate() {
-            if process_kon_koff {
-                if fade_out & (1 << i) > 0 {
-                    channel.period = AdsrPeriod::Release
-                } else if fade_in & (1 << i) > 0 {
-                    channel.data_addr = u16::from_le_bytes([
-                        self.mem[usize::from(channel.dir_addr)],
-                        self.mem[usize::from(channel.dir_addr.wrapping_add(1))],
-                    ]);
-                    channel.period = if channel.adsr[0] & 0x80 > 0 {
-                        AdsrPeriod::Attack
-                    } else {
-                        AdsrPeriod::Gain
-                    };
-                }
+            if fade_out & (1 << i) > 0 {
+                channel.period = AdsrPeriod::Release
+            } else if fade_in & (1 << i) > 0 {
+                channel.data_addr = u16::from_le_bytes([
+                    self.mem[usize::from(channel.dir_addr)],
+                    self.mem[usize::from(channel.dir_addr.wrapping_add(1))],
+                ]);
+                channel.loop_bit = false;
+                channel.end_bit = false;
+                channel.gain = 0;
+                channel.period = if channel.adsr[0] & 0x80 > 0 {
+                    AdsrPeriod::Attack
+                } else {
+                    AdsrPeriod::Gain
+                };
             }
             let step = if self.dsp.pitch_modulation & (1 << i) > 0 && i != 0 {
                 let factor = (last_sample >> 4) + 0x400;
@@ -677,10 +685,21 @@ impl Spc700 {
             let (new_pitch_counter, ov) = channel.pitch_counter.overflowing_add(step);
             channel.pitch_counter = new_pitch_counter;
             if ov {
+                if channel.end_bit {
+                    channel.data_addr = u16::from_le_bytes([
+                        self.mem[usize::from(channel.dir_addr.wrapping_add(2))],
+                        self.mem[usize::from(channel.dir_addr.wrapping_add(3))],
+                    ]);
+                    if !channel.loop_bit {
+                        channel.reset()
+                    }
+                }
                 channel
                     .decode_buffer
                     .copy_within(DECODE_BUFFER_SIZE - 3..DECODE_BUFFER_SIZE, 0);
                 let header = self.mem[usize::from(channel.data_addr)];
+                channel.end_bit = header & 1 > 0;
+                channel.loop_bit = header & 2 > 0;
                 channel.data_addr = channel.data_addr.wrapping_add(1);
                 for byte_id in 0usize..8 {
                     let byte = self.mem[usize::from(channel.data_addr)];
@@ -745,11 +764,12 @@ impl Spc700 {
                 + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x100 + interpolation_index)]
                     * i32::from(channel.decode_buffer[brr_index + 2]))
                     >> 10);
+            let sample = sample & 0xffff;
             let sample = sample
                 + ((GAUSS_INTERPOLATION_POINTS[usize::from(interpolation_index)]
                     * i32::from(channel.decode_buffer[brr_index + 3]))
                     >> 10);
-            let sample = (sample.clamp(-0x8000, 0x7fff) as i16) >> 1;
+            let sample = (sample.clamp(i16::MIN.into(), i16::MAX.into()) as i16) >> 1;
             if let AdsrPeriod::Release = channel.period {
                 let (new_gain, ov) = channel.gain.overflowing_sub(8);
                 channel.gain = if ov || new_gain > 0x7ff { 0 } else { new_gain };
@@ -789,11 +809,14 @@ impl Spc700 {
     }
 
     pub fn run_cycle(&mut self) -> Cycles {
-        if self.dispatch_counter & 0x1f == 0 {
-            self.sound_cycle()
+        let cycles = self.dispatch_instruction();
+        for _ in 0..cycles {
+            if self.dispatch_counter & 0x1f == 0 {
+                self.sound_cycle()
+            }
+            self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
         }
-        self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
-        self.dispatch_instruction()
+        cycles
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
