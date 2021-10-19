@@ -2,21 +2,23 @@ use crate::cpu::Status;
 use crate::device::{Addr24, Data, Device};
 use crate::timing::Cycles;
 
+// 0x80 BRA: the 2 instead of 3 cycles are on purpose.
+//           `branch_near` will increment the cycle count
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 0, 3, 0, 6,   3, 0, 2, 4, 0, 0, 0, 0,  // 0^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
-       6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 0, 0, 0, 4, 0, 0,  // 2^
+       6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 2, 0, 0, 4, 0, 0,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 0, 0, 0,  // 3^
-       0, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 4, 0, 0,  // 4^
+       6, 0, 0, 0, 0, 0, 0, 0,   3, 0, 2, 3, 3, 4, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 0, 3, 2, 4, 0, 0, 0,  // 5^
-       6, 0, 0, 0, 3, 3, 0, 0,   0, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       0, 0, 0, 0, 2, 0, 0, 0,   2, 4, 4, 4, 0, 4, 0, 0,  // 7^
-       3, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
+       6, 0, 0, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
+       2, 0, 0, 0, 4, 0, 0, 0,   2, 4, 4, 4, 0, 4, 0, 0,  // 7^
+       2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       2, 0, 5, 0, 0, 0, 0, 6,   0, 3, 0, 2, 4, 3, 4, 5,  // b^
+       2, 0, 5, 0, 0, 0, 0, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 3, 0, 6, 0, 0, 0,  // d^
        2, 0, 3, 0, 0, 0, 5, 0,   2, 2, 0, 3, 4, 0, 6, 0,  // e^
@@ -24,23 +26,23 @@ static CYCLES: [Cycles; 256] = [
 ];
 
 impl Device {
-    fn load_indexed_v(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
+    fn load_indexed_v<const B: bool>(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
         let loaded_addr = self.load::<u16>();
         let addr = loaded_addr.wrapping_add(val);
-        if self.cpu.is_idx8() || loaded_addr & 0xff00 != addr & 0xff00 {
+        if B && (!self.cpu.is_idx8() || loaded_addr & 0xff00 != addr & 0xff00) {
             *cycles += 1
         }
         self.cpu.get_data_addr(addr)
     }
 
     /// Absolute Indexed, X
-    pub fn load_indexed_x(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v(cycles, self.cpu.regs.x)
+    pub fn load_indexed_x<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v::<B>(cycles, self.cpu.regs.x)
     }
 
     /// Absolute Indexed, Y
-    pub fn load_indexed_y(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v(cycles, self.cpu.regs.y)
+    pub fn load_indexed_y<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v::<B>(cycles, self.cpu.regs.y)
     }
 
     /// DP Indirect
@@ -136,7 +138,15 @@ impl Device {
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
-        println!("<CPU> executing '{:02x}' @ {}", op, start_addr);
+        println!(
+            "<CPU> debug executing '{:02x}' @ {} | A{:04x}|X{:04x}|Y{:04x}|S{:02x}",
+            op,
+            start_addr,
+            self.cpu.regs.a,
+            self.cpu.regs.x,
+            self.cpu.regs.y,
+            self.cpu.regs.status.0,
+        );
         let mut cycles = CYCLES[op as usize];
         match op {
             0x02 => {
@@ -222,7 +232,7 @@ impl Device {
             }
             0x1d => {
                 // ORA - Or A with Absolute Indexed, X
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let val = self.read::<u8>(addr) | self.cpu.regs.a8();
                     self.cpu.regs.set_a8(val);
@@ -335,6 +345,7 @@ impl Device {
                 self.cpu.regs.pc.addr = self.pull();
                 if !self.cpu.regs.is_emulation {
                     self.cpu.regs.pc.bank = self.pull();
+                    cycles += 1
                 }
             }
             0x48 => {
@@ -525,7 +536,7 @@ impl Device {
             }
             0x79 => {
                 // ADC - Add with Carry Absolute Indexed, Y
-                let addr = self.load_indexed_y(&mut cycles);
+                let addr = self.load_indexed_y::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.add_carry8(op1);
@@ -549,7 +560,7 @@ impl Device {
             }
             0x7d => {
                 // ADC - Add with Carry
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.add_carry8(op1);
@@ -713,7 +724,7 @@ impl Device {
             }
             0x99 => {
                 // STA - Store A to absolute indexed Y
-                let addr = self.load_indexed_y(&mut cycles);
+                let addr = self.load_indexed_y::<false>(&mut cycles);
                 if self.cpu.is_reg8() {
                     self.write(addr, self.cpu.regs.a8());
                 } else {
@@ -743,7 +754,7 @@ impl Device {
             }
             0x9d => {
                 // STA - Store A to absolute indexed X
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<false>(&mut cycles);
                 if self.cpu.is_reg8() {
                     self.write(addr, self.cpu.regs.a8());
                 } else {
@@ -753,7 +764,7 @@ impl Device {
             }
             0x9e => {
                 // STZ - absoulte X indexed
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<false>(&mut cycles);
                 self.store_zero(addr, &mut cycles)
             }
             0x9f => {
@@ -850,16 +861,12 @@ impl Device {
             }
             0xa8 => {
                 // TAY - Transfer A to Y
-                if self.cpu.is_idx8() {
+                if self.cpu.is_idx8() || self.cpu.regs.is_emulation {
                     let y = self.cpu.regs.a8();
                     self.cpu.regs.set_y8(y);
                     self.cpu.update_nz8(y);
                 } else {
-                    self.cpu.regs.y = if self.cpu.is_reg8() {
-                        self.cpu.regs.a8().into()
-                    } else {
-                        self.cpu.regs.a
-                    };
+                    self.cpu.regs.y = self.cpu.regs.a;
                     self.cpu.update_nz16(self.cpu.regs.y);
                 }
             }
@@ -878,16 +885,12 @@ impl Device {
             }
             0xaa => {
                 // TAX - Transfer A to X
-                if self.cpu.is_idx8() {
+                if self.cpu.is_idx8() || self.cpu.regs.is_emulation {
                     let x = self.cpu.regs.a8();
                     self.cpu.regs.set_x8(x);
                     self.cpu.update_nz8(x);
                 } else {
-                    self.cpu.regs.x = if self.cpu.is_reg8() {
-                        self.cpu.regs.a8().into()
-                    } else {
-                        self.cpu.regs.a
-                    };
+                    self.cpu.regs.x = self.cpu.regs.a;
                     self.cpu.update_nz16(self.cpu.regs.x);
                 }
             }
@@ -975,7 +978,7 @@ impl Device {
             }
             0xb9 => {
                 // LDA - Load absolute indexed Y value to A
-                let addr = self.load_indexed_y(&mut cycles);
+                let addr = self.load_indexed_y::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let val = self.read(addr);
                     self.cpu.regs.set_a8(val);
@@ -998,8 +1001,8 @@ impl Device {
                 }
             }
             0xbc => {
-                // LDY - Load absolute indexed, X into Y
-                let addr = self.load_indexed_x(&mut cycles);
+                // LDY - Load indexed, X into Y
+                let addr = self.load_indexed_x::<true>(&mut cycles);
                 if self.cpu.is_idx8() {
                     let y = self.read::<u8>(addr);
                     self.cpu.update_nz8(y);
@@ -1013,7 +1016,7 @@ impl Device {
             }
             0xbd => {
                 // LDA - Load absolute indexed X value to A
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let val = self.read(addr);
                     self.cpu.regs.set_a8(val);
@@ -1026,7 +1029,7 @@ impl Device {
             }
             0xbe => {
                 // LDX - Load absolute indexed, Y into X
-                let addr = self.load_indexed_y(&mut cycles);
+                let addr = self.load_indexed_y::<true>(&mut cycles);
                 if self.cpu.is_idx8() {
                     let x = self.read::<u8>(addr);
                     self.cpu.update_nz8(x);
@@ -1304,7 +1307,7 @@ impl Device {
             }
             0xfd => {
                 // SBC - Subtract with carry
-                let addr = self.load_indexed_x(&mut cycles);
+                let addr = self.load_indexed_x::<true>(&mut cycles);
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.sub_carry8(op1);

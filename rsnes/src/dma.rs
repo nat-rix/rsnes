@@ -82,6 +82,7 @@ impl Channel {
 #[derive(Debug, Clone)]
 pub struct Dma {
     channels: [Channel; 8],
+    running: bool,
     dma_enabled: u8,
     hdma_enabled: u8,
     pub(crate) ahead_cycles: i32,
@@ -91,6 +92,7 @@ impl Dma {
     pub fn new() -> Self {
         Self {
             channels: [Channel::new(); 8],
+            running: false,
             dma_enabled: 0,
             hdma_enabled: 0,
             ahead_cycles: 0,
@@ -120,7 +122,7 @@ impl Dma {
     }
 
     pub const fn is_dma_running(&self) -> bool {
-        self.dma_enabled > 0
+        self.running
     }
 
     pub const fn is_hdma_running(&self) -> bool {
@@ -128,9 +130,11 @@ impl Dma {
     }
 
     pub fn enable_dma(&mut self, value: u8) {
+        let activated = value & !self.dma_enabled;
         self.dma_enabled = value;
-        if self.is_dma_running() {
-            self.ahead_cycles += 18 + self.dma_enabled.count_ones() as i32 * 8
+        self.running = self.dma_enabled > 0;
+        if activated > 0 {
+            self.ahead_cycles += 18 + activated.count_ones() as i32 * 8
         }
     }
 
@@ -214,6 +218,14 @@ impl Device {
         channel.size = channel.size.wrapping_sub(1);
         if channel.size == 0 {
             self.dma.dma_enabled &= !(1 << channel_id);
+        }
+    }
+
+    pub fn do_dma_first_channel(&mut self) {
+        if let Some(channel) = self.dma.get_first_dma_channel_id() {
+            self.do_dma(channel)
+        } else {
+            self.dma.running = false
         }
     }
 }

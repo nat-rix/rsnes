@@ -6,8 +6,8 @@
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
 //! - The first of the two official SNES documentation books
 
-use crate::timing::{Cycles, CPU_64KHZ_TIMING_PROPORTION as TIMING_PROPORTION};
-use core::{cell::Cell, mem::take};
+use crate::timing::{Cycles, APU_CPU_TIMING_PROPORTION};
+use core::{cell::Cell, iter::once, mem::take};
 
 pub const MEMORY_SIZE: usize = 64 * 1024;
 
@@ -105,15 +105,17 @@ const ADSR_GAIN_NOISE_RATES: [u16; 32] = calculate_gain_noise_rates();
 
 const DECODE_BUFFER_SIZE: usize = 3 + 16;
 
+// 0x2f BRA: the 2 instead of 4 cycles are on purpose.
+//           `branch_rel` will increment the cycle count
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 0, 4, 0, 0, 0, 0, 0,   2, 6, 0, 0, 0, 4, 0, 0,  // 0^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 0, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 4,  // 2^
+       2, 0, 4, 0, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 2,  // 2^
        2, 0, 4, 0, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 4, 0, 0,  // 4^
-       0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 0, 3,  // 5^
+       0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 0, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
        0, 0, 4, 0, 0, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 5, 2, 4, 5,  // 8^
@@ -235,7 +237,6 @@ pub struct Channel {
     unused: [u8; 3],
 
     decode_buffer: [i16; DECODE_BUFFER_SIZE],
-    last_sample: i16,
     pitch_counter: u16,
     period: AdsrPeriod,
     period_rate_map: [u16; 4],
@@ -260,7 +261,6 @@ impl Channel {
             sustain: 0,
             unused: [0; 3],
             decode_buffer: [0; DECODE_BUFFER_SIZE],
-            last_sample: 0,
             pitch_counter: 0,
             period: AdsrPeriod::Attack,
             period_rate_map: [0; 4],
@@ -358,12 +358,14 @@ pub struct Spc700 {
     pc: u16,
 
     cpu_time: Cycles,
-    timer_max: [u16; 3],
+    timer_max: [u8; 3],
     // internal timer ticks ALL in 64kHz
-    timers: [u16; 3],
+    timers: [u8; 3],
     timer_enable: u8,
     counters: [Cell<u8>; 3],
-    dispatch_counter: u8,
+    dispatch_counter: u16,
+    pub(crate) master_cycles: Cycles,
+    cycles_ahead: Cycles,
 }
 
 impl Spc700 {
@@ -393,6 +395,8 @@ impl Spc700 {
             timer_enable: 0,
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
             dispatch_counter: 0,
+            master_cycles: 0,
+            cycles_ahead: 7,
         }
     }
 
@@ -440,9 +444,10 @@ impl Spc700 {
                 if val & 0x20 > 0 {
                     self.input[2..4].fill(0)
                 }
+                let active = val & !self.timer_enable;
                 self.timer_enable = val & 7;
                 for i in 0..3 {
-                    if val & (1 << i) > 0 {
+                    if active & (1 << i) > 0 {
                         self.counters[i].set(0);
                         self.timers[i] = 0;
                     }
@@ -450,8 +455,7 @@ impl Spc700 {
             }
             0xf3 => self.write_dsp_register(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
-            0xfa | 0xfb => self.timer_max[usize::from(addr & 1)] = u16::from(val) << 3,
-            0xfc => self.timer_max[2] = val.into(),
+            0xfa | 0xfb | 0xfc => self.timer_max[usize::from(!addr & 3) ^ 1] = val,
             0xf8..=0xff => {
                 todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
             }
@@ -670,6 +674,7 @@ impl Spc700 {
                 channel.loop_bit = false;
                 channel.end_bit = false;
                 channel.gain = 0;
+                channel.decode_buffer.fill(0);
                 channel.period = if channel.adsr[0] & 0x80 > 0 {
                     AdsrPeriod::Attack
                 } else {
@@ -705,7 +710,6 @@ impl Spc700 {
                     let byte = self.mem[usize::from(channel.data_addr)];
                     channel.data_addr = channel.data_addr.wrapping_add(1);
                     let index = byte_id << 1;
-                    use core::iter::once;
                     for (nibble_id, sample) in once(byte >> 4).chain(once(byte & 0xf)).enumerate() {
                         let index = index | nibble_id;
                         let sample = if sample & 8 > 0 {
@@ -723,23 +727,25 @@ impl Spc700 {
                         let old = channel.decode_buffer[index + 2];
                         let sample = match header & 0b1100 {
                             0 => sample,
-                            0b0100 => sample.saturating_add(old).saturating_add(-old >> 4),
-                            0b1000 => sample
-                                .saturating_add(old)
-                                .saturating_add(old)
-                                .saturating_add((-old).saturating_mul(3) >> 5)
-                                .saturating_sub(older)
-                                .saturating_add(older >> 4),
-                            0b1100 => sample
-                                .saturating_add(old)
-                                .saturating_add(old)
-                                .saturating_add((-old).saturating_mul(13) >> 6)
-                                .saturating_sub(older)
-                                .saturating_add(older.saturating_mul(3) >> 4),
+                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4))
+                                .clamp(-0x8000, 0x7fff)
+                                as i16,
+                            0b1000 => (i32::from(sample)
+                                + i32::from(old) * 2
+                                + ((-3 * i32::from(old)) >> 5)
+                                - i32::from(older)
+                                + i32::from(older >> 4))
+                            .clamp(-0x8000, 0x7fff) as i16,
+                            0b1100 => (i32::from(sample)
+                                + i32::from(old) * 2
+                                + ((-13 * i32::from(old)) >> 6)
+                                - i32::from(older)
+                                + ((i32::from(older) * 3) >> 4))
+                                .clamp(-0x8000, 0x7fff)
+                                as i16,
                             _ => unreachable!(),
                         };
                         // this behaviour is documented by nocash FullSNES
-                        let sample = sample.clamp(-0x8000, 0x7fff);
                         let sample = if sample > 0x3fff {
                             -0x8000 + sample
                         } else if sample < -0x4000 {
@@ -764,7 +770,7 @@ impl Spc700 {
                 + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x100 + interpolation_index)]
                     * i32::from(channel.decode_buffer[brr_index + 2]))
                     >> 10);
-            let sample = sample & 0xffff;
+            let sample = i32::from((sample & 0xffff) as i16);
             let sample = sample
                 + ((GAUSS_INTERPOLATION_POINTS[usize::from(interpolation_index)]
                     * i32::from(channel.decode_buffer[brr_index + 3]))
@@ -788,7 +794,6 @@ impl Spc700 {
             }
             debug_assert!(channel.gain < 0x800);
             let sample = ((i32::from(sample) * i32::from(channel.gain)) >> 11) as i16;
-            channel.last_sample = sample;
             last_sample = sample;
             channel.vx_env = (channel.gain >> 4) as u8; // TODO: really `>> 4`?
             channel.vx_out = (sample >> 7) as u8;
@@ -803,26 +808,11 @@ impl Spc700 {
             // TODO: echo
             // TODO: noise
         };
-        if result.l != 0 || result.r != 0 {
-            println!("outputting sample {:?}", result);
-        }
-    }
-
-    pub fn run_cycle(&mut self) -> Cycles {
-        let cycles = self.dispatch_instruction();
-        for _ in 0..cycles {
-            if self.dispatch_counter & 0x1f == 0 {
-                self.sound_cycle()
-            }
-            self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
-        }
-        cycles
+        println!("outsample:{},{}", result.l, result.r);
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
-        let start_addr = self.pc;
         let op = self.load();
-        println!("<SPC700> executing '{:02x}' @ ${:04x}", op, start_addr);
         let mut cycles = CYCLES[op as usize];
         match op {
             0x00 => (), // NOP
@@ -1039,14 +1029,15 @@ impl Spc700 {
                 // ADDW - YA += (imm)[16-bit]
                 let addr = self.load();
                 let val = self.read16_small(addr);
-                let val = self.adc16(self.ya(), val);
+                let val = self.add16(self.ya(), val);
                 self.set_ya(val);
             }
             0x7c => {
                 // ROR - A >>= 1
-                self.set_status(self.a & 1 > 0, flags::CARRY);
-                self.a = ((self.a & 0xfe) | (self.status & flags::CARRY)).rotate_right(1);
-                self.update_nz8(self.a);
+                let new_a = (self.a >> 1) | ((self.status & flags::CARRY) << 7);
+                self.status = (self.status & 0xfe) | (self.a & flags::CARRY);
+                self.a = new_a;
+                self.update_nz8(new_a);
             }
             0x7d => {
                 // MOV - A := X
@@ -1133,9 +1124,9 @@ impl Spc700 {
                 // TODO: understand why this works and what exactly HALF_CARRY does
                 // This will probably work, because bsnes does this
                 self.set_status((self.x & 15) <= (self.y & 15), flags::HALF_CARRY);
-                self.update_nz8(self.a);
                 self.a = (rdiv & 0xff) as u8;
                 self.y = rmod;
+                self.update_nz8(self.a);
             }
             0x9f => {
                 // XCN - A := (A >> 4) | (A << 4)
@@ -1149,7 +1140,7 @@ impl Spc700 {
             0xa8 => {
                 // SBC - A -= imm + CARRY
                 let val = self.load();
-                self.a = self.adc(self.a, val);
+                self.a = self.adc(self.a, !val);
             }
             0xab => {
                 // INC - Increment (imm)
@@ -1453,6 +1444,18 @@ impl Spc700 {
         res
     }
 
+    pub fn add16(&mut self, a: u16, b: u16) -> u16 {
+        let (res, ov) = a.overflowing_add(b);
+        self.set_status(
+            (a & 0x8000 == b & 0x8000) && (b & 0x8000 != res & 0x8000),
+            flags::OVERFLOW,
+        );
+        self.set_status(((a & 0xfff) + (b & 0xfff)) > 0xffe, flags::HALF_CARRY);
+        self.set_status(ov, flags::CARRY);
+        self.update_nz16(res);
+        res
+    }
+
     pub fn adc16(&mut self, a: u16, b: u16) -> u16 {
         let c = u16::from(self.status & flags::CARRY);
         let (res, ov1) = a.overflowing_add(b);
@@ -1469,18 +1472,42 @@ impl Spc700 {
 
     /// Tick in main CPU master cycles
     pub fn tick(&mut self, n: u16) {
-        let delta = TIMING_PROPORTION.0.wrapping_mul(n.into());
-        self.cpu_time = self.cpu_time.wrapping_add(delta);
-        let div = self.cpu_time / TIMING_PROPORTION.1;
-        self.cpu_time -= div * TIMING_PROPORTION.1;
-        let div = (div & 0xff) as u8;
-        for i in 0..3 {
-            if self.timer_enable & (1 << i) > 0 {
-                self.timers[i] = self.timers[i].wrapping_add(div.into());
-                let div = self.timers[i].checked_div(self.timer_max[i]).unwrap_or(0);
-                self.timers[i] = self.timers[i].checked_rem(self.timer_max[i]).unwrap_or(0);
-                self.counters[i].set(self.counters[i].get().wrapping_add((div & 0xff) as u8) & 0xf);
+        self.master_cycles += Cycles::from(n) * APU_CPU_TIMING_PROPORTION.1;
+    }
+
+    pub fn refresh(&mut self) {
+        let cycles = self.master_cycles / APU_CPU_TIMING_PROPORTION.0;
+        self.master_cycles %= APU_CPU_TIMING_PROPORTION.0;
+        for _ in 0..cycles {
+            self.run_cycle();
+        }
+    }
+
+    pub fn update_timer(&mut self, i: usize) {
+        if self.timer_enable & (1 << i) > 0 {
+            self.timers[i] = self.timers[i].wrapping_add(1);
+            while self.timers[i] >= self.timer_max[i] {
+                self.timers[i] -= self.timer_max[i];
+                self.counters[i].set(self.counters[i].get().wrapping_add(1) & 0xf);
             }
         }
+    }
+
+    pub fn run_cycle(&mut self) {
+        if self.cycles_ahead == 0 {
+            self.cycles_ahead = self.dispatch_instruction().max(1);
+        }
+        self.cycles_ahead -= 1;
+        if self.dispatch_counter & 0xf == 0 {
+            if self.dispatch_counter & 0x1f == 0 {
+                self.sound_cycle();
+                if self.dispatch_counter & 0x7f == 0 {
+                    self.update_timer(0);
+                    self.update_timer(1);
+                }
+            }
+            self.update_timer(2);
+        }
+        self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
     }
 }

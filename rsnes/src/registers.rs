@@ -1,13 +1,18 @@
 use crate::device::Device;
 
+const CHIP_5A22_VERSION: u8 = 2;
+
 impl Device {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
             0x4210 => {
                 // NMI Flag & CPU version
                 // TODO: check if version 2 is appropriate
-                let version = 2;
-                Some(((self.nmi_vblank_bit.replace(false) as u8) << 7) | version)
+                Some(
+                    ((self.nmi_vblank_bit.replace(false) as u8) << 7)
+                        | CHIP_5A22_VERSION
+                        | (self.open_bus & 0x70),
+                )
             }
             0x4218..=0x421f => {
                 // JOYnL/JOYnH

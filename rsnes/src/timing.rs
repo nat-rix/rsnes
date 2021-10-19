@@ -12,13 +12,11 @@ pub type Cycles = u32;
 // The APU runs at 1024kHz
 
 /// This is a fractional proportion between the cpu and apu clock speed
-const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
-
-/// This is a fractional proportion between the cpu and a 64kHz timer
-pub(crate) const CPU_64KHZ_TIMING_PROPORTION: (Cycles, Cycles) = (352, 118125);
+pub(crate) const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
 
 impl Device {
     pub fn run_cycle<const N: u16>(&mut self) {
+        self.spc.tick(N);
         if self.new_frame {
             self.dma.reset_hdma();
         }
@@ -39,15 +37,14 @@ impl Device {
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
             assert!(!self.dma.is_hdma_running());
-            if self.dma.is_dma_running() && !self.dma.is_hdma_running() {
+            if self.dma.is_dma_running() {
                 if self.dma.ahead_cycles > 0 {
                     self.dma.ahead_cycles -= i32::from(N)
                 } else {
-                    let channel = self.dma.get_first_dma_channel_id().unwrap();
-                    self.do_dma(channel)
+                    self.do_dma_first_channel()
                 }
             } else {
-                self.run_cpu();
+                self.run_cpu::<N>();
             }
         }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
@@ -59,15 +56,13 @@ impl Device {
                     || (self.scanline_nr..self.scanline_nr).contains(&self.irq_time_v))
                 && (h_irq_enabled || !v_irq_enabled || (0..N).contains(&self.irq_time_h))
                 && (h_irq_enabled || v_irq_enabled);
-        self.nmi_vblank_bit
-            .set(self.cpu.nmitimen & 0x80 > 0 && self.new_scanline && self.scanline_nr == vend);
-        self.shall_nmi = self.shall_nmi || self.nmi_vblank_bit.get();
+        let do_nmi = self.new_scanline && self.scanline_nr == vend;
+        self.nmi_vblank_bit.set(self.nmi_vblank_bit.get() || do_nmi);
+        self.shall_nmi |= self.cpu.nmitimen & 0x80 > 0 && do_nmi;
         self.update_counters::<N>();
     }
 
     pub fn update_counters<const N: u16>(&mut self) {
-        self.cpu_ahead_cycles -= i32::from(N);
-        self.spc.tick(N);
         let old_scanline_cycle = self.scanline_cycle;
         self.scanline_cycle += N;
         if old_scanline_cycle < 1024 && self.scanline_cycle >= 1024 {
@@ -86,11 +81,12 @@ impl Device {
             if self.scanline_nr >= 262 {
                 self.scanline_nr -= 262;
                 self.new_frame = true;
+                self.spc.refresh();
             }
         }
     }
 
-    pub fn run_cpu(&mut self) {
+    pub fn run_cpu<const N: u16>(&mut self) {
         while self.cpu_ahead_cycles <= 0 {
             self.memory_cycles = 0;
             let cycles = (if self.shall_nmi {
@@ -104,20 +100,9 @@ impl Device {
                 // source: <https://wiki.superfamicom.org/memory-mapping>
                 self.dispatch_instruction() * 6
             }) + self.memory_cycles;
-            self.cpu_cycles += cycles;
             self.cpu_ahead_cycles += cycles as i32;
-            while self.apu_cycles * APU_CPU_TIMING_PROPORTION.0
-                < self.cpu_cycles * APU_CPU_TIMING_PROPORTION.1
-            {
-                self.apu_cycles += self.spc.run_cycle();
-                while self.cpu_cycles >= APU_CPU_TIMING_PROPORTION.0
-                    && self.apu_cycles >= APU_CPU_TIMING_PROPORTION.1
-                {
-                    self.cpu_cycles -= APU_CPU_TIMING_PROPORTION.0;
-                    self.apu_cycles -= APU_CPU_TIMING_PROPORTION.1;
-                }
-            }
         }
+        self.cpu_ahead_cycles -= i32::from(N);
     }
 
     pub const fn get_memory_cycle(&self, addr: Addr24) -> Cycles {

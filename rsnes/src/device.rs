@@ -91,7 +91,7 @@ impl Data for u16 {
         data[(index + 1) % data.len()] = y;
     }
     fn to_open_bus(self) -> u8 {
-        (self & 0xff) as u8
+        (self >> 8) as u8
     }
     fn from_open_bus(open_bus: u8) -> Self {
         open_bus as u16 | ((open_bus as u16) << 8)
@@ -118,7 +118,7 @@ impl Data for InverseU16 {
         data[(index + 1) % data.len()] = y;
     }
     fn to_open_bus(self) -> u8 {
-        (self.0 >> 8) as u8
+        (self.0 & 0xff) as u8
     }
     fn from_open_bus(open_bus: u8) -> Self {
         Self(open_bus as u16 | ((open_bus as u16) << 8))
@@ -167,9 +167,7 @@ pub struct Device {
     pub(crate) open_bus: u8,
     ram: [u8; RAM_SIZE],
     wram_addr: Cell<u32>,
-    pub(crate) cpu_cycles: Cycles,
     pub(crate) memory_cycles: Cycles,
-    pub(crate) apu_cycles: u32,
     /// Some people refer to this as H-Pos
     pub(crate) scanline_cycle: u16,
     /// Some people refer to this as V-Pos
@@ -198,12 +196,10 @@ impl Device {
             open_bus: 0,
             ram: [0; RAM_SIZE],
             wram_addr: Cell::new(0),
-            cpu_cycles: 0,
             memory_cycles: 0,
-            apu_cycles: 0,
             scanline_cycle: 0,
             scanline_nr: 0,
-            cpu_ahead_cycles: 0,
+            cpu_ahead_cycles: 52,
             new_scanline: true,
             new_frame: true,
             do_hdma: false,
@@ -296,19 +292,22 @@ impl Device {
         let addr = self.read(Addr24::new(0, vector));
         println!("interrupting into 00:{:04x}", addr);
         self.cpu.regs.pc.addr = addr;
-        8
+        48
     }
 }
 
 impl Device {
-    pub fn read_bus_b<D: Data>(&self, addr: u8) -> D {
+    pub fn read_bus_b<D: Data>(&mut self, addr: u8) -> D {
         let mut data = <D::Arr as Default>::default();
 
         for (i, d) in data.as_mut().iter_mut().enumerate() {
             let addr = addr.wrapping_add(i as u8);
             *d = match addr {
                 0x34..=0x3f => self.ppu.read_register(addr).unwrap_or(self.open_bus),
-                0x40..=0x43 => self.spc.output[(addr & 0b11) as usize],
+                0x40..=0x43 => {
+                    self.spc.refresh();
+                    self.spc.output[(addr & 0b11) as usize]
+                }
                 0x80 => {
                     let res = self.ram[self.wram_addr.get() as usize];
                     self.increment_wram_addr();
@@ -326,7 +325,7 @@ impl Device {
     ///
     /// This method does not modify open bus.
     /// The master cycles aren't touched either.
-    pub fn read_data<D: Data>(&self, addr: Addr24) -> D {
+    pub fn read_data<D: Data>(&mut self, addr: Addr24) -> D {
         if (0x7e..=0x7f).contains(&addr.bank) {
             // address bus A + /WRAM
             D::parse(
@@ -387,7 +386,10 @@ impl Device {
             let addr = addr.wrapping_add(i as u8);
             match addr {
                 0x00..=0x33 => self.ppu.write_register(addr, *d),
-                0x40..=0x43 => self.spc.input[(addr & 0b11) as usize] = *d,
+                0x40..=0x43 => {
+                    self.spc.refresh();
+                    self.spc.input[(addr & 0b11) as usize] = *d
+                }
                 0x80 => {
                     self.ram[(self.wram_addr.get() & 0x1ffff) as usize] = *d;
                     self.increment_wram_addr();
