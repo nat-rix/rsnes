@@ -18,7 +18,7 @@ static CYCLES: [Cycles; 256] = [
        2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 0, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       2, 0, 5, 0, 0, 4, 0, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
+       2, 5, 5, 0, 0, 4, 0, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
        2, 0, 3, 0, 0, 3, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 3, 0, 6, 4, 0, 5,  // d^
        2, 0, 3, 0, 0, 3, 5, 0,   2, 2, 0, 3, 4, 4, 6, 0,  // e^
@@ -37,12 +37,26 @@ impl Device {
 
     /// Absolute Indexed, X
     pub fn load_indexed_x<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v::<B>(cycles, self.cpu.regs.x)
+        self.load_indexed_v::<B>(
+            cycles,
+            if self.cpu.is_idx8() {
+                self.cpu.regs.x & 0xff
+            } else {
+                self.cpu.regs.x
+            },
+        )
     }
 
     /// Absolute Indexed, Y
     pub fn load_indexed_y<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v::<B>(cycles, self.cpu.regs.y)
+        self.load_indexed_v::<B>(
+            cycles,
+            if self.cpu.is_idx8() {
+                self.cpu.regs.y & 0xff
+            } else {
+                self.cpu.regs.y
+            },
+        )
     }
 
     /// DP Indirect
@@ -135,6 +149,26 @@ impl Device {
         } else {
             Addr24::new(addr.bank, new_addr)
         }
+    }
+
+    /// DP Indirect Indexed, Y
+    pub fn load_indirect_indexed_y<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+        let addr = u16::from(self.load::<u8>());
+        if self.cpu.regs.dp & 0xff > 0 {
+            *cycles += 1
+        }
+        let addr = addr.wrapping_add(self.cpu.regs.dp).wrapping_add(1);
+        let addr = self.read::<u16>(Addr24::new(0, addr));
+        let y = if self.cpu.is_idx8() {
+            self.cpu.regs.y & 0xff
+        } else {
+            self.cpu.regs.y
+        };
+        let new_addr = addr.wrapping_add(y);
+        if B && (!self.cpu.is_idx8() || new_addr & 0xff00 != addr & 0xff00) {
+            *cycles += 1
+        }
+        self.cpu.get_data_addr(new_addr)
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
@@ -434,7 +468,7 @@ impl Device {
                 }
             }
             0x49 => {
-                // EOR - Or A with immediate value
+                // EOR - XOR A with immediate value
                 if self.cpu.is_reg8() {
                     let val = self.load::<u8>() ^ self.cpu.regs.a8();
                     self.cpu.regs.set_a8(val);
@@ -1061,6 +1095,20 @@ impl Device {
             0xb0 => {
                 // BCS/BGE - Branch if carry set
                 self.branch_near(self.cpu.regs.status.has(Status::CARRY), &mut cycles)
+            }
+            0xb1 => {
+                // LDA - Load DP Indirect Indexed, Y value to A
+                let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.update_nz8(val);
+                    self.cpu.regs.set_a8(val)
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.update_nz16(val);
+                    self.cpu.regs.a = val;
+                    cycles += 1;
+                }
             }
             0xb2 => {
                 // LDA - Load DP indirect value to A
