@@ -114,7 +114,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 0, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 2,  // 2^
        2, 0, 4, 0, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 4, 0, 4, 0, 0,  // 4^
+       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 0, 4, 0, 0,  // 4^
        0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 0, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
        0, 0, 4, 0, 0, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
@@ -123,9 +123,9 @@ static CYCLES: [Cycles; 256] = [
        3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
        2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 4,  // b^
        3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 4, 0, 5, 6, 0, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 4, 0, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
        2, 0, 4, 0, 3, 4, 3, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
-       2, 0, 4, 0, 4, 5, 5, 0,   0, 0, 0, 0, 2, 2, 0, 0,  // f^
+       2, 0, 4, 0, 4, 5, 5, 6,   0, 0, 0, 0, 2, 2, 4, 0,  // f^
 ];
 
 const F0_RESET: u8 = 0x80;
@@ -930,6 +930,11 @@ impl Spc700 {
                 // SETP - Set ZERO_PAGE
                 self.status |= flags::ZERO_PAGE
             }
+            0x48 => {
+                // EOR - A := A ^ imm
+                self.a ^= self.load();
+                self.update_nz8(self.a)
+            }
             0x4b => {
                 // LSR - (imm) >>= 1
                 let addr = self.load();
@@ -1267,6 +1272,11 @@ impl Spc700 {
                 let addr = self.load16().wrapping_add(self.x.into());
                 self.write(addr, self.a)
             }
+            0xd6 => {
+                // MOV - (imm[16-bit]+Y) := A
+                let addr = self.load16().wrapping_add(self.y.into());
+                self.write(addr, self.a)
+            }
             0xd7 => {
                 // MOV - ((db)[16-bit] + Y) := A
                 let addr = self.load();
@@ -1381,6 +1391,12 @@ impl Spc700 {
                 self.a = self.read(addr);
                 self.update_nz8(self.a);
             }
+            0xf7 => {
+                // MOV - A := ((imm)[16-bit]+Y)
+                let addr = self.read16_small(self.a).wrapping_add(self.y.into());
+                self.a = self.read(addr);
+                self.update_nz8(self.a);
+            }
             0xfc => {
                 // INC - Y
                 self.y = self.y.wrapping_add(1);
@@ -1390,6 +1406,12 @@ impl Spc700 {
                 // MOV - Y := A
                 self.y = self.a;
                 self.update_nz8(self.y)
+            }
+            0xfe => {
+                // DBNZ - Y--; JNZ
+                self.y = self.y.wrapping_sub(1);
+                let rel = self.load();
+                self.branch_rel(rel, self.y > 0, &mut cycles)
             }
             _ => todo!("not yet implemented SPC700 instruction 0x{:02x}", op),
         }
