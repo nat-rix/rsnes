@@ -182,6 +182,7 @@ pub struct Device {
     pub(crate) shall_irq: bool,
     pub(crate) shall_nmi: bool,
     pub(crate) nmi_vblank_bit: Cell<bool>,
+    pub(crate) irq_bit: Cell<u8>,
 }
 
 impl Device {
@@ -208,6 +209,7 @@ impl Device {
             shall_irq: false,
             shall_nmi: false,
             nmi_vblank_bit: Cell::new(false),
+            irq_bit: Cell::new(0),
         }
     }
 
@@ -277,6 +279,7 @@ impl Device {
     }
 
     pub fn irq(&mut self) -> u32 {
+        self.irq_bit.set(0x80);
         self.interrupt(0xffee)
     }
 

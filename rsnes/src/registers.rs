@@ -14,6 +14,10 @@ impl Device {
                         | (self.open_bus & 0x70),
                 )
             }
+            0x4211 => {
+                // TIMEUP - The IRQ flag
+                Some(self.irq_bit.take() | (self.open_bus & 0x7f))
+            }
             0x4218..=0x421f => {
                 // JOYnL/JOYnH
                 Some(self.controllers.access(id))
@@ -50,6 +54,22 @@ impl Device {
                 if self.controllers.set_pio(val) {
                     // TODO: latch ppu counters
                 }
+            }
+            0x4207 => {
+                // HTIMEL
+                self.irq_time_h = (self.irq_time_h & 0x100) | u16::from(val)
+            }
+            0x4208 => {
+                // HTIMEH
+                self.irq_time_h = (self.irq_time_h & 0xff) | (u16::from(val & 1) << 8)
+            }
+            0x4209 => {
+                // VTIMEL
+                self.irq_time_v = (self.irq_time_v & 0x100) | u16::from(val)
+            }
+            0x420a => {
+                // VTIMEH
+                self.irq_time_v = (self.irq_time_v & 0xff) | (u16::from(val & 1) << 8)
             }
             0x420b => {
                 // MDMAEN - DMA Enable
