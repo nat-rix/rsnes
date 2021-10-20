@@ -32,7 +32,9 @@ impl Controller {
     }
 
     pub fn poll_bit_data2(&self) -> bool {
-        false
+        match self {
+            Self::None | Self::Standard(_) => false,
+        }
     }
 
     pub fn on_strobe(&mut self) {

@@ -5,6 +5,14 @@ const CHIP_5A22_VERSION: u8 = 2;
 impl Device {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
+            0x4016 => {
+                // JOYSER0 - NES-style Joypad access
+                Some(self.controllers.port1.read_port_data())
+            }
+            0x4017 => {
+                // JOYSER1 - NES-style Joypad access
+                Some(self.controllers.port2.read_port_data())
+            }
             0x4210 => {
                 // NMI Flag & CPU version
                 // TODO: check if version 2 is appropriate
