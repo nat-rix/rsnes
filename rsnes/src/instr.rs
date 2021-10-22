@@ -8,11 +8,11 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
-       2, 0, 0, 0, 5, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
+       2, 0, 0, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 0, 0,  // 1^
        6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 5,  // 3^
        6, 0, 0, 0, 0, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
-       0, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 0, 0, 0,  // 5^
+       2, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
        2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 0, 5,  // 7^
        2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
@@ -363,6 +363,19 @@ impl Device {
                 // CLC - Clear the Carry Flag
                 self.cpu.regs.status &= !Status::CARRY;
             }
+            0x19 => {
+                // ORA - Or A with Absolute Indexed, Y
+                let addr = self.load_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) | self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a |= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x1a => {
                 // INC/INA - Increment A
                 if self.cpu.is_reg8() {
@@ -641,6 +654,10 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
                 }
+            }
+            0x50 => {
+                // BVC - Branch if Overflow is set
+                self.branch_near(!self.cpu.regs.status.has(Status::OVERFLOW), &mut cycles)
             }
             0x54 => {
                 // MVN - Block Move Negative
