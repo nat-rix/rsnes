@@ -7,21 +7,21 @@ use crate::timing::Cycles;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 7, 0, 0, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
-       6, 0, 8, 0, 0, 3, 0, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 0, 0, 5,  // 3^
-       6, 0, 0, 0, 0, 3, 0, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
+       0, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
+       2, 0, 0, 0, 5, 0, 0, 0,   2, 0, 2, 2, 0, 4, 0, 0,  // 1^
+       6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 5,  // 3^
+       6, 0, 0, 0, 0, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        0, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       2, 0, 0, 0, 4, 0, 0, 0,   2, 4, 4, 4, 0, 4, 0, 5,  // 7^
+       2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 0, 5,  // 7^
        2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 0, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
-       2, 5, 5, 0, 0, 4, 4, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
+       2, 5, 5, 0, 4, 4, 4, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
        2, 0, 3, 0, 0, 3, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
-       2, 0, 3, 0, 0, 3, 5, 0,   2, 2, 0, 3, 4, 4, 6, 0,  // e^
+       2, 0, 0, 0, 0, 4, 0, 0,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
+       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 0, 3, 4, 4, 6, 0,  // e^
        2, 0, 0, 0, 0, 4, 0, 0,   2, 4, 4, 2, 0, 4, 7, 0,  // f^
 ];
 
@@ -210,6 +210,22 @@ impl Device {
                 }
                 todo!("COP instruction")
             }
+            0x04 => {
+                // TSB - Test and set Bits from Direct Page in A
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let a = self.cpu.regs.a8();
+                    self.cpu.regs.status.set_if(Status::ZERO, a & val == 0);
+                    self.write(addr, val | a)
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let a = self.cpu.regs.a;
+                    self.cpu.regs.status.set_if(Status::ZERO, a & val == 0);
+                    self.write(addr, val | a);
+                    cycles += 2
+                }
+            }
             0x05 => {
                 // ORA - Or A with direct page
                 let addr = self.load_direct(&mut cycles);
@@ -327,6 +343,22 @@ impl Device {
                 // BPL - Branch if Plus
                 self.branch_near(!self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
             }
+            0x14 => {
+                // TRB - Test and Reset Bits from Direct Page in A
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let a = self.cpu.regs.a8();
+                    self.cpu.regs.status.set_if(Status::ZERO, a & val == 0);
+                    self.write(addr, val & !a)
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let a = self.cpu.regs.a;
+                    self.cpu.regs.status.set_if(Status::ZERO, a & val == 0);
+                    self.write(addr, val & !a);
+                    cycles += 2
+                }
+            }
             0x18 => {
                 // CLC - Clear the Carry Flag
                 self.cpu.regs.status &= !Status::CARRY;
@@ -372,6 +404,11 @@ impl Device {
                 let new_addr = self.load::<Addr24>();
                 self.cpu.regs.pc = new_addr;
             }
+            0x24 => {
+                // BIT - Test Bit from absolute index
+                let addr = self.load_direct(&mut cycles);
+                self.test_bit(addr, &mut cycles)
+            }
             0x25 => {
                 // AND - And A with direct page
                 let addr = self.load_direct(&mut cycles);
@@ -383,6 +420,24 @@ impl Device {
                     self.cpu.regs.a &= self.read::<u16>(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0x26 => {
+                // ROL - Rotate Direct Page left
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
+                    self.cpu.update_nz8(res);
+                    self.write(addr, res);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let res = self.cpu.regs.status.has(Status::CARRY) as u16 | (val << 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x8000 > 0);
+                    self.cpu.update_nz16(res);
+                    self.write(addr, res);
+                    cycles += 2
                 }
             }
             0x28 => {
@@ -416,7 +471,7 @@ impl Device {
                     self.cpu
                         .regs
                         .status
-                        .set_if(Status::CARRY, self.cpu.regs.a & 0x80 > 0);
+                        .set_if(Status::CARRY, self.cpu.regs.a & 0x8000 > 0);
                     self.cpu.update_nz16(res);
                     self.cpu.regs.a = res;
                 }
@@ -459,6 +514,19 @@ impl Device {
                     self.cpu.update_nz16(self.cpu.regs.a)
                 }
             }
+            0x3d => {
+                // AND - And A with Absolute Indexed, X
+                let addr = self.load_indexed_x::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x3f => {
                 // AND - And A with Absolute Long Indexed, X
                 let addr = self.load_long_indexed_x();
@@ -494,6 +562,24 @@ impl Device {
                     self.cpu.regs.a ^= self.read::<u16>(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0x46 => {
+                // LSR - SHR on Direct Page
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
                 }
             }
             0x48 => {
@@ -703,6 +789,18 @@ impl Device {
                 // STZ - Store Zero to DP X indexed memory
                 let addr = self.load_dp_indexed_x(&mut cycles);
                 self.store_zero(addr, &mut cycles)
+            }
+            0x75 => {
+                // ADC - Add with Carry DP Indexed, X
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
@@ -1172,6 +1270,20 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xb4 => {
+                // LDY - Load DP Indexed, X into Y
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let y = self.read::<u8>(addr);
+                    self.cpu.update_nz8(y);
+                    self.cpu.regs.set_y8(y);
+                } else {
+                    let y = self.read::<u16>(addr);
+                    self.cpu.update_nz16(y);
+                    self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
             0xb5 => {
                 // LDA - Load DP Indexed, X into A
                 let addr = self.load_dp_indexed_x(&mut cycles);
@@ -1418,6 +1530,19 @@ impl Device {
                 // BNE - Branch if Zero Flag Clear
                 self.branch_near(!self.cpu.regs.status.has(Status::ZERO), &mut cycles)
             }
+            0xd5 => {
+                // CMP - Compare A with DP Indexed, X
+                // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.compare8(self.cpu.regs.a8(), val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.compare16(self.cpu.regs.a, val);
+                    cycles += 1
+                }
+            }
             0xd8 => {
                 // CLD - Clear Decimal Flag
                 self.cpu.regs.status &= !Status::DECIMAL
@@ -1507,6 +1632,19 @@ impl Device {
                 let mask = Status(self.load::<u8>());
                 self.cpu.regs.status |= mask;
                 self.cpu.update_status();
+            }
+            0xe4 => {
+                // CPX - Compare X with Direct Page
+                // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let val = self.read::<u8>(addr);
+                    self.compare8(self.cpu.regs.x8(), val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.compare16(self.cpu.regs.x, val);
+                    cycles += 1
+                }
             }
             0xe5 => {
                 // SBC - Subtract Direct Page with carry
