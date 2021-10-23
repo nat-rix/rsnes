@@ -7,11 +7,11 @@ impl Device {
         match id {
             0x4016 => {
                 // JOYSER0 - NES-style Joypad access
-                Some(self.controllers.port1.read_port_data())
+                Some(self.controllers.port1.read_port_data() | (self.open_bus & 0xfc))
             }
             0x4017 => {
                 // JOYSER1 - NES-style Joypad access
-                Some(self.controllers.port2.read_port_data())
+                Some(self.controllers.port2.read_port_data() | 0b11100 | (self.open_bus & 0xfc))
             }
             0x4210 => {
                 // NMI Flag & CPU version
