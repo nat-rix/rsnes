@@ -193,7 +193,6 @@ impl Device {
         // Maybe FIXED mode writes always the same data even if two reads
         // would result in different data
         let channel = self.dma.channels.get(channel_id).unwrap();
-        println!("doing dma at channel {}: {:#?}", channel_id, channel);
         let offsets: &[u8] = match channel.control & flags::MODE {
             0b000 => &[0],
             0b001 => &[0, 1],
@@ -203,21 +202,25 @@ impl Device {
             0b101 => &[0, 1, 0, 1],
             0b1000..=u8::MAX => unreachable!(),
         };
-        for i in offsets {
-            self.transfer_dma_byte(channel_id, *i);
-            self.dma.ahead_cycles += 8
-        }
-        let channel = self.dma.channels.get_mut(channel_id).unwrap();
-        if channel.control & flags::FIEXD == 0 {
+        let delta = if channel.control & flags::FIEXD == 0 {
             if channel.control & flags::DECREMENT > 0 {
-                channel.a_bus.addr = channel.a_bus.addr.wrapping_sub(1)
+                u16::MAX
             } else {
-                channel.a_bus.addr = channel.a_bus.addr.wrapping_add(1)
+                1
             }
-        }
-        channel.size = channel.size.wrapping_sub(1);
-        if channel.size == 0 {
-            self.dma.dma_enabled &= !(1 << channel_id);
+        } else {
+            0
+        };
+        for &i in offsets {
+            self.transfer_dma_byte(channel_id, i);
+            let channel = self.dma.channels.get_mut(channel_id).unwrap();
+            channel.a_bus.addr = channel.a_bus.addr.wrapping_add(delta);
+            channel.size = channel.size.wrapping_sub(1);
+            self.dma.ahead_cycles += 6;
+            if channel.size == 0 {
+                self.dma.dma_enabled &= !(1 << channel_id);
+                break;
+            }
         }
     }
 
