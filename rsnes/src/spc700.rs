@@ -110,22 +110,22 @@ const DECODE_BUFFER_SIZE: usize = 3 + 16;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 0, 0, 0, 0, 0,   2, 6, 0, 0, 0, 4, 0, 0,  // 0^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 0, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 2,  // 2^
-       2, 0, 4, 0, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 0, 4, 0, 0,  // 4^
-       0, 0, 4, 0, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
-       2, 0, 4, 0, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
-       0, 0, 4, 0, 0, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
-       2, 0, 4, 0, 3, 0, 0, 0,   0, 0, 0, 4, 5, 2, 4, 5,  // 8^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2,12, 5,  // 9^
-       3, 0, 4, 0, 0, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
-       2, 0, 4, 0, 0, 0, 0, 0,   0, 0, 5, 0, 2, 2, 0, 4,  // b^
-       3, 0, 4, 0, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 4, 0, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 0, 3, 4, 3, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
-       2, 0, 4, 0, 4, 5, 5, 6,   0, 0, 0, 0, 2, 2, 4, 0,  // f^
+       2, 0, 4, 5, 0, 0, 0, 0,   2, 6, 0, 4, 0, 4, 0, 0,  // 0^
+       2, 0, 4, 5, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 0, 2,  // 2^
+       2, 0, 4, 5, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
+       2, 0, 4, 5, 0, 0, 0, 0,   2, 0, 0, 4, 0, 4, 0, 0,  // 4^
+       0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
+       2, 0, 4, 5, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
+       0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
+       2, 0, 4, 5, 3, 4, 0, 0,   0, 0, 0, 4, 5, 2, 4, 5,  // 8^
+       2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2,12, 5,  // 9^
+       3, 0, 4, 5, 0, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
+       2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
+       3, 0, 4, 5, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
+       2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 4, 5, 3, 4, 3, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 4, 5, 4, 5, 5, 6,   3, 4, 0, 4, 2, 2, 4, 0,  // f^
 ];
 
 const F0_RESET: u8 = 0x80;
@@ -828,6 +828,14 @@ impl Spc700 {
                 let addr = self.get_small(addr);
                 self.write(addr, self.read(addr) & !(1 << (op >> 5)))
             }
+            0x03 | 0x23 | 0x43 | 0x63 | 0x83 | 0xa3 | 0xc3 | 0xe3 | 0x13 | 0x33 | 0x53 | 0x73
+            | 0x93 | 0xb3 | 0xd3 | 0xf3 => {
+                // Branch if bit set/cleared
+                let addr = self.load();
+                let val = self.read_small(addr);
+                let rel = self.load();
+                self.branch_rel(rel, ((val >> (op >> 5)) ^ (op >> 4)) & 1 == 1, &mut cycles);
+            }
             0x08 => {
                 // OR - A |= imm
                 self.a |= self.load();
@@ -837,7 +845,19 @@ impl Spc700 {
                 // OR - (imm) |= (imm)
                 let (src, dst) = (self.load(), self.load());
                 let dst = self.get_small(dst);
-                self.write(dst, self.read_small(src) | self.read(dst))
+                let val = self.read_small(src) | self.read(dst);
+                self.write(dst, val);
+                self.update_nz8(val);
+            }
+            0x0b => {
+                // ASL - (imm) <<= 1
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let mut val = self.read(addr);
+                self.set_status(val >= 0x80, flags::CARRY);
+                val <<= 1;
+                self.write(addr, val);
+                self.update_nz8(val)
             }
             0x0d => {
                 // PUSH - status
@@ -1012,6 +1032,12 @@ impl Spc700 {
                 // RET - Return from subroutine
                 self.pc = self.pull16()
             }
+            0x74 => {
+                // CMP - A - (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                let val = self.read_small(addr);
+                self.compare(self.a, val)
+            }
             0x75 => {
                 // CMP - A - (imm[16-bit]+X)
                 let addr = self.load16().wrapping_add(self.x.into());
@@ -1064,6 +1090,12 @@ impl Spc700 {
                 let val = self.read_small(addr);
                 self.a = self.adc(self.a, val)
             }
+            0x85 => {
+                // ADC - A += (imm[16-bit]) + CARRY
+                let addr = self.load16();
+                let val = self.read(addr);
+                self.a = self.adc(self.a, val)
+            }
             0x8b => {
                 // DEC - Decrement (imm)
                 let addr = self.load();
@@ -1098,12 +1130,31 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::CARRY == 0, &mut cycles)
             }
+            0x95 => {
+                // ADC - A -= (imm16 + X) + CARRY
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.a = self.adc(self.a, self.read(addr));
+            }
+            0x96 => {
+                // ADC - A -= (imm16 + Y) + CARRY
+                let addr = self.load16().wrapping_add(self.y.into());
+                self.a = self.adc(self.a, self.read(addr));
+            }
             0x9a => {
                 // SUBW - YA -= (imm)[16-bit]
                 let addr = self.load();
                 let val = self.read16_small(addr);
+                self.status |= flags::CARRY;
                 let val = self.adc16(self.ya(), !val);
                 self.set_ya(val);
+            }
+            0x9b => {
+                // DEC - (imm+X)[16-bit]--
+                let addr = self.load().wrapping_add(self.x);
+                let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_sub(1);
+                self.write(addr, val);
+                self.update_nz8(val);
             }
             0x9c => {
                 // DEC - A
@@ -1181,6 +1232,16 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::CARRY > 0, &mut cycles)
             }
+            0xb5 => {
+                // SBC - A -= (imm16 + X) + CARRY
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.a = self.adc(self.a, !self.read(addr));
+            }
+            0xb6 => {
+                // SBC - A -= (imm16 + Y) + CARRY
+                let addr = self.load16().wrapping_add(self.y.into());
+                self.a = self.adc(self.a, !self.read(addr));
+            }
             0xba => {
                 // MOVW - YA := (imm)[16-bit]
                 let addr = self.load();
@@ -1189,6 +1250,14 @@ impl Spc700 {
                 self.a = a;
                 self.y = y;
                 self.update_nz16(value);
+            }
+            0xbb => {
+                // INC - (imm + X)++
+                let addr = self.load().wrapping_add(self.x);
+                let addr = self.get_small(addr);
+                let val = self.read(addr).wrapping_add(1);
+                self.write(addr, val);
+                self.update_nz8(val);
             }
             0xbc => {
                 // INC - A
@@ -1393,9 +1462,28 @@ impl Spc700 {
             }
             0xf7 => {
                 // MOV - A := ((imm)[16-bit]+Y)
-                let addr = self.read16_small(self.a).wrapping_add(self.y.into());
+                let addr = self.load();
+                let addr = self.read16_small(addr).wrapping_add(self.y.into());
                 self.a = self.read(addr);
                 self.update_nz8(self.a);
+            }
+            0xf8 => {
+                // MOV - X := (imm)
+                let addr = self.load();
+                self.x = self.read_small(addr);
+                self.update_nz8(self.x);
+            }
+            0xf9 => {
+                // MOV - X := (imm+Y)
+                let addr = self.load().wrapping_add(self.y);
+                self.x = self.read_small(addr);
+                self.update_nz8(self.x);
+            }
+            0xfb => {
+                // MOV - Y := (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                self.y = self.read_small(addr);
+                self.update_nz8(self.y);
             }
             0xfc => {
                 // INC - Y
