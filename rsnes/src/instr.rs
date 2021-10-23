@@ -11,7 +11,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 0, 0,  // 1^
        6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 5,  // 3^
-       6, 0, 0, 0, 0, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
+       6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        2, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 0, 0, 0,  // 5^
        6, 0, 0, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
        2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 0, 5,  // 7^
@@ -564,6 +564,10 @@ impl Device {
                     cycles += 1
                 }
             }
+            0x44 => {
+                // MVP - Block Move Positive
+                self.block_move::<0xffff>()
+            }
             0x45 => {
                 // EOR - XOR DP on A
                 let addr = self.load_direct(&mut cycles);
@@ -661,26 +665,7 @@ impl Device {
             }
             0x54 => {
                 // MVN - Block Move Negative
-                let [dst, src] = self.load::<u16>().to_bytes();
-                if self.cpu.is_idx8() || self.cpu.regs.is_emulation {
-                    while self.cpu.regs.a < 0xffff {
-                        let val = self.read::<u8>(Addr24::new(src, self.cpu.regs.x & 0xff));
-                        self.write::<u8>(Addr24::new(dst, self.cpu.regs.y & 0xff), val);
-                        self.cpu.regs.set_x8(self.cpu.regs.x8().wrapping_add(1));
-                        self.cpu.regs.set_y8(self.cpu.regs.y8().wrapping_add(1));
-                        self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
-                        cycles += 7
-                    }
-                } else {
-                    while self.cpu.regs.a < 0xffff {
-                        let val = self.read::<u8>(Addr24::new(src, self.cpu.regs.x));
-                        self.write::<u8>(Addr24::new(dst, self.cpu.regs.y), val);
-                        self.cpu.regs.x = self.cpu.regs.x.wrapping_add(1);
-                        self.cpu.regs.y = self.cpu.regs.y.wrapping_add(1);
-                        self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
-                        cycles += 7
-                    }
-                }
+                self.block_move::<1>()
             }
             0x58 => {
                 // CLI - Clear IRQ_DISABLE
@@ -1842,6 +1827,30 @@ impl Device {
             opcode => todo!("not yet implemented CPU instruction 0x{:02x}", opcode),
         };
         cycles
+    }
+
+    fn block_move<const DELTA: u16>(&mut self) {
+        let [dst, src] = self.load::<u16>().to_bytes();
+        self.cpu.regs.db = dst;
+        let src = Addr24::new(src, self.cpu.regs.x);
+        let dst = Addr24::new(dst, self.cpu.regs.y);
+        let val = self.read::<u8>(src);
+        self.write::<u8>(dst, val);
+        if self.cpu.is_idx8() {
+            self.cpu
+                .regs
+                .set_x8(self.cpu.regs.x8().wrapping_add((DELTA & 0xff) as u8));
+            self.cpu
+                .regs
+                .set_y8(self.cpu.regs.y8().wrapping_add((DELTA & 0xff) as u8));
+        } else {
+            self.cpu.regs.x = self.cpu.regs.x.wrapping_add(DELTA);
+            self.cpu.regs.y = self.cpu.regs.y.wrapping_add(DELTA);
+        }
+        self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
+        if self.cpu.regs.a != u16::MAX {
+            self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_sub(3);
+        }
     }
 
     fn test_bit(&mut self, addr: Addr24, cycles: &mut Cycles) {
