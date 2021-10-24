@@ -8,20 +8,20 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        0, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
-       2, 0, 0, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 0, 0,  // 1^
+       2, 0, 0, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 7, 5,  // 1^
        6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 0, 2, 0, 0, 4, 0, 5,  // 3^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 2, 0, 0, 4, 0, 5,  // 3^
        6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
-       2, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 0, 0, 0,  // 5^
-       6, 0, 0, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 0, 5,  // 7^
+       2, 0, 0, 0, 1, 0, 0, 0,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
+       6, 0, 6, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
+       2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 7, 5,  // 7^
        2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
-       2, 0, 0, 0, 0, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
-       2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 0,  // a^
+       2, 0, 0, 0, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
+       2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
        2, 5, 5, 0, 4, 4, 4, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
-       2, 0, 3, 0, 0, 3, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
+       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 2, 0, 4, 4, 6, 0,  // c^
        2, 0, 0, 0, 0, 4, 0, 0,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
-       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 0, 3, 4, 4, 6, 0,  // e^
+       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 0,  // e^
        2, 0, 0, 0, 0, 4, 0, 0,   2, 4, 4, 2, 0, 4, 7, 0,  // f^
 ];
 
@@ -404,6 +404,37 @@ impl Device {
                     cycles += 1
                 }
             }
+            0x1e => {
+                // ASL - Arithmetic left shift on Absolute Indexed, X
+                let addr = self.load_indexed_x::<false>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let newval = val << 1;
+                    self.write(addr, newval);
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x80);
+                    self.cpu.update_nz8(newval);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let newval = val << 1;
+                    self.write(addr, newval);
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x8000);
+                    self.cpu.update_nz16(newval);
+                    cycles += 2
+                }
+            }
+            0x1f => {
+                // ORA - Or A with Absolute Long Indexed, X
+                let addr = self.load_long_indexed_x();
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) | self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a |= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x20 => {
                 // JSR - Jump to Subroutine
                 self.push(start_addr.addr.wrapping_add(2));
@@ -525,6 +556,19 @@ impl Device {
                 } else {
                     self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
                     self.cpu.update_nz16(self.cpu.regs.a)
+                }
+            }
+            0x39 => {
+                // AND - And A with Absolute Indexed, Y
+                let addr = self.load_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
                 }
             }
             0x3d => {
@@ -702,9 +746,46 @@ impl Device {
                 // JMP/JML - Jump absolute Long
                 self.cpu.regs.pc = self.load::<Addr24>();
             }
+            0x5d => {
+                // EOR - XOR Absolute Indexed, X on A
+                let addr = self.load_indexed_x::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x5e => {
+                // LSR - SHR on Absolute Indexed, X
+                let addr = self.load_indexed_x::<false>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
+                }
+            }
             0x60 => {
                 // RTS - Return from subroutine
                 self.cpu.regs.pc.addr = 1u16.wrapping_add(self.pull());
+            }
+            0x62 => {
+                // PER - Push PC + imm
+                let val = self.load::<u16>();
+                let val = self.cpu.regs.pc.addr.wrapping_add(val);
+                self.push(val)
             }
             0x64 => {
                 // STZ - Store Zero to memory
@@ -844,6 +925,25 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0x7e => {
+                // ROR - Rotate Absolute Indexed, X right
+                let addr = self.load_indexed_x::<false>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u8) << 7) | (val >> 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    self.cpu.update_nz8(res);
+                    self.write(addr, res);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u16) << 15) | (val >> 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    self.cpu.update_nz16(res);
+                    self.write(addr, res);
+                    cycles += 2
+                }
+            }
+
             0x7f => {
                 // ADC - Add Absolute Long Indexed, X with Carry
                 let addr = self.load_long_indexed_x();
@@ -987,6 +1087,16 @@ impl Device {
             0x90 => {
                 // BCC/BLT - Branch if Carry Clear
                 self.branch_near(!self.cpu.regs.status.has(Status::CARRY), &mut cycles)
+            }
+            0x94 => {
+                // STY - Store Y to DP Indexed, X
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_idx8() {
+                    self.write::<u8>(addr, self.cpu.regs.y8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.y);
+                    cycles += 1;
+                }
             }
             0x95 => {
                 // STA - Store A to DP Indexed, X
@@ -1240,6 +1350,20 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xaf => {
+                // LDA - Load Absolute Long to A
+                let addr = self.load::<Addr24>();
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
+                    cycles += 1;
+                }
+            }
             0xb0 => {
                 // BCS/BGE - Branch if carry set
                 self.branch_near(self.cpu.regs.status.has(Status::CARRY), &mut cycles)
@@ -1434,6 +1558,19 @@ impl Device {
                 } else {
                     let val = self.read::<u16>(addr);
                     self.compare16(self.cpu.regs.a, val);
+                    cycles += 1
+                }
+            }
+            0xc4 => {
+                // CPY - Compare Y with direct page
+                // this will also work with decimal mode (TODO: check this fact)
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_idx8() {
+                    let val = self.read::<u8>(addr);
+                    self.compare8(self.cpu.regs.y8(), val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.compare16(self.cpu.regs.y, val);
                     cycles += 1
                 }
             }
@@ -1696,6 +1833,7 @@ impl Device {
                     cycles += 1;
                 }
             }
+            0xea => (), // NOP
             0xeb => {
                 // XBA - Swap the A Register
                 self.cpu.regs.a = self.cpu.regs.a.swap_bytes();
