@@ -65,6 +65,7 @@ impl Device {
     pub fn update_counters<const N: u16>(&mut self) {
         let old_scanline_cycle = self.scanline_cycle;
         self.scanline_cycle += N;
+        self.math_registers.tick(N);
         if old_scanline_cycle < 1024 && self.scanline_cycle >= 1024 {
             self.do_hdma = true;
         }

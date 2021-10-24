@@ -2,6 +2,61 @@ use crate::device::Device;
 
 const CHIP_5A22_VERSION: u8 = 2;
 
+#[derive(Debug, Clone)]
+pub struct MathRegisters {
+    multiplicands: [u8; 2],
+    dividend: u16,
+    divisor: u8,
+    math_timer: u16,
+    result_after: [u8; 4],
+    result_before: [u8; 4],
+}
+
+impl MathRegisters {
+    pub const fn new() -> Self {
+        Self {
+            multiplicands: [0xff, 0xff],
+            dividend: 0xffff,
+            divisor: 0xff,
+            math_timer: 0,
+            result_after: [0; 4],
+            result_before: [0; 4],
+        }
+    }
+
+    pub fn tick(&mut self, cycles: u16) {
+        self.math_timer = self.math_timer.saturating_sub(cycles)
+    }
+
+    pub fn fire_multiply(&mut self) {
+        if self.math_timer == 0 {
+            self.result_before = self.result_after
+        }
+        let [lower, higher] =
+            (u16::from(self.multiplicands[0]) * u16::from(self.multiplicands[1])).to_le_bytes();
+        self.math_timer = 48;
+        self.result_after = [self.multiplicands[1], 0, lower, higher]
+    }
+
+    pub fn fire_divide(&mut self) {
+        if self.math_timer == 0 {
+            self.result_before = self.result_after
+        }
+        let [div_low, div_high] = (self.dividend / u16::from(self.divisor)).to_le_bytes();
+        let [rem_low, rem_high] = (self.dividend % u16::from(self.divisor)).to_le_bytes();
+        self.math_timer = 96;
+        self.result_after = [div_low, div_high, rem_low, rem_high]
+    }
+
+    pub const fn get_result(&self) -> &[u8; 4] {
+        if self.math_timer == 0 {
+            &self.result_after
+        } else {
+            &self.result_before
+        }
+    }
+}
+
 impl Device {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
@@ -25,6 +80,10 @@ impl Device {
             0x4211 => {
                 // TIMEUP - The IRQ flag
                 Some(self.irq_bit.take() | (self.open_bus & 0x7f))
+            }
+            0x4214..=0x4217 => {
+                // Math result registers
+                Some(self.math_registers.get_result()[usize::from(id & 3)])
             }
             0x4218..=0x421f => {
                 // JOYnL/JOYnH
@@ -62,6 +121,30 @@ impl Device {
                 if self.controllers.set_pio(val) {
                     // TODO: latch ppu counters
                 }
+            }
+            0x4202 => {
+                // WRMPYA
+                self.math_registers.multiplicands[0] = val
+            }
+            0x4203 => {
+                // WRMPYB
+                self.math_registers.multiplicands[1] = val;
+                self.math_registers.fire_multiply()
+            }
+            0x4204 => {
+                // WRDIVL
+                self.math_registers.dividend =
+                    (self.math_registers.dividend & 0xff00) | u16::from(val)
+            }
+            0x4205 => {
+                // WRDIVH
+                self.math_registers.dividend =
+                    (self.math_registers.dividend & 0xff) | (u16::from(val) << 8)
+            }
+            0x4206 => {
+                // WRDIVB
+                self.math_registers.divisor = val;
+                self.math_registers.fire_divide()
             }
             0x4207 => {
                 // HTIMEL

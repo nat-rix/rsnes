@@ -6,6 +6,7 @@ use crate::{
     cpu::{Cpu, Status},
     dma::Dma,
     ppu::Ppu,
+    registers::MathRegisters,
     spc700::Spc700,
     timing::Cycles,
 };
@@ -183,6 +184,7 @@ pub struct Device {
     pub(crate) shall_nmi: bool,
     pub(crate) nmi_vblank_bit: Cell<bool>,
     pub(crate) irq_bit: Cell<u8>,
+    pub(crate) math_registers: MathRegisters,
 }
 
 impl Device {
@@ -210,6 +212,7 @@ impl Device {
             shall_nmi: false,
             nmi_vblank_bit: Cell::new(false),
             irq_bit: Cell::new(0),
+            math_registers: MathRegisters::new(),
         }
     }
 
