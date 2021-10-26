@@ -18,13 +18,12 @@ impl Device {
     pub fn run_cycle<const N: u16>(&mut self) {
         self.spc.tick(N);
         if self.new_frame {
-            self.dma.reset_hdma();
+            self.dma.hdma_ahead_cycles += self.reset_hdma();
         }
         let vend = if self.ppu.overscan { 0xf0 } else { 0xe1 };
-        if self.do_hdma {
-            self.do_hdma = false;
+        if core::mem::take(&mut self.do_hdma) {
             if self.dma.is_hdma_running() && (self.scanline_nr <= vend) {
-                self.dma.do_hdma();
+                self.dma.hdma_ahead_cycles += self.do_hdma();
             }
         }
         if self.is_auto_joypad() && self.new_scanline && self.scanline_nr == vend + 2 {
@@ -36,13 +35,15 @@ impl Device {
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
-            assert!(!self.dma.is_hdma_running());
-            if self.dma.is_dma_running() {
+            let hdma_running = self.dma.is_hdma_running();
+            if self.dma.is_dma_running() && !hdma_running {
                 if self.dma.ahead_cycles > 0 {
                     self.dma.ahead_cycles -= i32::from(N)
                 } else {
                     self.do_dma_first_channel()
                 }
+            } else if self.dma.hdma_ahead_cycles > 0 {
+                self.dma.hdma_ahead_cycles -= i32::from(N);
             } else {
                 self.run_cpu::<N>();
             }

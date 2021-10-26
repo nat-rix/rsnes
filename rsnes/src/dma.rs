@@ -1,4 +1,7 @@
-use crate::device::{Addr24, Device};
+use crate::{
+    device::{Addr24, Device},
+    timing::Cycles,
+};
 
 pub mod flags {
     pub const MODE: u8 = 0b111;
@@ -85,6 +88,9 @@ pub struct Dma {
     running: bool,
     dma_enabled: u8,
     hdma_enabled: u8,
+    cancelled: u8,
+    do_transfer: u8,
+    pub(crate) hdma_ahead_cycles: i32,
     pub(crate) ahead_cycles: i32,
 }
 
@@ -95,12 +101,11 @@ impl Dma {
             running: false,
             dma_enabled: 0,
             hdma_enabled: 0,
+            cancelled: 0,
+            do_transfer: 0,
+            hdma_ahead_cycles: 0,
             ahead_cycles: 0,
         }
-    }
-
-    pub fn reset_hdma(&mut self) {
-        // TODO
     }
 
     /// Read 8-bit from channel transfer values
@@ -149,19 +154,20 @@ impl Dma {
             None
         }
     }
-
-    pub fn do_hdma(&mut self) {
-        todo!("do hdma stuff")
-    }
 }
 
 impl Device {
-    fn transfer_dma_byte(&mut self, channel_id: usize, b_bus_offset: u8) {
+    fn transfer_direct_byte(
+        &mut self,
+        channel_id: usize,
+        b_bus_offset: u8,
+        addr: Addr24,
+        b_bus: u8,
+    ) {
+        let b_bus = b_bus.wrapping_add(b_bus_offset);
         let channel = self.dma.channels.get(channel_id).unwrap();
-        let b_bus = channel.b_bus.wrapping_add(b_bus_offset);
         if channel.control & flags::PPU_TO_CPU > 0 {
             // PPU -> CPU
-            let addr = channel.a_bus;
             let value = if (0x2180..=0x2183).contains(&addr.addr) && (0x80..=0x83).contains(&b_bus)
             {
                 self.open_bus
@@ -174,7 +180,6 @@ impl Device {
             }
         } else {
             // CPU -> PPU
-            let addr = channel.a_bus;
             let value = match (addr.bank, addr.addr) {
                 (
                     0x00..=0x3f | 0x80..=0xbf,
@@ -183,6 +188,26 @@ impl Device {
                 _ => self.read::<u8>(addr),
             };
             self.write_bus_b(b_bus, value)
+        }
+    }
+
+    fn transfer_dma_byte(&mut self, channel_id: usize, b_bus_offset: u8) {
+        let channel = self.dma.channels.get(channel_id).unwrap();
+        let (a_bus, b_bus) = (channel.a_bus, channel.b_bus);
+        self.transfer_direct_byte(channel_id, b_bus_offset, a_bus, b_bus)
+    }
+
+    fn transfer_hdma_byte(&mut self, channel_id: usize, b_bus_offset: u8) {
+        let channel = self.dma.channels.get_mut(channel_id).unwrap();
+        let b_bus = channel.b_bus;
+        if channel.control & flags::INDIRECT > 0 {
+            let indirect = channel.indirect_address();
+            channel.size = channel.size.wrapping_add(1);
+            self.transfer_direct_byte(channel_id, b_bus_offset, indirect, b_bus)
+        } else {
+            let a_bus = Addr24::new(channel.a_bus.bank, channel.table);
+            channel.table = channel.table.wrapping_add(1);
+            self.transfer_direct_byte(channel_id, b_bus_offset, a_bus, b_bus)
         }
     }
 
@@ -230,5 +255,92 @@ impl Device {
         } else {
             self.dma.running = false
         }
+    }
+
+    pub fn do_hdma(&mut self) -> i32 {
+        let mut cycles = 0;
+        let hdma_running = self.dma.hdma_enabled & !self.dma.cancelled;
+        for channel_id in 0..8 {
+            if hdma_running & (1 << channel_id) > 0 {
+                if cycles == 0 {
+                    cycles = 24
+                } else {
+                    cycles += 8
+                }
+                let channel = self.dma.channels.get(channel_id).unwrap();
+                let offsets: &[u8] = match channel.control & flags::MODE {
+                    0b000 => &[0],
+                    0b001 => &[0, 1],
+                    0b010 | 0b110 => &[0, 0],
+                    0b011 | 0b111 => &[0, 0, 1, 1],
+                    0b100 => &[0, 1, 2, 3],
+                    0b101 => &[0, 1, 0, 1],
+                    0b1000..=u8::MAX => unreachable!(),
+                };
+                if self.dma.do_transfer & (1 << channel_id) > 0 {
+                    for &i in offsets {
+                        self.transfer_hdma_byte(channel_id, i)
+                    }
+                }
+                let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                channel.line_counter = channel.line_counter.wrapping_sub(1);
+                if channel.line_counter == 0 || channel.line_counter == 0x80 {
+                    let addr1 = Addr24::new(channel.a_bus.bank, channel.table);
+                    channel.table = channel.table.wrapping_add(1);
+                    let addr2 = Addr24::new(channel.a_bus.bank, channel.table);
+                    channel.table = channel.table.wrapping_add(1);
+                    let val1 = self.read(addr1);
+                    if val1 == 0 {
+                        self.dma.cancelled |= 1 << channel_id
+                    }
+                    let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                    channel.line_counter = val1;
+                    if channel.control & flags::INDIRECT > 0 {
+                        let new_size = self.read(addr2);
+                        cycles += 16;
+                        let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                        channel.size = u16::from_le_bytes([new_size, new_size]);
+                    }
+                    self.dma.do_transfer |= 1 << channel_id
+                } else if channel.line_counter > 0x80 {
+                    self.dma.do_transfer |= 1 << channel_id
+                } else {
+                    self.dma.do_transfer &= !(1 << channel_id)
+                }
+            }
+        }
+        cycles
+    }
+
+    pub fn reset_hdma(&mut self) -> i32 {
+        let mut cycles = 0;
+        self.dma.dma_enabled = 0;
+        self.dma.cancelled = 0;
+        self.dma.do_transfer = self.dma.hdma_enabled;
+        for channel_id in 0..8 {
+            let channel = self.dma.channels.get_mut(channel_id).unwrap();
+            if self.dma.hdma_enabled & (1 << channel_id) > 0 {
+                if cycles == 0 {
+                    cycles = 24
+                } else {
+                    cycles += 8
+                }
+                channel.table = channel.a_bus.addr;
+                let read_addr1 = Addr24::new(channel.a_bus.bank, channel.table);
+                channel.table = channel.table.wrapping_add(1);
+                let read_addr2 = Addr24::new(channel.a_bus.bank, channel.table);
+                channel.table = channel.table.wrapping_add(1);
+                let line_counter = self.read(read_addr1);
+                let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                channel.line_counter = line_counter;
+                if channel.control & flags::INDIRECT > 0 {
+                    let new_size = self.read(read_addr2);
+                    cycles += 16;
+                    let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                    channel.size = u16::from_le_bytes([new_size, new_size]);
+                }
+            }
+        }
+        cycles
     }
 }
