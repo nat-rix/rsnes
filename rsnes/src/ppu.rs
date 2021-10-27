@@ -45,7 +45,6 @@ impl BgMode {
             7 => BgModeNum::Mode7,
             _ => unreachable!(),
         };
-        println!("set bg mode to {:?}", self.num);
         self.bg3_priority = bits & 8 > 0;
     }
 }

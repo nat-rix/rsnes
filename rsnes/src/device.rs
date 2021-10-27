@@ -1,6 +1,7 @@
 //! The SNES/Famicom device
 
 use crate::{
+    backend::Backend,
     cartridge::Cartridge,
     controller::ControllerPorts,
     cpu::{Cpu, Status},
@@ -157,9 +158,9 @@ impl Data for Addr24 {
 }
 
 #[derive(Debug, Clone)]
-pub struct Device {
+pub struct Device<B: Backend> {
     pub(crate) cpu: Cpu,
-    pub(crate) spc: Spc700,
+    pub spc: Spc700<B::Audio>,
     pub(crate) ppu: Ppu,
     pub(crate) dma: Dma,
     pub(crate) controllers: ControllerPorts,
@@ -175,7 +176,7 @@ pub struct Device {
     pub(crate) scanline_nr: u16,
     pub(crate) cpu_ahead_cycles: i32,
     pub(crate) new_scanline: bool,
-    pub(crate) new_frame: bool,
+    pub new_frame: bool,
     pub(crate) do_hdma: bool,
     // multiplied by 4
     pub(crate) irq_time_h: u16,
@@ -187,11 +188,11 @@ pub struct Device {
     pub(crate) math_registers: MathRegisters,
 }
 
-impl Device {
-    pub fn new() -> Self {
+impl<B: Backend> Device<B> {
+    pub fn new(audio_backend: B::Audio) -> Self {
         Self {
             cpu: Cpu::new(),
-            spc: Spc700::new(),
+            spc: Spc700::new(audio_backend),
             ppu: Ppu::new(),
             dma: Dma::new(),
             controllers: ControllerPorts::new(),
@@ -296,13 +297,12 @@ impl Device {
         self.cpu.regs.status |= Status::IRQ_DISABLE;
         self.cpu.regs.status &= !Status::DECIMAL;
         let addr = self.read(Addr24::new(0, vector));
-        println!("interrupting into 00:{:04x}", addr);
         self.cpu.regs.pc.addr = addr;
         48
     }
 }
 
-impl Device {
+impl<B: Backend> Device<B> {
     pub fn read_bus_b<D: Data>(&mut self, addr: u8) -> D {
         let mut data = <D::Arr as Default>::default();
 

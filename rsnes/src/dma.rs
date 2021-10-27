@@ -153,7 +153,7 @@ impl Dma {
     }
 }
 
-impl Device {
+impl<B: crate::backend::Backend> Device<B> {
     fn transfer_direct_byte(
         &mut self,
         channel_id: usize,

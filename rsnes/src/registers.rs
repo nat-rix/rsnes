@@ -57,7 +57,7 @@ impl MathRegisters {
     }
 }
 
-impl Device {
+impl<B: crate::backend::Backend> Device<B> {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
             0x4016 => {
@@ -97,7 +97,7 @@ impl Device {
         }
     }
 
-    pub const fn is_auto_joypad(&self) -> bool {
+    pub fn is_auto_joypad(&self) -> bool {
         self.cpu.nmitimen & 1 > 0
     }
 
@@ -111,10 +111,6 @@ impl Device {
                 // NMITIMEN - Interrupt Enable Flags
                 // TODO: implement expected behavior
                 self.cpu.nmitimen = val;
-                println!(
-                    "autojoypad is now {}",
-                    ["disabled", "enabled"][self.is_auto_joypad() as usize]
-                );
             }
             0x4201 => {
                 // WRIO - Programmable I/O-Port
@@ -178,7 +174,6 @@ impl Device {
             }
             0x4300..=0x43ff => {
                 // DMA Registers
-                println!("writing to id {:04x}", id);
                 self.dma.write(id, val)
             }
             _ => todo!("internal register 0x{:04x} written", id),

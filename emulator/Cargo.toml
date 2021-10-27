@@ -2,9 +2,16 @@
 name = "rsnes-emulator"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
-clap = "3.0.0-beta.4"
+clap = "3.0.0-beta.5"
+winit = "0.25"
+cpal = "0.13"
+
+[dependencies.wgpu]
+version = "0.11"
+default-features = false
 
 [dependencies.rsnes]
 path = "../rsnes"

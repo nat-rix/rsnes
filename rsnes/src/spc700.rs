@@ -6,7 +6,10 @@
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
 //! - The first of the two official SNES documentation books
 
-use crate::timing::{Cycles, APU_CPU_TIMING_PROPORTION};
+use crate::{
+    backend::AudioBackend,
+    timing::{Cycles, APU_CPU_TIMING_PROPORTION},
+};
 use core::{cell::Cell, iter::once, mem::take};
 
 pub const MEMORY_SIZE: usize = 64 * 1024;
@@ -336,13 +339,14 @@ impl Dsp {
 }
 
 #[derive(Debug, Clone)]
-pub struct Spc700 {
+pub struct Spc700<B: AudioBackend> {
     mem: [u8; MEMORY_SIZE],
     /// data, the main processor sends to us
     pub input: [u8; 4],
     /// data, we send to the main processor
     pub output: [u8; 4],
     dsp: Dsp,
+    pub backend: B,
 
     a: u8,
     x: u8,
@@ -361,8 +365,8 @@ pub struct Spc700 {
     cycles_ahead: Cycles,
 }
 
-impl Spc700 {
-    pub const fn new() -> Self {
+impl<B: AudioBackend> Spc700<B> {
+    pub fn new(backend: B) -> Self {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
             let mut mem: [u8; MEMORY_SIZE] =
                 unsafe { core::mem::transmute([[[0x00u8; 32], [0xffu8; 32]]; 1024]) };
@@ -375,6 +379,7 @@ impl Spc700 {
             input: [0; 4],
             output: [0; 4],
             dsp: Dsp::new(),
+            backend,
             a: 0,
             x: 0,
             y: 0,
@@ -406,7 +411,7 @@ impl Spc700 {
         self.status = 0;
     }
 
-    pub const fn is_rom_mapped(&self) -> bool {
+    pub fn is_rom_mapped(&self) -> bool {
         self.mem[0xf0] & 0x80 > 0
     }
 
@@ -800,7 +805,7 @@ impl Spc700 {
             // TODO: echo
             // TODO: noise
         };
-        println!("outsample:{},{}", result.l, result.r);
+        self.backend.push_sample(result)
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {

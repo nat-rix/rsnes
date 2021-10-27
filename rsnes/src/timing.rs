@@ -14,7 +14,7 @@ pub type Cycles = u32;
 /// This is a fractional proportion between the cpu and apu clock speed
 pub(crate) const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
 
-impl Device {
+impl<B: crate::backend::Backend> Device<B> {
     pub fn run_cycle<const N: u16>(&mut self) {
         self.spc.tick(N);
         if self.new_frame {
@@ -107,7 +107,7 @@ impl Device {
         self.cpu_ahead_cycles -= i32::from(N);
     }
 
-    pub const fn get_memory_cycle(&self, addr: Addr24) -> Cycles {
+    pub fn get_memory_cycle(&self, addr: Addr24) -> Cycles {
         #[repr(u8)]
         enum Speed {
             Fast = 6,
@@ -115,7 +115,7 @@ impl Device {
             XSlow = 12,
         }
         use Speed::*;
-        const fn romaccess(device: &Device) -> Speed {
+        fn romaccess<B: crate::backend::Backend>(device: &Device<B>) -> Speed {
             if device.cpu.access_speed {
                 Fast
             } else {

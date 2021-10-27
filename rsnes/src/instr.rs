@@ -25,19 +25,19 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 4, 6, 0,   2, 4, 4, 2, 0, 4, 7, 0,  // f^
 ];
 
-impl Device {
-    fn load_indexed_v<const B: bool>(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
+impl<B: crate::backend::Backend> Device<B> {
+    fn load_indexed_v<const BC: bool>(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
         let loaded_addr = self.load::<u16>();
         let addr = loaded_addr.wrapping_add(val);
-        if B && (!self.cpu.is_idx8() || loaded_addr & 0xff00 != addr & 0xff00) {
+        if BC && (!self.cpu.is_idx8() || loaded_addr & 0xff00 != addr & 0xff00) {
             *cycles += 1
         }
         self.cpu.get_data_addr(addr)
     }
 
     /// Absolute Indexed, X
-    pub fn load_indexed_x<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v::<B>(
+    pub fn load_indexed_x<const BC: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v::<BC>(
             cycles,
             if self.cpu.is_idx8() {
                 self.cpu.regs.x & 0xff
@@ -48,8 +48,8 @@ impl Device {
     }
 
     /// Absolute Indexed, Y
-    pub fn load_indexed_y<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
-        self.load_indexed_v::<B>(
+    pub fn load_indexed_y<const BC: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+        self.load_indexed_v::<BC>(
             cycles,
             if self.cpu.is_idx8() {
                 self.cpu.regs.y & 0xff
@@ -171,7 +171,7 @@ impl Device {
     }
 
     /// DP Indirect Indexed, Y
-    pub fn load_indirect_indexed_y<const B: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
+    pub fn load_indirect_indexed_y<const BC: bool>(&mut self, cycles: &mut Cycles) -> Addr24 {
         let addr = u16::from(self.load::<u8>());
         if self.cpu.regs.dp & 0xff > 0 {
             *cycles += 1
@@ -184,22 +184,13 @@ impl Device {
             self.cpu.regs.y
         };
         let new_addr = addr.wrapping_add(y);
-        if B && (!self.cpu.is_idx8() || new_addr & 0xff00 != addr & 0xff00) {
+        if BC && (!self.cpu.is_idx8() || new_addr & 0xff00 != addr & 0xff00) {
             *cycles += 1
         }
         self.cpu.get_data_addr(new_addr)
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
-        println!(
-            "<CPU> debug executing '{:02x}' @ {} | A{:04x}|X{:04x}|Y{:04x}|S{:02x}",
-            op,
-            start_addr,
-            self.cpu.regs.a,
-            self.cpu.regs.x,
-            self.cpu.regs.y,
-            self.cpu.regs.status.0,
-        );
         let mut cycles = CYCLES[op as usize];
         match op {
             0x02 => {
