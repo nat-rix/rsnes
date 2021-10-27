@@ -191,6 +191,7 @@ pub struct Ppu {
     half_color: bool,
     fixed_color: Color,
     bg_mode: BgMode,
+    window_positions: [[u8; 2]; 2],
 }
 
 impl Ppu {
@@ -225,6 +226,7 @@ impl Ppu {
             half_color: false,
             fixed_color: Color::BLACK,
             bg_mode: BgMode::new(),
+            window_positions: [[0; 2]; 2],
         }
     }
 
@@ -379,6 +381,10 @@ impl Ppu {
                     layer.window2 = val & 8 > 0;
                     val >>= 4;
                 }
+            }
+            0x26..=0x29 => {
+                // WH0-3
+                self.window_positions[usize::from((!id & 2) >> 1)][usize::from(id & 1)] = val
             }
             0x2a => {
                 // WBGLOG
