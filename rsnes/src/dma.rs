@@ -1,7 +1,4 @@
-use crate::{
-    device::{Addr24, Device},
-    timing::Cycles,
-};
+use crate::device::{Addr24, Device};
 
 pub mod flags {
     pub const MODE: u8 = 0b111;

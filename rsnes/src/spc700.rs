@@ -61,12 +61,6 @@ const GAUSS_INTERPOLATION_POINTS: [i32; 16 * 32] = [
     0x518, 0x518, 0x518, 0x519, 0x519,
 ];
 
-/// Noise clock frequencies in Hz
-const FREQUENCIES: [u16; 32] = [
-    0, 16, 21, 25, 31, 42, 50, 63, 83, 100, 125, 167, 200, 250, 333, 400, 500, 667, 800, 1000,
-    1300, 1600, 2000, 2700, 3200, 4000, 5300, 6400, 8000, 10700, 16000, 32000,
-];
-
 const fn calculate_gain_noise_rates() -> [u16; 32] {
     let mut rates = [0; 32];
     macro_rules! gen_rates {
@@ -357,7 +351,6 @@ pub struct Spc700 {
     status: u8,
     pc: u16,
 
-    cpu_time: Cycles,
     timer_max: [u8; 3],
     // internal timer ticks ALL in 64kHz
     timers: [u8; 3],
@@ -389,7 +382,6 @@ impl Spc700 {
             pc: 0xffc0,
             status: 0,
 
-            cpu_time: 0,
             timer_max: [0; 3],
             timers: [0; 3],
             timer_enable: 0,
