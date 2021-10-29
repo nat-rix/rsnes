@@ -1,10 +1,3 @@
-mod picture {
-    pub trait PictureBackend {}
-    pub struct Dummy;
-
-    impl PictureBackend for Dummy {}
-}
-
 mod audio {
     use crate::spc700::StereoSample;
 
@@ -19,16 +12,32 @@ mod audio {
 }
 
 pub use audio::{AudioBackend, Dummy as AudioDummy};
-pub use picture::{Dummy as PictureDummy, PictureBackend};
 
-pub trait Backend {
-    type Audio: AudioBackend;
-    type Picture: PictureBackend;
+pub trait FrameBuffer {
+    fn pixels(&self) -> &[[u8; 4]];
+    fn mut_pixels(&mut self) -> &mut [[u8; 4]];
+    fn request_redraw(&mut self);
 }
 
-pub struct Dummy;
+pub const FRAME_BUFFER_SIZE: usize = (ppu::MAX_SCREEN_HEIGHT * ppu::SCREEN_WIDTH) as usize;
+use crate::ppu;
+#[derive(Debug, Clone)]
+pub struct ArrayFrameBuffer(pub [[u8; 4]; FRAME_BUFFER_SIZE], pub bool);
 
-impl Backend for Dummy {
-    type Audio = AudioDummy;
-    type Picture = PictureDummy;
+impl FrameBuffer for ArrayFrameBuffer {
+    fn pixels(&self) -> &[[u8; 4]] {
+        &self.0
+    }
+    fn mut_pixels(&mut self) -> &mut [[u8; 4]] {
+        &mut self.0
+    }
+    fn request_redraw(&mut self) {
+        self.1 = true
+    }
+}
+
+impl ArrayFrameBuffer {
+    pub fn get_bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.0.as_ptr() as _, self.0.len() << 2) }
+    }
 }

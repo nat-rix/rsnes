@@ -153,7 +153,7 @@ impl Dma {
     }
 }
 
-impl<B: crate::backend::Backend> Device<B> {
+impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     fn transfer_direct_byte(
         &mut self,
         channel_id: usize,

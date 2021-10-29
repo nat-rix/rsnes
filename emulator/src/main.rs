@@ -1,6 +1,11 @@
 use clap::{ErrorKind, Parser};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rsnes::{device::Device, spc700::StereoSample};
+use pollster::FutureExt;
+use rsnes::{
+    backend::{ArrayFrameBuffer, FrameBuffer},
+    device::Device,
+    spc700::StereoSample,
+};
 use std::path::PathBuf;
 use winit::{
     event::{Event, WindowEvent},
@@ -24,34 +29,22 @@ struct Options {
     verbose: bool,
 }
 
-fn error<E: std::fmt::Display>(kind: ErrorKind, val: E) -> ! {
-    clap::app_from_crate!().error(kind, val).exit()
+macro_rules! error {
+    ($($arg:tt)*) => {
+        clap::app_from_crate!().error(ErrorKind::Io, format_args!($($arg)*)).exit()
+    };
 }
 
 fn cartridge_from_file(path: &std::path::Path) -> rsnes::cartridge::Cartridge {
-    let content = std::fs::read(path).unwrap_or_else(|err| {
-        error(
-            clap::ErrorKind::Io,
-            format_args!("Could not read file \"{}\" ({})\n", path.display(), err),
-        )
-    });
+    let content = std::fs::read(path)
+        .unwrap_or_else(|err| error!("Could not read file \"{}\" ({})\n", path.display(), err));
     rsnes::cartridge::Cartridge::from_bytes(&content).unwrap_or_else(|err| {
-        error(
-            clap::ErrorKind::InvalidValue,
-            format_args!(
-                "Failure while reading cartridge file \"{}\" ({})\n",
-                path.display(),
-                err
-            ),
+        error!(
+            "Failure while reading cartridge file \"{}\" ({})\n",
+            path.display(),
+            err
         )
     })
-}
-
-struct EmulatorBackend;
-
-impl rsnes::backend::Backend for EmulatorBackend {
-    type Audio = AudioBackend;
-    type Picture = rsnes::backend::PictureDummy;
 }
 
 struct AudioBackend {
@@ -74,7 +67,10 @@ impl AudioBackend {
                     && cfg.channels() == 2
                     && (cfg.min_sample_rate()..=cfg.max_sample_rate()).contains(&SAMPLE_RATE)
             })
-            .next()?;
+            .min_by_key(|cfg| match cfg.buffer_size() {
+                cpal::SupportedBufferSize::Unknown => cpal::FrameCount::MAX,
+                cpal::SupportedBufferSize::Range { min, .. } => *min,
+            })?;
         let cfg = cfg_range.with_sample_rate(SAMPLE_RATE).config();
         let data = Arc::new(Mutex::new(vec![]));
         let stream_data = Arc::clone(&data);
@@ -83,16 +79,21 @@ impl AudioBackend {
         let stream = device
             .build_output_stream(
                 &cfg,
-                move |data: &mut [i16], _| loop {
+                move |data: &mut [i16], _| {
                     if let Ok(mut sdata) = stream_data.lock() {
-                        if sdata.len() >= data.len() {
-                            data.copy_from_slice(&sdata.as_slice()[..data.len()]);
-                            sdata.copy_within(data.len().., 0);
-                            let diff = sdata.len() - data.len();
-                            ahead_ref.store(diff, Ordering::Relaxed);
-                            sdata.truncate(diff);
-                            break;
+                        let size = data.len().min(sdata.len());
+                        if size > 0 {
+                            data[..size].copy_from_slice(&sdata.as_slice()[..size]);
                         }
+                        if sdata.len() < data.len() {
+                            data[sdata.len()..].fill(0)
+                        }
+                        if sdata.len() > data.len() {
+                            sdata.copy_within(data.len().., 0);
+                        }
+                        let diff = sdata.len().max(data.len()) - data.len();
+                        ahead_ref.store(diff, Ordering::Relaxed);
+                        sdata.truncate(diff);
                     }
                 },
                 |_| (),
@@ -115,6 +116,34 @@ impl rsnes::backend::AudioBackend for AudioBackend {
     }
 }
 
+mod shaders {
+    macro_rules! include_shader {
+        ($t:expr) => {
+            include_bytes!(concat!(env!("OUT_DIR"), "/", $t))
+        };
+    }
+
+    static VERTEX_SHADER: &[u8] = include_shader!("main.vertex.spirv");
+    static FRAGMENT_SHADER: &[u8] = include_shader!("main.fragment.spirv");
+
+    fn create_shader(device: &wgpu::Device, source: &[u8]) -> wgpu::ShaderModule {
+        device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+            label: None, // TODO: label
+            source: wgpu::util::make_spirv(source),
+        })
+    }
+
+    static SHADER_ENTRY_POINT: &str = "main";
+
+    pub fn create_vs(device: &wgpu::Device) -> (&str, wgpu::ShaderModule) {
+        (SHADER_ENTRY_POINT, create_shader(device, VERTEX_SHADER))
+    }
+
+    pub fn create_fs(device: &wgpu::Device) -> (&str, wgpu::ShaderModule) {
+        (SHADER_ENTRY_POINT, create_shader(device, FRAGMENT_SHADER))
+    }
+}
+
 fn main() {
     let options = Options::parse();
 
@@ -125,14 +154,11 @@ fn main() {
             cartridge.header()
         );
     }
-    let mut device: Device<EmulatorBackend> =
-        Device::new(AudioBackend::new().unwrap_or_else(|| {
-            error(
-                clap::ErrorKind::Io,
-                format_args!("Failed finding an audio output device"),
-            )
-        }));
-    device.load_cartridge(cartridge);
+    let mut snes = Device::new(
+        AudioBackend::new().unwrap_or_else(|| error!("Failed finding an audio output device")),
+        ArrayFrameBuffer([[0; 4]; rsnes::backend::FRAME_BUFFER_SIZE], true),
+    );
+    snes.load_cartridge(cartridge);
 
     let size = winit::dpi::LogicalSize::new(500i32, 500i32);
     let event_loop = EventLoop::new();
@@ -140,36 +166,224 @@ fn main() {
         .with_decorations(true)
         .with_visible(true)
         .with_fullscreen(None)
-        .with_resizable(false)
+        .with_resizable(true)
         .with_maximized(false)
         .with_inner_size(size)
         .with_title(env!("CARGO_PKG_NAME"))
         .build(&event_loop)
-        .unwrap_or_else(|err| {
-            error(
-                clap::ErrorKind::Io,
-                format_args!("Failure while creating window ({})", err),
-            )
-        });
+        .unwrap_or_else(|err| error!("Failure while creating window ({})", err));
+
+    let inst = wgpu::Instance::new(wgpu::Backends::VULKAN);
+    let surf = unsafe { inst.create_surface(&window) };
+    let adapter = inst
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: Some(&surf),
+            force_fallback_adapter: false,
+        })
+        .block_on()
+        .unwrap_or_else(|| error!("Failure finding a graphics adapter"));
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            },
+            None,
+        )
+        .block_on()
+        .unwrap_or_else(|err| error!("Failure requesting a GPU command queue ({})", err));
+    let (vs_entry, vs_shader) = shaders::create_vs(&device);
+    let (fs_entry, fs_shader) = shaders::create_fs(&device);
+
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler {
+                    filtering: true,
+                    comparison: false,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let texture_extent = wgpu::Extent3d {
+        width: rsnes::ppu::SCREEN_WIDTH,
+        height: rsnes::ppu::MAX_SCREEN_HEIGHT,
+        depth_or_array_layers: 1,
+    };
+    let texture_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: texture_extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: texture_format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    });
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: None,
+        format: Some(texture_format),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        aspect: wgpu::TextureAspect::All,
+        base_mip_level: 0,
+        mip_level_count: None,
+        base_array_layer: 0,
+        array_layer_count: None,
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: None,
+        address_mode_u: wgpu::AddressMode::MirrorRepeat,
+        address_mode_v: wgpu::AddressMode::MirrorRepeat,
+        address_mode_w: wgpu::AddressMode::MirrorRepeat,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        lod_min_clamp: 100.0,
+        lod_max_clamp: 100.0,
+        compare: None,
+        anisotropy_clamp: Some(core::num::NonZeroU8::new(1).unwrap()),
+        border_color: None,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+
+    let swapchain_format = surf.get_preferred_format(&adapter).unwrap();
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &vs_shader,
+            entry_point: vs_entry,
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &fs_shader,
+            entry_point: fs_entry,
+            targets: &[swapchain_format.into()],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+    });
+    let mut surf_config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: swapchain_format,
+        width: size.width as u32,
+        height: size.height as u32,
+        present_mode: wgpu::PresentMode::Fifo,
+    };
+    surf.configure(&device, &surf_config);
+
+    let mut last_rerendered = std::time::Instant::now();
 
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
         match ev {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                WindowEvent::Resized(size) => {
+                    surf_config.width = size.width;
+                    surf_config.height = size.height;
+                    surf.configure(&device, &surf_config);
+                }
                 _ => (),
             },
             Event::MainEventsCleared => {
-                if device.spc.backend.ahead.load(Ordering::Relaxed) < 20_000 {
-                    device.run_cycle::<1>();
-                    while !device.new_frame {
-                        device.run_cycle::<1>();
+                if snes.spc.backend.ahead.load(Ordering::Relaxed) < 20_000 {
+                    snes.run_cycle::<1>();
+                    while !snes.new_frame {
+                        snes.run_cycle::<1>();
                     }
-                    window.request_redraw();
+                    let now = std::time::Instant::now();
+                    if last_rerendered + std::time::Duration::from_millis(60) <= now {
+                        window.request_redraw();
+                        last_rerendered = now;
+                    }
                 }
             }
             Event::RedrawRequested(_) => {
-                // TODO: render code
+                match surf.get_current_texture() {
+                    Ok(surface_texture) => {
+                        if snes.ppu.frame_buffer.1 {
+                            queue.write_texture(
+                                texture.as_image_copy(),
+                                snes.ppu.frame_buffer.get_bytes(),
+                                wgpu::ImageDataLayout {
+                                    offset: 0,
+                                    bytes_per_row: core::num::NonZeroU32::new(
+                                        4 * texture_extent.width,
+                                    ),
+                                    rows_per_image: core::num::NonZeroU32::new(
+                                        texture_extent.height,
+                                    ),
+                                },
+                                texture_extent,
+                            );
+                        }
+
+                        let frame = &surface_texture.texture;
+                        let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
+                        let mut encoder =
+                            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: None,
+                            });
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None,
+                            color_attachments: &[wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: true,
+                                },
+                            }],
+                            depth_stencil_attachment: None,
+                        });
+                        rpass.set_pipeline(&render_pipeline);
+                        rpass.set_bind_group(0, &bind_group, &[]);
+                        rpass.draw(0..6, 0..1);
+                        drop(rpass);
+                        queue.submit(Some(encoder.finish()));
+                        surface_texture.present();
+                    }
+                    Err(wgpu::SurfaceError::Timeout) => {
+                        println!("[warning] surface acquire timeout");
+                    }
+                    Err(err) => error!("Failed to acquire next swap chain texture ({})", err),
+                };
             }
             _ => (),
         }

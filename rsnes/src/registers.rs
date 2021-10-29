@@ -57,7 +57,7 @@ impl MathRegisters {
     }
 }
 
-impl<B: crate::backend::Backend> Device<B> {
+impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn read_internal_register(&self, id: u16) -> Option<u8> {
         match id {
             0x4016 => {

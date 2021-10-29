@@ -1,7 +1,7 @@
 //! The SNES/Famicom device
 
 use crate::{
-    backend::Backend,
+    backend::{AudioBackend, FrameBuffer},
     cartridge::Cartridge,
     controller::ControllerPorts,
     cpu::{Cpu, Status},
@@ -158,10 +158,10 @@ impl Data for Addr24 {
 }
 
 #[derive(Debug, Clone)]
-pub struct Device<B: Backend> {
+pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) cpu: Cpu,
-    pub spc: Spc700<B::Audio>,
-    pub(crate) ppu: Ppu,
+    pub spc: Spc700<B>,
+    pub ppu: Ppu<FB>,
     pub(crate) dma: Dma,
     pub(crate) controllers: ControllerPorts,
     cartridge: Option<Cartridge>,
@@ -188,12 +188,12 @@ pub struct Device<B: Backend> {
     pub(crate) math_registers: MathRegisters,
 }
 
-impl<B: Backend> Device<B> {
-    pub fn new(audio_backend: B::Audio) -> Self {
+impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
+    pub fn new(audio_backend: B, frame_buffer: FB) -> Self {
         Self {
             cpu: Cpu::new(),
             spc: Spc700::new(audio_backend),
-            ppu: Ppu::new(),
+            ppu: Ppu::new(frame_buffer),
             dma: Dma::new(),
             controllers: ControllerPorts::new(),
             cartridge: None,
@@ -302,7 +302,7 @@ impl<B: Backend> Device<B> {
     }
 }
 
-impl<B: Backend> Device<B> {
+impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
     pub fn read_bus_b<D: Data>(&mut self, addr: u8) -> D {
         let mut data = <D::Arr as Default>::default();
 

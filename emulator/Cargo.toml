@@ -8,10 +8,15 @@ resolver = "2"
 clap = "3.0.0-beta.5"
 winit = "0.25"
 cpal = "0.13"
+pollster = "0.2"
 
 [dependencies.wgpu]
 version = "0.11"
 default-features = false
+features = ["spirv"]
 
 [dependencies.rsnes]
 path = "../rsnes"
+
+[build-dependencies.shaderc]
+version = "0.7"

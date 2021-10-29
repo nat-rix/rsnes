@@ -25,7 +25,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 0, 4, 6, 0,   2, 4, 4, 2, 0, 4, 7, 0,  // f^
 ];
 
-impl<B: crate::backend::Backend> Device<B> {
+impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     fn load_indexed_v<const BC: bool>(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
         let loaded_addr = self.load::<u16>();
         let addr = loaded_addr.wrapping_add(val);

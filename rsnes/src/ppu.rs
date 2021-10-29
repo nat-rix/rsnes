@@ -2,6 +2,8 @@ use crate::oam::{CgRam, Oam};
 use core::mem::replace;
 
 pub const VRAM_SIZE: usize = 0x8000;
+pub const SCREEN_WIDTH: u32 = 340;
+pub const MAX_SCREEN_HEIGHT: u32 = 239;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BgModeNum {
@@ -25,7 +27,7 @@ pub struct BgMode {
 }
 
 impl BgMode {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             num: BgModeNum::Mode0,
             bg3_priority: false,
@@ -165,8 +167,9 @@ impl Mode7Settings {
 }
 
 #[derive(Debug, Clone)]
-pub struct Ppu {
+pub struct Ppu<FB: crate::backend::FrameBuffer> {
     pub(crate) oam: Oam,
+    pub frame_buffer: FB,
     cgram: CgRam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
@@ -193,10 +196,11 @@ pub struct Ppu {
     window_positions: [[u8; 2]; 2],
 }
 
-impl Ppu {
-    pub const fn new() -> Self {
+impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
+    pub fn new(frame_buffer: FB) -> Self {
         Self {
             oam: Oam::new(),
+            frame_buffer,
             cgram: CgRam::new(),
             vram: [0; VRAM_SIZE],
             vram_addr_unmapped: 0,
