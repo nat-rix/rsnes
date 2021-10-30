@@ -407,7 +407,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             0x07..=0x0a => {
                 // BGnSC
                 let bg = &mut self.bgs[usize::from((id + 1) & 3)];
-                bg.tilemap_addr = val >> 2;
+                bg.tilemap_addr = val & 0xfc;
                 bg.y_mirror = val & 2 > 0;
                 bg.x_mirror = val & 1 > 0;
             }
@@ -627,7 +627,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         [x, y]: [u16; 2],
     ) -> Option<Color> {
         let bg = &self.bgs[usize::from(bg_nr)];
-        let target = [x + bg.scroll[0], y + bg.scroll[1]];
+        let [x, y] = [(x + bg.scroll[0]) & 0x3ff, (y + bg.scroll[1]) & 0x3ff];
         let is_y16 = bg.is_16x16_tiles;
         let is_x16 = is_y16 || matches!(self.bg_mode.num, BgModeNum::Mode5 | BgModeNum::Mode6);
         let xbits = if is_x16 { 4 } else { 3 };
@@ -647,18 +647,20 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if priority ^ ((tile_info & 0x2000) > 0) {
             return None;
         }
-        let mut palette = ((tile_info >> 10) & 7) as u8;
-        let tx = if tile_info & 0x4000 > 0 { !x } else { x } & 7;
+        let palette = ((tile_info >> 10) & 7) as u8;
+        let palette = if let BgModeNum::Mode0 = self.bg_mode.num {
+            palette | (bg_nr << 3)
+        } else {
+            palette
+        };
+        let tx = if tile_info & 0x4000 > 0 { x } else { !x } & 7;
         let ty = if tile_info & 0x8000 > 0 { !y } else { y } & 7;
         let mut tile_nr = tile_info & 0x3ff;
         if is_x16 && ((x & 8 > 0) ^ (tile_info & 0x4000 > 0)) {
             tile_nr += 1;
         }
-        if is_x16 && ((y & 8 > 0) ^ (tile_info & 0x8000 > 0)) {
+        if is_y16 && ((y & 8 > 0) ^ (tile_info & 0x8000 > 0)) {
             tile_nr += 16;
-        }
-        if let BgModeNum::Mode0 = self.bg_mode.num {
-            palette |= bg_nr << 3
         }
         let plane = self.vram[usize::from(
             (u16::from(bg.base_addr) << 12)
@@ -702,11 +704,24 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if pixel == 0 {
             None
         } else {
-            Some(Color::new(
-                (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
-                (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
-                (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
-            ))
+            let mut color = if self.direct_color_mode && bit_depth == 3 {
+                Color::new(
+                    (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
+                    (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
+                    (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
+                )
+            } else {
+                let color = self.cgram.read16((pixel & 0xff) as u8);
+                Color::new(
+                    (color & 0x1f) as u8,
+                    ((color >> 5) & 0x1f) as u8,
+                    ((color >> 10) & 0x1f) as u8,
+                )
+            };
+            color.r <<= 3;
+            color.g <<= 3;
+            color.b <<= 3;
+            Some(color)
         }
     }
 
@@ -758,6 +773,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
 
     pub fn draw_line(&mut self, y: u16) {
         let offset = u32::from(y) * SCREEN_WIDTH;
+        let y = y + 1;
         for x in 0..SCREEN_WIDTH as u16 {
             let Color { r, g, b } = self.fetch_pixel([x, y]);
             self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];

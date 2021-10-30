@@ -94,4 +94,9 @@ impl CgRam {
         }
         self.addr = self.addr.wrapping_add(1)
     }
+
+    pub fn read16(&self, addr: u8) -> u16 {
+        let addr = usize::from(addr) << 1;
+        u16::from_le_bytes([self.data[addr], self.data[addr | 1]])
+    }
 }

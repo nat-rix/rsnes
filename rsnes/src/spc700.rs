@@ -368,8 +368,7 @@ pub struct Spc700<B: AudioBackend> {
 impl<B: AudioBackend> Spc700<B> {
     pub fn new(backend: B) -> Self {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
-            let mut mem: [u8; MEMORY_SIZE] =
-                unsafe { core::mem::transmute([[[0x00u8; 32], [0xffu8; 32]]; 1024]) };
+            let mut mem = [0; MEMORY_SIZE];
             mem[0xf0] = F0_RESET;
             mem
         }
