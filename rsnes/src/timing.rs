@@ -20,7 +20,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.new_frame {
             self.dma.hdma_ahead_cycles += self.reset_hdma();
         }
-        let vend = if self.ppu.overscan { 0xf0 } else { 0xe1 };
+        let vend = self.vend();
         if self.new_scanline && self.scanline_nr < vend && self.scanline_nr != 0 {
             self.ppu.draw_line(self.scanline_nr - 1)
         }
@@ -108,6 +108,14 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.cpu_ahead_cycles += cycles as i32;
         }
         self.cpu_ahead_cycles -= i32::from(N);
+    }
+
+    pub fn vend(&self) -> u16 {
+        if self.ppu.overscan {
+            0xf0
+        } else {
+            0xe1
+        }
     }
 
     pub fn get_memory_cycle(&self, addr: Addr24) -> Cycles {

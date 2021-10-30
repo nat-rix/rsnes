@@ -81,6 +81,16 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // TIMEUP - The IRQ flag
                 Some(self.irq_bit.take() | (self.open_bus & 0x7f))
             }
+            0x4212 => {
+                // HVBJOY - PPU status
+                // TODO: better timing and auto joypad timing
+                let in_hblank = self.scanline_cycle >= 1096 || self.scanline_cycle <= 2;
+                Some(
+                    (((self.scanline_nr <= self.vend()) as u8) << 7)
+                        | ((in_hblank as u8) << 6)
+                        | (self.open_bus & 0x3e),
+                )
+            }
             0x4214..=0x4217 => {
                 // Math result registers
                 Some(self.math_registers.get_result()[usize::from(id & 3)])
