@@ -111,17 +111,17 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 5, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 5, 2,  // 2^
        2, 0, 4, 5, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 4, 5, 0, 0, 0, 0,   2, 0, 0, 4, 0, 4, 0, 0,  // 4^
+       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 0, 4, 6, 0,  // 4^
        0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
-       2, 0, 4, 5, 0, 4, 0, 2,   2, 0, 0, 0, 0, 4, 5, 5,  // 6^
+       2, 0, 4, 5, 3, 4, 0, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
        0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 5, 3, 4, 0, 6,   2, 0, 0, 4, 5, 2, 4, 5,  // 8^
-       2, 0, 4, 5, 0, 5, 5, 6,   0, 0, 5, 5, 2, 2,12, 5,  // 9^
+       2, 0, 4, 5, 0, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
        3, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
        2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 0, 4, 5, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 5, 3, 4, 3, 6,   2, 0, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 0, 3, 4, 3, 4, 0,  // e^
        2, 0, 4, 5, 4, 5, 5, 6,   3, 4, 0, 4, 2, 2, 4, 0,  // f^
 ];
 
@@ -953,6 +953,12 @@ impl<B: AudioBackend> Spc700<B> {
                 // SETP - Set ZERO_PAGE
                 self.status |= flags::ZERO_PAGE
             }
+            0x44 => {
+                // EOR - A := A ^ (dp)
+                let addr = self.load();
+                self.a ^= self.read_small(addr);
+                self.update_nz8(self.a)
+            }
             0x48 => {
                 // EOR - A := A ^ imm
                 self.a ^= self.load();
@@ -971,6 +977,13 @@ impl<B: AudioBackend> Spc700<B> {
             0x4d => {
                 // PUSH - X
                 self.push(self.x)
+            }
+            0x4e => {
+                // TCLR1
+                let addr = self.load16();
+                let val = self.read(addr);
+                self.update_nz8(self.a.wrapping_add(!val).wrapping_add(1));
+                self.write(addr, val & !self.a)
             }
             0x5b => {
                 // LSR - (imm+X) >>= 1
@@ -1007,6 +1020,12 @@ impl<B: AudioBackend> Spc700<B> {
                 // CLRC - Clear CARRY
                 self.status &= !flags::CARRY
             }
+            0x64 => {
+                // CMP - A - (imm)
+                let addr = self.load();
+                let val = self.read_small(addr);
+                self.compare(self.a, val)
+            }
             0x65 => {
                 // CMP - A - (imm[16-bit])
                 let addr = self.load16();
@@ -1017,6 +1036,24 @@ impl<B: AudioBackend> Spc700<B> {
                 // CMP - A - imm
                 let val = self.load();
                 self.compare(self.a, val)
+            }
+            0x69 => {
+                // CMP - (dp) - (dp)
+                let val1 = self.load();
+                let val1 = self.read_small(val1);
+                let val2 = self.load();
+                let val2 = self.read_small(val2);
+                self.compare(val2, val1);
+            }
+            0x6b => {
+                // ROR - (imm) >>= 1
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr);
+                let new_val = (val >> 1) | ((self.status & flags::CARRY) << 7);
+                self.status = (self.status & 0xfe) | (val & flags::CARRY);
+                self.write(addr, new_val);
+                self.update_nz8(new_val);
             }
             0x6d => {
                 // PUSH - Y
@@ -1158,6 +1195,14 @@ impl<B: AudioBackend> Spc700<B> {
                 let addr = self.load();
                 let addr = self.read16_small(addr).wrapping_add(self.y.into());
                 self.a = self.adc(self.a, self.read(addr))
+            }
+            0x98 => {
+                // ADC - (imm) += imm + CARRY
+                let val = self.load();
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.adc(self.read(addr), val);
+                self.write(addr, val)
             }
             0x9a => {
                 // SUBW - YA -= (imm)[16-bit]
@@ -1425,6 +1470,12 @@ impl<B: AudioBackend> Spc700<B> {
                 // MOV - A := IMM
                 self.a = self.load();
                 self.update_nz8(self.a);
+            }
+            0xe9 => {
+                // MOV - X := (imm[16-bit])
+                let addr = self.load16();
+                self.x = self.read(addr);
+                self.update_nz8(self.x);
             }
             0xeb => {
                 // MOV - Y := (IMM)
