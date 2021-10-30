@@ -59,7 +59,7 @@ impl Controller {
 #[derive(Debug, Clone)]
 pub struct StandardController {
     shift_register: Cell<u16>,
-    pressed_buttons: u16,
+    pub pressed_buttons: u16,
 }
 
 impl StandardController {
@@ -73,7 +73,7 @@ impl StandardController {
 
 #[derive(Debug, Clone)]
 pub struct ControllerPort {
-    controller: Controller,
+    pub controller: Controller,
     pio: bool,
     strobe: bool,
     data1: u16,

@@ -4,7 +4,7 @@ use pollster::FutureExt;
 use rsnes::{backend::ArrayFrameBuffer, device::Device, spc700::StereoSample};
 use std::path::PathBuf;
 use winit::{
-    event::{Event, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
@@ -314,6 +314,40 @@ fn main() {
                     surf_config.width = size.width;
                     surf_config.height = size.height;
                     surf.configure(&device, &surf_config);
+                }
+                _ => (),
+            },
+            Event::DeviceEvent { event, .. } => match event {
+                DeviceEvent::Key(KeyboardInput {
+                    scancode, state, ..
+                }) => {
+                    let key: u16 = match scancode {
+                        36 => 0x100,  // A
+                        37 => 1,      // B
+                        38 => 0x200,  // X
+                        39 => 2,      // Y
+                        30 => 0x40,   // Left
+                        32 => 0x80,   // Right
+                        17 => 0x10,   // Up
+                        31 => 0x20,   // Down
+                        56 => 0x400,  // L
+                        100 => 0x800, // R
+                        16 => 0x4,    // Start
+                        18 => 0x8,    // Select
+                        _ => 0,
+                    };
+                    if key > 0 {
+                        match &mut snes.controllers.port1.controller {
+                            rsnes::controller::Controller::Standard(controller) => {
+                                if let ElementState::Pressed = state {
+                                    controller.pressed_buttons |= key
+                                } else {
+                                    controller.pressed_buttons &= !key
+                                }
+                            }
+                            _ => (),
+                        }
+                    }
                 }
                 _ => (),
             },

@@ -163,7 +163,7 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub spc: Spc700<B>,
     pub ppu: Ppu<FB>,
     pub(crate) dma: Dma,
-    pub(crate) controllers: ControllerPorts,
+    pub controllers: ControllerPorts,
     cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
     pub(crate) open_bus: u8,
