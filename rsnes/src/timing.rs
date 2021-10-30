@@ -21,6 +21,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.dma.hdma_ahead_cycles += self.reset_hdma();
         }
         let vend = if self.ppu.overscan { 0xf0 } else { 0xe1 };
+        if self.new_scanline && self.scanline_nr < vend && self.scanline_nr != 0 {
+            self.ppu.draw_line(self.scanline_nr - 1)
+        }
         if core::mem::take(&mut self.do_hdma) {
             if self.dma.is_hdma_running() && (self.scanline_nr <= vend) {
                 self.dma.hdma_ahead_cycles += self.do_hdma();

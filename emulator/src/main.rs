@@ -1,11 +1,7 @@
 use clap::{ErrorKind, Parser};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use pollster::FutureExt;
-use rsnes::{
-    backend::{ArrayFrameBuffer, FrameBuffer},
-    device::Device,
-    spc700::StereoSample,
-};
+use rsnes::{backend::ArrayFrameBuffer, device::Device, spc700::StereoSample};
 use std::path::PathBuf;
 use winit::{
     event::{Event, WindowEvent},

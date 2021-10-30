@@ -2,7 +2,7 @@ use crate::oam::{CgRam, Oam};
 use core::mem::replace;
 
 pub const VRAM_SIZE: usize = 0x8000;
-pub const SCREEN_WIDTH: u32 = 340;
+pub const SCREEN_WIDTH: u32 = 256;
 pub const MAX_SCREEN_HEIGHT: u32 = 239;
 
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +24,12 @@ pub struct BgMode {
     bg3_priority: bool,
     // only relevant to mode 7
     extbg: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DrawLayer {
+    Bg(u8, u8, bool),
+    Sprite(u8),
 }
 
 impl BgMode {
@@ -49,6 +55,127 @@ impl BgMode {
         };
         self.bg3_priority = bits & 8 > 0;
     }
+
+    fn get_layers(&self) -> &'static [DrawLayer] {
+        use BgModeNum::*;
+        const fn s(prio: u8) -> DrawLayer {
+            DrawLayer::Sprite(prio)
+        }
+        const fn b(bg: u8, depth: u8, prio: u8) -> DrawLayer {
+            DrawLayer::Bg(bg - 1, depth, prio == 1)
+        }
+        static MODE0: [DrawLayer; 12] = [
+            s(3),
+            b(1, 1, 1),
+            b(2, 1, 1),
+            s(2),
+            b(1, 1, 0),
+            b(2, 1, 0),
+            s(1),
+            b(3, 1, 1),
+            b(4, 1, 1),
+            s(0),
+            b(3, 1, 0),
+            b(4, 1, 0),
+        ];
+        static MODE1: [DrawLayer; 10] = [
+            s(3),
+            b(1, 2, 1),
+            b(2, 2, 1),
+            s(2),
+            b(1, 2, 0),
+            b(2, 2, 0),
+            s(1),
+            b(3, 1, 1),
+            s(0),
+            b(3, 1, 0),
+        ];
+        static MODE1_BG3: [DrawLayer; 10] = [
+            b(3, 1, 1),
+            s(3),
+            b(1, 2, 1),
+            b(2, 2, 1),
+            s(2),
+            b(1, 2, 0),
+            b(2, 2, 0),
+            s(1),
+            s(0),
+            b(3, 1, 0),
+        ];
+        static MODE2: [DrawLayer; 8] = [
+            s(3),
+            b(1, 2, 1),
+            s(2),
+            b(2, 2, 1),
+            s(1),
+            b(1, 2, 0),
+            s(0),
+            b(2, 2, 0),
+        ];
+        static MODE3: [DrawLayer; 8] = [
+            s(3),
+            b(1, 3, 1),
+            s(2),
+            b(2, 2, 1),
+            s(1),
+            b(1, 3, 0),
+            s(0),
+            b(2, 2, 0),
+        ];
+        static MODE4: [DrawLayer; 8] = [
+            s(3),
+            b(1, 3, 1),
+            s(2),
+            b(2, 1, 1),
+            s(1),
+            b(1, 3, 0),
+            s(0),
+            b(2, 1, 0),
+        ];
+        static MODE5: [DrawLayer; 8] = [
+            s(3),
+            b(1, 2, 1),
+            s(2),
+            b(2, 1, 1),
+            s(1),
+            b(1, 2, 0),
+            s(0),
+            b(2, 1, 0),
+        ];
+        static MODE6: [DrawLayer; 6] = [s(3), b(0, 2, 1), s(2), s(1), b(0, 2, 0), s(0)];
+        static MODE7: [DrawLayer; 7] = [
+            s(3),
+            s(2),
+            b(2, 0xff, 1),
+            s(1),
+            b(1, 3, 0),
+            s(0),
+            b(2, 0xff, 0),
+        ];
+        static MODE7_EXTBG: [DrawLayer; 5] = [s(3), s(2), s(1), b(1, 3, 0), s(0)];
+        match self.num {
+            Mode0 => &MODE0,
+            Mode1 => {
+                if self.bg3_priority {
+                    &MODE1_BG3
+                } else {
+                    &MODE1
+                }
+            }
+            Mode2 => &MODE2,
+            Mode3 => &MODE3,
+            Mode4 => &MODE4,
+            Mode5 => &MODE5,
+            Mode6 => &MODE6,
+            Mode7 => {
+                if self.extbg {
+                    &MODE7_EXTBG
+                } else {
+                    &MODE7
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +187,10 @@ pub struct Color {
 
 impl Color {
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
+
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,10 +226,8 @@ impl Background {
 #[derive(Debug, Clone, Copy)]
 pub struct Layer {
     mask_logic: MaskLogic,
-    window1: bool,
-    window2: bool,
-    window1_inversion: bool,
-    window2_inversion: bool,
+    windows: [bool; 2],
+    window_inversion: [bool; 2],
     color_math: bool,
     // not on color_layer
     main_screen: bool,
@@ -114,10 +243,8 @@ impl Layer {
     pub const fn new() -> Self {
         Self {
             mask_logic: MaskLogic::Or,
-            window1: false,
-            window2: false,
-            window1_inversion: false,
-            window2_inversion: false,
+            windows: [false; 2],
+            window_inversion: [false; 2],
             color_math: false,
             main_screen: false,
             sub_screen: false,
@@ -194,6 +321,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     fixed_color: Color,
     bg_mode: BgMode,
     window_positions: [[u8; 2]; 2],
+    force_blank: bool,
 }
 
 impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
@@ -230,6 +358,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             fixed_color: Color::BLACK,
             bg_mode: BgMode::new(),
             window_positions: [[0; 2]; 2],
+            force_blank: true,
         }
     }
 
@@ -243,15 +372,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         match id {
             0x00 => {
                 // INIDISP
-                if val & 0b1000_0000 > 0 {
-                    // TODO: force blank
-                    println!("[warn] forcing blank (TODO)");
-                }
+                self.force_blank = val & 0x80 > 0;
                 self.brightness = val & 0b1111;
-                println!(
-                    "setting brightness to {:.0}%",
-                    (self.brightness as f32 * 100.0) / 15.0
-                );
             }
             0x01 => {
                 // OBSEL
@@ -285,7 +407,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             0x07..=0x0a => {
                 // BGnSC
                 let bg = &mut self.bgs[usize::from((id + 1) & 3)];
-                bg.tilemap_addr = (val & 0x7f) >> 2;
+                bg.tilemap_addr = val >> 2;
                 bg.y_mirror = val & 2 > 0;
                 bg.x_mirror = val & 1 > 0;
             }
@@ -294,7 +416,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 let val = val & 0x77;
                 let id = usize::from(!id & 2);
                 self.bgs[id].base_addr = val >> 4;
-                self.bgs[id | 1].base_addr = val & 7;
+                self.bgs[id | 1].base_addr = val & 0xf;
             }
             0x0d..=0x14 => {
                 // M7xOFS and BGnxOFS
@@ -367,10 +489,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 let mut val = val;
                 for i in 0..2 {
                     let bg = &mut self.bgs[usize::from(i + (!id & 2))];
-                    bg.layer.window1_inversion = val & 1 > 0;
-                    bg.layer.window1 = val & 2 > 0;
-                    bg.layer.window2_inversion = val & 4 > 0;
-                    bg.layer.window2 = val & 8 > 0;
+                    bg.layer.window_inversion[0] = val & 1 > 0;
+                    bg.layer.windows[0] = val & 2 > 0;
+                    bg.layer.window_inversion[1] = val & 4 > 0;
+                    bg.layer.windows[1] = val & 8 > 0;
                     val >>= 4;
                 }
             }
@@ -378,10 +500,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 // WOBJSEL
                 let mut val = val;
                 for layer in [&mut self.obj_layer, &mut self.color_layer] {
-                    layer.window1_inversion = val & 1 > 0;
-                    layer.window1 = val & 2 > 0;
-                    layer.window2_inversion = val & 4 > 0;
-                    layer.window2 = val & 8 > 0;
+                    layer.window_inversion[0] = val & 1 > 0;
+                    layer.windows[0] = val & 2 > 0;
+                    layer.window_inversion[1] = val & 4 > 0;
+                    layer.windows[1] = val & 8 > 0;
                     val >>= 4;
                 }
             }
@@ -469,6 +591,177 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         self.vram
             .get_mut(usize::from(self.remap_mode.remap(index) & 0x7fff))
             .unwrap()
+    }
+
+    fn get_layer_by_info(&self, layer_info: &DrawLayer) -> &Layer {
+        match layer_info {
+            DrawLayer::Bg(n, _, _) => &self.bgs[usize::from(*n)].layer,
+            DrawLayer::Sprite(_) => &self.obj_layer,
+        }
+    }
+
+    fn is_in_window(&self, x: u16, layer: &Layer) -> bool {
+        let window_n = |n: usize| -> bool {
+            (self.window_positions[n][0]..=self.window_positions[n][1])
+                .contains(&((x & 0xff) as u8))
+                ^ layer.window_inversion[n]
+        };
+        match layer.windows {
+            [false, false] => false,
+            [false, true] => window_n(1),
+            [true, false] => window_n(0),
+            [true, true] => match layer.mask_logic {
+                MaskLogic::Or => window_n(0) || window_n(1),
+                MaskLogic::And => window_n(0) && window_n(1),
+                MaskLogic::Xor => window_n(0) ^ window_n(1),
+                MaskLogic::XNor => window_n(0) == window_n(1),
+            },
+        }
+    }
+
+    fn get_bg_color(
+        &self,
+        bg_nr: u8,
+        bit_depth: u8,
+        priority: bool,
+        [x, y]: [u16; 2],
+    ) -> Option<Color> {
+        let bg = &self.bgs[usize::from(bg_nr)];
+        let target = [x + bg.scroll[0], y + bg.scroll[1]];
+        let is_y16 = bg.is_16x16_tiles;
+        let is_x16 = is_y16 || matches!(self.bg_mode.num, BgModeNum::Mode5 | BgModeNum::Mode6);
+        let xbits = if is_x16 { 4 } else { 3 };
+        let ybits = if is_y16 { 4 } else { 3 };
+        let mut tilemap_addr = (u16::from(bg.tilemap_addr) << 8)
+            .wrapping_add((((y >> ybits) & 0x1f) << 5) | ((x >> xbits) & 0x1f));
+        if bg.x_mirror && x & (0x20 << xbits) > 0 {
+            tilemap_addr = tilemap_addr.wrapping_add(0x400)
+        }
+        if bg.y_mirror && y & (0x20 << ybits) > 0 {
+            tilemap_addr = tilemap_addr.wrapping_add(0x400);
+            if bg.x_mirror {
+                tilemap_addr = tilemap_addr.wrapping_add(0x400);
+            }
+        }
+        let tile_info = self.vram[usize::from(tilemap_addr & 0x7fff)];
+        if priority ^ ((tile_info & 0x2000) > 0) {
+            return None;
+        }
+        let mut palette = ((tile_info >> 10) & 7) as u8;
+        let tx = if tile_info & 0x4000 > 0 { !x } else { x } & 7;
+        let ty = if tile_info & 0x8000 > 0 { !y } else { y } & 7;
+        let mut tile_nr = tile_info & 0x3ff;
+        if is_x16 && ((x & 8 > 0) ^ (tile_info & 0x4000 > 0)) {
+            tile_nr += 1;
+        }
+        if is_x16 && ((y & 8 > 0) ^ (tile_info & 0x8000 > 0)) {
+            tile_nr += 16;
+        }
+        if let BgModeNum::Mode0 = self.bg_mode.num {
+            palette |= bg_nr << 3
+        }
+        let plane = self.vram[usize::from(
+            (u16::from(bg.base_addr) << 12)
+                .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
+                .wrapping_add(ty)
+                & 0x7fff,
+        )];
+        let mut pixel = ((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2);
+        let mut palette_dimensions = 2;
+        if bit_depth > 1 {
+            palette_dimensions = 4;
+            let plane = self.vram[usize::from(
+                (u16::from(bg.base_addr) << 12)
+                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
+                    .wrapping_add(ty)
+                    .wrapping_add(8)
+                    & 0x7fff,
+            )];
+            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 2;
+        }
+        if bit_depth > 2 {
+            palette_dimensions = 8;
+            let plane = self.vram[usize::from(
+                (u16::from(bg.base_addr) << 12)
+                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
+                    .wrapping_add(ty)
+                    .wrapping_add(16)
+                    & 0x7fff,
+            )];
+            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 4;
+            let plane = self.vram[usize::from(
+                (u16::from(bg.base_addr) << 12)
+                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
+                    .wrapping_add(ty)
+                    .wrapping_add(32)
+                    & 0x7fff,
+            )];
+            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 6;
+        }
+        let pixel = u32::from(pixel).wrapping_add(u32::from(palette << palette_dimensions));
+        if pixel == 0 {
+            None
+        } else {
+            Some(Color::new(
+                (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
+                (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
+                (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
+            ))
+        }
+    }
+
+    fn get_sprite_color(&self, priority: u8, [x, y]: [u16; 2]) -> Option<Color> {
+        None
+    }
+
+    fn fetch_pixel_layer(&mut self, [x, y]: [u16; 2]) -> (u8, Color) {
+        let brightness = self.brightness as f32 / 15.0;
+        let mut color = None;
+        for (i, layer_info) in self.bg_mode.get_layers().iter().enumerate() {
+            let layer = self.get_layer_by_info(layer_info);
+            color = if layer.main_screen
+                && !(layer.main_screen_masked && self.is_in_window(x, layer))
+            {
+                match layer_info {
+                    DrawLayer::Bg(bg_nr, bit_depth, priority) => {
+                        self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
+                    }
+                    DrawLayer::Sprite(priority) => self.get_sprite_color(*priority, [x, y]),
+                }
+            } else {
+                None
+            };
+            if color.is_some() {
+                break;
+            }
+        }
+        (
+            0,
+            color.unwrap_or_else(|| {
+                Color::new(
+                    (self.fixed_color.r as f32 / 32.0 * 255.0 * brightness) as u8,
+                    (self.fixed_color.g as f32 / 32.0 * 255.0 * brightness) as u8,
+                    (self.fixed_color.b as f32 / 32.0 * 255.0 * brightness) as u8,
+                )
+            }),
+        )
+    }
+
+    fn fetch_pixel(&mut self, [x, y]: [u16; 2]) -> Color {
+        if self.force_blank {
+            Color::BLACK
+        } else {
+            let (_layer, color) = self.fetch_pixel_layer([x, y]);
+            color
+        }
+    }
+
+    pub fn draw_line(&mut self, y: u16) {
+        let offset = u32::from(y) * SCREEN_WIDTH;
+        for x in 0..SCREEN_WIDTH as u16 {
+            let Color { r, g, b } = self.fetch_pixel([x, y]);
+            self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];
+        }
     }
 }
 
