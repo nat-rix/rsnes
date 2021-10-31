@@ -206,7 +206,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             cpu_ahead_cycles: 52,
             new_scanline: true,
             new_frame: true,
-            do_hdma: false,
+            do_hdma: true,
             irq_time_h: 0x7fc,
             irq_time_v: 0x1ff,
             shall_irq: false,
@@ -297,7 +297,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         self.cpu.regs.status |= Status::IRQ_DISABLE;
         self.cpu.regs.status &= !Status::DECIMAL;
         let addr = self.read(Addr24::new(0, vector));
-        self.cpu.regs.pc.addr = addr;
+        self.cpu.regs.pc = Addr24::new(0, addr);
         48
     }
 }

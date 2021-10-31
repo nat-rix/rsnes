@@ -276,32 +276,31 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 };
                 if self.dma.do_transfer & (1 << channel_id) > 0 {
                     for &i in offsets {
+                        cycles += 8;
                         self.transfer_hdma_byte(channel_id, i)
                     }
                 }
                 let channel = self.dma.channels.get_mut(channel_id).unwrap();
                 channel.line_counter = channel.line_counter.wrapping_sub(1);
+                self.dma.do_transfer |= 1 << channel_id;
                 if channel.line_counter == 0 || channel.line_counter == 0x80 {
-                    let addr1 = Addr24::new(channel.a_bus.bank, channel.table);
+                    let addr = Addr24::new(channel.a_bus.bank, channel.table);
+                    let val = self.read::<u8>(addr);
+                    let channel = self.dma.channels.get_mut(channel_id).unwrap();
+                    channel.line_counter = val;
                     channel.table = channel.table.wrapping_add(1);
-                    let addr2 = Addr24::new(channel.a_bus.bank, channel.table);
-                    channel.table = channel.table.wrapping_add(1);
-                    let val1 = self.read(addr1);
-                    if val1 == 0 {
+                    if channel.line_counter == 0 {
                         self.dma.cancelled |= 1 << channel_id
                     }
-                    let channel = self.dma.channels.get_mut(channel_id).unwrap();
-                    channel.line_counter = val1;
                     if channel.control & flags::INDIRECT > 0 {
-                        let new_size = self.read(addr2);
                         cycles += 16;
+                        let addr = Addr24::new(channel.a_bus.bank, channel.table);
+                        let val = self.read::<u16>(addr);
                         let channel = self.dma.channels.get_mut(channel_id).unwrap();
-                        channel.size = u16::from_le_bytes([new_size, new_size]);
+                        channel.table = channel.table.wrapping_add(2);
+                        channel.size = val;
                     }
-                    self.dma.do_transfer |= 1 << channel_id
-                } else if channel.line_counter > 0x80 {
-                    self.dma.do_transfer |= 1 << channel_id
-                } else {
+                } else if channel.line_counter < 0x80 {
                     self.dma.do_transfer &= !(1 << channel_id)
                 }
             }
@@ -311,7 +310,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
 
     pub fn reset_hdma(&mut self) -> i32 {
         let mut cycles = 0;
-        self.dma.dma_enabled = 0;
+        self.dma.dma_enabled &= !self.dma.hdma_enabled;
         self.dma.cancelled = 0;
         self.dma.do_transfer = self.dma.hdma_enabled;
         for channel_id in 0..8 {
@@ -326,15 +325,15 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 let read_addr1 = Addr24::new(channel.a_bus.bank, channel.table);
                 channel.table = channel.table.wrapping_add(1);
                 let read_addr2 = Addr24::new(channel.a_bus.bank, channel.table);
-                channel.table = channel.table.wrapping_add(1);
                 let line_counter = self.read(read_addr1);
                 let channel = self.dma.channels.get_mut(channel_id).unwrap();
                 channel.line_counter = line_counter;
                 if channel.control & flags::INDIRECT > 0 {
-                    let new_size = self.read(read_addr2);
                     cycles += 16;
+                    let new_size = self.read::<u16>(read_addr2);
                     let channel = self.dma.channels.get_mut(channel_id).unwrap();
-                    channel.size = u16::from_le_bytes([new_size, new_size]);
+                    channel.table = channel.table.wrapping_add(2);
+                    channel.size = new_size;
                 }
             }
         }

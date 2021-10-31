@@ -17,17 +17,9 @@ pub(crate) const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn run_cycle<const N: u16>(&mut self) {
         self.spc.tick(N);
-        if self.new_frame {
-            self.dma.hdma_ahead_cycles += self.reset_hdma();
-        }
         let vend = self.vend();
         if self.new_scanline && self.scanline_nr < vend && self.scanline_nr != 0 {
             self.ppu.draw_line(self.scanline_nr - 1)
-        }
-        if core::mem::take(&mut self.do_hdma) {
-            if self.dma.is_hdma_running() && (self.scanline_nr <= vend) {
-                self.dma.hdma_ahead_cycles += self.do_hdma();
-            }
         }
         if self.is_auto_joypad() && self.new_scanline && self.scanline_nr == vend + 2 {
             self.controllers.auto_joypad_timer = 4224;
@@ -38,18 +30,24 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
         if !(536..536 + 40).contains(&self.scanline_cycle) {
-            let hdma_running = self.dma.is_hdma_running();
-            if self.dma.is_dma_running() && !hdma_running {
+            if self.dma.hdma_ahead_cycles > 0 {
+                self.dma.hdma_ahead_cycles -= i32::from(N);
+            } else if self.dma.is_dma_running() {
                 if self.dma.ahead_cycles > 0 {
                     self.dma.ahead_cycles -= i32::from(N)
                 } else {
                     self.do_dma_first_channel()
                 }
-            } else if self.dma.hdma_ahead_cycles > 0 {
-                self.dma.hdma_ahead_cycles -= i32::from(N);
             } else {
                 self.run_cpu::<N>();
             }
+        }
+        if self.new_frame {
+            self.dma.hdma_ahead_cycles = self.reset_hdma();
+        }
+        if self.do_hdma && self.scanline_nr < vend && self.scanline_cycle >= 1024 {
+            self.do_hdma = false;
+            self.dma.hdma_ahead_cycles = self.do_hdma();
         }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
@@ -67,12 +65,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     }
 
     pub fn update_counters<const N: u16>(&mut self) {
-        let old_scanline_cycle = self.scanline_cycle;
         self.scanline_cycle += N;
         self.math_registers.tick(N);
-        if old_scanline_cycle < 1024 && self.scanline_cycle >= 1024 {
-            self.do_hdma = true;
-        }
         self.new_scanline = false;
         self.new_frame = false;
         // Test if one scanline completed
@@ -80,6 +74,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.scanline_cycle >= 1364 {
             self.scanline_cycle -= 1364;
             self.scanline_nr += 1;
+            self.do_hdma = true;
             self.new_scanline = true;
             // Test if one frame completed
             // TODO: Take notice of the interlace mode

@@ -413,7 +413,7 @@ fn main() {
                         surface_texture.present();
                     }
                     Err(wgpu::SurfaceError::Timeout) => {
-                        println!("[warning] surface acquire timeout");
+                        eprintln!("[warning] surface acquire timeout");
                     }
                     Err(err) => error!("Failed to acquire next swap chain texture ({})", err),
                 };
