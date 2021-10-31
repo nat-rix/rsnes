@@ -7,15 +7,15 @@ use crate::timing::Cycles;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       0, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
+       7, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 0,  // 0^
        2, 0, 0, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 7, 5,  // 1^
-       6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 0, 4, 4, 0, 0,  // 2^
+       6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 5, 4, 4, 0, 0,  // 2^
        2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 2, 0, 0, 4, 0, 5,  // 3^
        6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        2, 0, 0, 0, 1, 4, 0, 0,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
        6, 0, 6, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
-       2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 0, 4, 7, 5,  // 7^
-       2, 6, 0, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
+       2, 0, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 6, 4, 7, 5,  // 7^
+       2, 6, 4, 0, 3, 3, 3, 6,   2, 0, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 0, 0, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 0, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
        2, 5, 5, 0, 4, 4, 4, 6,   0, 4, 0, 2, 4, 4, 4, 5,  // b^
@@ -190,9 +190,33 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         self.cpu.get_data_addr(new_addr)
     }
 
+    // Absolute Indexed Indirect
+    pub fn load_indexed_indirect(&mut self) -> Addr24 {
+        let x = if self.cpu.is_idx8() {
+            self.cpu.regs.x8().into()
+        } else {
+            self.cpu.regs.x
+        };
+        let addr = self.load::<u16>().wrapping_add(x);
+        let addr = Addr24::new(self.cpu.regs.pc.bank, addr);
+        Addr24::new(self.cpu.regs.pc.bank, self.read(addr))
+    }
+
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
         let mut cycles = CYCLES[op as usize];
         match op {
+            0x00 => {
+                // BRK - Break
+                self.push(self.cpu.regs.pc.bank);
+                self.push(self.cpu.regs.pc.addr.wrapping_add(1));
+                self.push(self.cpu.regs.status.0);
+                self.cpu.regs.status =
+                    (self.cpu.regs.status | Status::IRQ_DISABLE) & !Status::DECIMAL;
+                if !self.cpu.regs.is_emulation {
+                    cycles += 1
+                }
+                self.cpu.regs.pc = Addr24::new(0, self.read(Addr24::new(0, 0xffe6)));
+            }
             0x02 => {
                 // COP - Co-Processor Enable
                 #[allow(unused_assignments)]
@@ -510,6 +534,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.update_nz16(res);
                     self.cpu.regs.a = res;
                 }
+            }
+            0x2b => {
+                // PLD - Pull Direct Page Register
+                self.cpu.regs.dp = self.pull();
+                self.cpu.update_nz16(self.cpu.regs.dp);
             }
             0x2c => {
                 // BIT - Test Bit from absolute index
@@ -917,6 +946,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x7c => {
+                // JMP - Jump Absolute Indexed Indirect
+                let addr = self.load_indexed_indirect();
+                self.cpu.regs.pc = addr;
+            }
             0x7d => {
                 // ADC - Add with Carry
                 let addr = self.load_indexed_x::<true>(&mut cycles);
@@ -947,7 +981,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 2
                 }
             }
-
             0x7f => {
                 // ADC - Add Absolute Long Indexed, X with Carry
                 let addr = self.load_long_indexed_x();
@@ -973,6 +1006,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.write::<u16>(addr, self.cpu.regs.a);
                     cycles += 1;
                 }
+            }
+            0x82 => {
+                // BRL - Branch always Program Counter Relative Long
+                self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(self.load::<u16>());
             }
             0x84 => {
                 // STY - Store Y to direct page
