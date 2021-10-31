@@ -156,13 +156,16 @@ fn main() {
     );
     snes.load_cartridge(cartridge);
 
-    let size = winit::dpi::LogicalSize::new(500i32, 500i32);
+    let size = winit::dpi::PhysicalSize::new(
+        rsnes::ppu::SCREEN_WIDTH * 4,
+        rsnes::ppu::MAX_SCREEN_HEIGHT * 4,
+    );
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_decorations(true)
         .with_visible(true)
         .with_fullscreen(None)
-        .with_resizable(true)
+        .with_resizable(false)
         .with_maximized(false)
         .with_inner_size(size)
         .with_title(env!("CARGO_PKG_NAME"))

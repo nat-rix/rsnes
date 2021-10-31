@@ -88,6 +88,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 Some(
                     (((self.scanline_nr <= self.vend()) as u8) << 7)
                         | ((in_hblank as u8) << 6)
+                        | (self.controllers.auto_joypad_timer > 0) as u8
                         | (self.open_bus & 0x3e),
                 )
             }
