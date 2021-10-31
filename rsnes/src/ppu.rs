@@ -142,7 +142,7 @@ impl BgMode {
             s(0),
             b(2, 1, 0),
         ];
-        static MODE6: [DrawLayer; 6] = [s(3), b(0, 2, 1), s(2), s(1), b(0, 2, 0), s(0)];
+        static MODE6: [DrawLayer; 6] = [s(3), b(1, 2, 1), s(2), s(1), b(1, 2, 0), s(0)];
         static MODE7: [DrawLayer; 7] = [
             s(3),
             s(2),
