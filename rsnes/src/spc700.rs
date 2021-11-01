@@ -107,17 +107,17 @@ const DECODE_BUFFER_SIZE: usize = 3 + 16;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 5, 0, 0, 0, 0,   2, 6, 0, 4, 0, 4, 0, 0,  // 0^
+       2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 0, 4, 5, 4, 0, 0,  // 0^
        2, 0, 4, 5, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 0, 0, 4, 5, 2,  // 2^
+       2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 0, 4, 0, 4, 5, 2,  // 2^
        2, 0, 4, 5, 4, 0, 0, 0,   0, 0, 6, 0, 0, 2, 0, 8,  // 3^
-       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 0, 4, 6, 0,  // 4^
+       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
        0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 0, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
        0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 5, 3, 4, 0, 6,   2, 0, 0, 4, 5, 2, 4, 5,  // 8^
        2, 0, 4, 5, 0, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
-       3, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
+       3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 2, 4, 4,  // a^
        2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 0, 4, 5, 4, 5, 4, 0,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
@@ -716,7 +716,7 @@ impl<B: AudioBackend> Spc700<B> {
                         let sample = match header >> 4 {
                             0 => i16::from(sample) >> 1,
                             s @ 1..=12 => i16::from(sample) << (s - 1),
-                            13..=15 => todo!("what do values 13-15 mean? (stated as reserved)"),
+                            13..=15 => i16::from(sample >> 3) << 11,
                             _ => unreachable!(),
                         };
                         let older = channel.decode_buffer[index + 1];
@@ -832,6 +832,23 @@ impl<B: AudioBackend> Spc700<B> {
                 let rel = self.load();
                 self.branch_rel(rel, ((val >> (op >> 5)) ^ (op >> 4)) & 1 == 1, &mut cycles);
             }
+            0x04 => {
+                // OR - A |= (imm)
+                let addr = self.load();
+                self.a |= self.read_small(addr);
+                self.update_nz8(self.a);
+            }
+            0x05 => {
+                // OR - A |= (imm[16-bit])
+                let addr = self.load16();
+                self.a |= self.read(addr);
+                self.update_nz8(self.a);
+            }
+            0x06 => {
+                // OR - A |= (X)
+                self.a |= self.read_small(self.x);
+                self.update_nz8(self.a);
+            }
             0x08 => {
                 // OR - A |= imm
                 self.a |= self.load();
@@ -849,6 +866,15 @@ impl<B: AudioBackend> Spc700<B> {
                 // ASL - (imm) <<= 1
                 let addr = self.load();
                 let addr = self.get_small(addr);
+                let mut val = self.read(addr);
+                self.set_status(val >= 0x80, flags::CARRY);
+                val <<= 1;
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
+            0x0c => {
+                // ASL - (a) <<= 1
+                let addr = self.load16();
                 let mut val = self.read(addr);
                 self.set_status(val >= 0x80, flags::CARRY);
                 val <<= 1;
@@ -898,10 +924,31 @@ impl<B: AudioBackend> Spc700<B> {
                 self.a &= self.read_small(addr);
                 self.update_nz8(self.a)
             }
+            0x25 => {
+                // AND - A &= (imm[16-bit])
+                let addr = self.load16();
+                self.a &= self.read(addr);
+                self.update_nz8(self.a)
+            }
+            0x26 => {
+                // AND - A &= (X)
+                self.a &= self.read_small(self.x);
+                self.update_nz8(self.a)
+            }
             0x28 => {
                 // AND - A &= imm
                 self.a &= self.load();
                 self.update_nz8(self.a)
+            }
+            0x2b => {
+                // ROL - (imm) <<= 1
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr);
+                let new_val = (val << 1) | (self.status & flags::CARRY);
+                self.set_status(val >= 0x80, flags::CARRY);
+                self.write(addr, new_val);
+                self.update_nz8(new_val);
             }
             0x2d => {
                 // PUSH - A
@@ -967,6 +1014,15 @@ impl<B: AudioBackend> Spc700<B> {
                 // LSR - (imm) >>= 1
                 let addr = self.load();
                 let addr = self.get_small(addr);
+                let val = self.read(addr);
+                self.set_status(val & 1 > 0, flags::CARRY);
+                let val = val >> 1;
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
+            0x4c => {
+                // LSR - (imm[16-bit]) >>= 1
+                let addr = self.load16();
                 let val = self.read(addr);
                 self.set_status(val & 1 > 0, flags::CARRY);
                 let val = val >> 1;
@@ -1260,6 +1316,11 @@ impl<B: AudioBackend> Spc700<B> {
                 // SBC - A -= (imm) + CARRY
                 let addr = self.load();
                 self.a = self.adc(self.a, !self.read_small(addr));
+            }
+            0xa5 => {
+                // SBC - A -= (imm[16-bit]) + CARRY
+                let addr = self.load16();
+                self.a = self.adc(self.a, !self.read(addr));
             }
             0xa8 => {
                 // SBC - A -= imm + CARRY

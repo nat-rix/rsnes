@@ -8,9 +8,9 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        7, 0, 7, 0, 5, 3, 5, 6,   3, 2, 2, 4, 0, 4, 6, 5,  // 0^
-       2, 0, 5, 0, 5, 0, 0, 0,   2, 4, 2, 2, 0, 4, 7, 5,  // 1^
+       2, 0, 5, 0, 5, 4, 0, 0,   2, 4, 2, 2, 0, 4, 7, 5,  // 1^
        6, 0, 8, 0, 3, 3, 5, 0,   4, 2, 2, 5, 4, 4, 0, 0,  // 2^
-       2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 2, 0, 0, 4, 0, 5,  // 3^
+       2, 0, 0, 0, 0, 0, 0, 0,   2, 4, 2, 2, 0, 4, 0, 5,  // 3^
        6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        2, 0, 0, 0, 1, 4, 0, 0,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
        6, 0, 6, 0, 3, 3, 0, 0,   4, 2, 2, 6, 0, 4, 0, 0,  // 6^
@@ -400,6 +400,19 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 2
                 }
             }
+            0x15 => {
+                // ORA - Or A with DP Indexed,X
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) | self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a |= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x18 => {
                 // CLC - Clear the Carry Flag
                 self.cpu.regs.status &= !Status::CARRY;
@@ -616,6 +629,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
                 }
+            }
+            0x3b => {
+                // TSC - Transfer SP to A
+                self.cpu.regs.a = self.cpu.regs.sp;
+                self.cpu.update_nz16(self.cpu.regs.a);
             }
             0x3d => {
                 // AND - And A with Absolute Indexed, X
