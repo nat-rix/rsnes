@@ -42,8 +42,16 @@ impl MathRegisters {
         if self.math_timer == 0 {
             self.result_before = self.result_after
         }
-        let [div_low, div_high] = (self.dividend / u16::from(self.divisor)).to_le_bytes();
-        let [rem_low, rem_high] = (self.dividend % u16::from(self.divisor)).to_le_bytes();
+        let (div, rem) = if self.divisor == 0 {
+            (0xffff, self.dividend)
+        } else {
+            (
+                self.dividend / u16::from(self.divisor),
+                self.dividend % u16::from(self.divisor),
+            )
+        };
+        let [div_low, div_high] = div.to_le_bytes();
+        let [rem_low, rem_high] = rem.to_le_bytes();
         self.math_timer = 96;
         self.result_after = [div_low, div_high, rem_low, rem_high]
     }
