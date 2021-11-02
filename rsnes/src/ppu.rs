@@ -4,6 +4,7 @@ use core::mem::replace;
 pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
 pub const MAX_SCREEN_HEIGHT: u32 = 239;
+pub const CHIP_5C78_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BgModeNum {
@@ -322,6 +323,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     bg_mode: BgMode,
     window_positions: [[u8; 2]; 2],
     force_blank: bool,
+    open_bus2: u8,
 }
 
 impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
@@ -359,12 +361,24 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             bg_mode: BgMode::new(),
             window_positions: [[0; 2]; 2],
             force_blank: true,
+            open_bus2: 0,
         }
     }
 
     /// Read from a PPU register (memory map 0x2134..=0x213f)
-    pub fn read_register(&self, id: u8) -> Option<u8> {
-        todo!("read from unknown PPU register 0x21{:02x}", id)
+    pub fn read_register(&mut self, id: u8) -> Option<u8> {
+        match id {
+            0x3f => {
+                // STAT78
+                // TODO: support interlace
+                // TODO: implement counter latching
+                // TODO: implement PAL mode
+                let val = (self.open_bus2 & 0x20) | CHIP_5C78_VERSION;
+                self.open_bus2 = val;
+                Some(val)
+            }
+            _ => todo!("read from unknown PPU register 0x21{:02x}", id),
+        }
     }
 
     /// Write to a PPU register (memory map 0x2100..=0x2133)
