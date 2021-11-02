@@ -1119,7 +1119,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0x82 => {
                 // BRL - Branch always Program Counter Relative Long
-                self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(self.load::<u16>());
+                let rel = self.load::<u16>();
+                self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(rel);
             }
             0x84 => {
                 // STY - Store Y to direct page
