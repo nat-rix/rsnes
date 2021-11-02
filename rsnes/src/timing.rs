@@ -51,13 +51,13 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
+        let hpos_start = self.scanline_cycle >> 2;
+        let hpos_end = hpos_start + ((N + 3) >> 2);
         self.shall_irq = self.shall_irq
-            || (!h_irq_enabled
-                || (self.scanline_cycle..self.scanline_cycle + N).contains(&self.irq_time_h))
-                && (!v_irq_enabled
-                    || (self.scanline_nr..self.scanline_nr).contains(&self.irq_time_v))
-                && (h_irq_enabled || !v_irq_enabled || (0..N).contains(&self.irq_time_h))
-                && (h_irq_enabled || v_irq_enabled);
+            || ((h_irq_enabled || v_irq_enabled)
+                && (!h_irq_enabled || (hpos_start..hpos_end).contains(&self.irq_time_h))
+                && (!v_irq_enabled || self.scanline_nr == self.irq_time_v)
+                && (h_irq_enabled || !v_irq_enabled || self.new_scanline));
         let do_nmi = self.new_scanline && self.scanline_nr == vend;
         self.nmi_vblank_bit.set(self.nmi_vblank_bit.get() || do_nmi);
         self.shall_nmi |= self.cpu.nmitimen & 0x80 > 0 && do_nmi;
