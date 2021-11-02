@@ -94,7 +94,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // TODO: better timing and auto joypad timing
                 let in_hblank = self.scanline_cycle >= 1096 || self.scanline_cycle <= 2;
                 Some(
-                    (((self.scanline_nr <= self.vend()) as u8) << 7)
+                    (((self.scanline_nr >= self.vend()) as u8) << 7)
                         | ((in_hblank as u8) << 6)
                         | (self.controllers.auto_joypad_timer > 0) as u8
                         | (self.open_bus & 0x3e),
