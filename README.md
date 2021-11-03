@@ -31,6 +31,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] Sprite support
 - [ ] S-DSP echo effect support
 - [ ] S-DSP noise effect support
+- [ ] Save game to files
 - [ ] SA-1 support
 - [ ] emulator running also on [WASM](https://webassembly.org/)
 - [ ] Real Gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
@@ -50,6 +51,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] Multitap (MP5) controller support
 - [ ] [SNES Mouse](https://en.wikipedia.org/wiki/Super_NES_Mouse) support
 - [ ] [SNES Super Scope](https://en.wikipedia.org/wiki/Super_Scope) support
+- [ ] Save States
 - [ ] Capcom CX4 coprocessor support (this processor is only used in Mega Man X2 and Mega Man X3)
 - [ ] SPC7110 data compression chip
 
