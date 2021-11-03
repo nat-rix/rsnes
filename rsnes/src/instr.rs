@@ -14,12 +14,12 @@ static CYCLES: [Cycles; 256] = [
        6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        2, 0, 0, 0, 1, 4, 0, 0,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
        6, 0, 6, 4, 3, 3, 5, 0,   4, 2, 2, 6, 5, 4, 0, 5,  // 6^
-       2, 5, 0, 0, 4, 4, 0, 0,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
+       2, 5, 0, 0, 4, 4, 0, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 5, 0, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
        2, 5, 5, 0, 4, 4, 4, 6,   0, 4, 2, 2, 4, 4, 4, 5,  // b^
-       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 2, 0, 4, 4, 6, 5,  // c^
+       2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
        2, 0, 0, 0, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
        2, 0, 3, 0, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
        2, 0, 0, 0, 5, 4, 6, 0,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
@@ -1099,6 +1099,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1;
                 }
             }
+            0x77 => {
+                // ADC - Add with Carry DP Indirect Long Indexed, Y
+                let addr = self.load_indirect_long_indexed_y(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
+            }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
                 self.cpu.regs.status |= Status::IRQ_DISABLE
@@ -1911,6 +1923,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.regs.x = self.cpu.regs.x.wrapping_sub(1);
                     self.cpu.update_nz16(self.cpu.regs.x);
                 }
+            }
+            0xcb => {
+                // WAI - Wait until interrupt
+                self.cpu.wait_mode = true;
             }
             0xcc => {
                 // CPY - Compare Y with absolute value

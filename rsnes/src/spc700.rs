@@ -112,10 +112,10 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 0, 4, 0, 4, 5, 2,  // 2^
        2, 0, 4, 5, 4, 0, 0, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
        2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
-       0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 0, 5, 2, 2, 4, 3,  // 5^
+       0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 4, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
        0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
-       2, 0, 4, 5, 3, 4, 0, 6,   2, 0, 5, 4, 5, 2, 4, 5,  // 8^
+       2, 0, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
        2, 0, 4, 5, 0, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
        3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
        2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
@@ -1062,6 +1062,14 @@ impl<B: AudioBackend> Spc700<B> {
                 self.update_nz8(self.a.wrapping_add(!val).wrapping_add(1));
                 self.write(addr, val & !self.a)
             }
+            0x5a => {
+                // CMPW - YA - (imm)[16-bit]
+                let val = self.load();
+                let (result, ov1) = self.ya().overflowing_add(!self.read16_small(val));
+                let (result, ov2) = result.overflowing_add(1);
+                self.set_status(ov1 || ov2, flags::CARRY);
+                self.update_nz16(result);
+            }
             0x5b => {
                 // LSR - (imm+X) >>= 1
                 let addr = self.load().wrapping_add(self.x);
@@ -1226,6 +1234,15 @@ impl<B: AudioBackend> Spc700<B> {
                 // ADC - A += imm + CARRY
                 let val = self.load();
                 self.a = self.adc(self.a, val)
+            }
+            0x89 => {
+                // ADC - (imm) += (imm)
+                let addr1 = self.load();
+                let addr1 = self.get_small(addr1);
+                let addr2 = self.load();
+                let addr2 = self.get_small(addr2);
+                let result = self.adc(self.read(addr2), self.read(addr1));
+                self.write(addr2, result);
             }
             0x8a => {
                 // EOR1 - XOR CARRY on (imm2) >> imm1

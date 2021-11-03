@@ -5,6 +5,7 @@
 //! - <https://wiki.superfamicom.org/timing>
 
 use crate::device::{Addr24, Device};
+use core::mem::replace;
 
 pub type Cycles = u32;
 
@@ -90,12 +91,21 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         while self.cpu_ahead_cycles <= 0 {
             self.memory_cycles = 0;
             let cycles = (if self.shall_nmi {
+                if replace(&mut self.cpu.wait_mode, false) {
+                    break;
+                }
                 self.shall_nmi = false;
                 self.nmi()
             } else if self.shall_irq {
+                if replace(&mut self.cpu.wait_mode, false) {
+                    break;
+                }
                 self.shall_irq = false;
                 self.irq()
             } else {
+                if self.cpu.wait_mode {
+                    break;
+                }
                 // > Internal operation CPU cycles always take 6 master cycles
                 // source: <https://wiki.superfamicom.org/memory-mapping>
                 self.dispatch_instruction() * 6
