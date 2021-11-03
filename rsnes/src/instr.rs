@@ -13,8 +13,8 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 0, 0, 4, 0, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
        6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
        2, 0, 0, 0, 1, 4, 0, 0,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
-       6, 0, 6, 4, 3, 3, 0, 0,   4, 2, 2, 6, 5, 4, 0, 0,  // 6^
-       2, 5, 0, 0, 4, 4, 0, 0,   2, 4, 4, 4, 6, 4, 7, 5,  // 7^
+       6, 0, 6, 4, 3, 3, 5, 0,   4, 2, 2, 6, 5, 4, 0, 5,  // 6^
+       2, 5, 0, 0, 4, 4, 0, 0,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
        2, 0, 5, 0, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 0, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
@@ -970,6 +970,24 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1;
                 }
             }
+            0x66 => {
+                // ROR - Rotate Direct Page right
+                let addr = self.load_direct(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u8) << 7) | (val >> 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    self.cpu.update_nz8(res);
+                    self.write(addr, res);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let res = ((self.cpu.regs.status.has(Status::CARRY) as u16) << 15) | (val >> 1);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    self.cpu.update_nz16(res);
+                    self.write(addr, res);
+                    cycles += 2
+                }
+            }
             0x68 => {
                 // PLA - Pull A
                 if self.cpu.is_reg8() {
@@ -1027,6 +1045,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // ADC - Add absolute with Carry
                 let addr = self.load();
                 let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
+            }
+            0x6f => {
+                // ADC - Add with Carry Absolute Long
+                let addr = self.load::<Addr24>();
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.add_carry8(op1);
@@ -1096,6 +1126,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.update_nz16(self.cpu.regs.y);
                     cycles += 1
                 }
+            }
+            0x7b => {
+                // TDC - Transfer DP register to A
+                self.cpu.regs.a = self.cpu.regs.dp;
+                self.cpu.update_nz16(self.cpu.regs.a)
             }
             0x7c => {
                 // JMP - Jump Absolute Indexed Indirect
