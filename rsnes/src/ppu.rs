@@ -282,15 +282,31 @@ pub struct Mode7Settings {
     fill_zeros: Option<bool>,
     prev: u8,
     offset: [i16; 2],
+    matrix: [u16; 4],
+    center: [i16; 2],
 }
 
 impl Mode7Settings {
     pub fn write_offset(&mut self, is_vertical: bool, val: u8) {
         let i = is_vertical as usize;
-        self.offset[i] = i16::from(replace(&mut self.prev, val)) | (i16::from(val) << 8);
-        if self.offset[i] & 0x1000 > 0 {
-            self.offset[i] |= -0x2000
+        let mut val = u16::from(replace(&mut self.prev, val)) | (u16::from(val) << 8);
+        if val & 0x1000 > 0 {
+            val |= 0xe000
         }
+        self.offset[i] = val as i16
+    }
+
+    pub fn set_matrix(&mut self, entry: u8, val: u8) {
+        self.matrix[usize::from(entry)] =
+            (u16::from(val) << 8) | u16::from(replace(&mut self.prev, val))
+    }
+
+    pub fn set_center(&mut self, entry: u8, val: u8) {
+        let mut val = (u16::from(val) << 8) | u16::from(replace(&mut self.prev, val));
+        if val & 0x1000 > 0 {
+            val |= 0xe000
+        }
+        self.center[usize::from(entry)] = val as i16
     }
 }
 
@@ -323,6 +339,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     bg_mode: BgMode,
     window_positions: [[u8; 2]; 2],
     force_blank: bool,
+    open_bus1: u8,
     open_bus2: u8,
 }
 
@@ -351,6 +368,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 fill_zeros: None,
                 prev: 0,
                 offset: [0; 2],
+                matrix: [0; 4],
+                center: [0; 2],
             },
             direct_color_mode: false,
             add_subscreen: false,
@@ -361,6 +380,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             bg_mode: BgMode::new(),
             window_positions: [[0; 2]; 2],
             force_blank: true,
+            open_bus1: 0,
             open_bus2: 0,
         }
     }
@@ -376,6 +396,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 let val = (self.open_bus2 & 0x20) | CHIP_5C78_VERSION;
                 self.open_bus2 = val;
                 Some(val)
+            }
+            0x34..=0x36 => {
+                // MPYx
+                self.open_bus1 = (((u32::from(self.mode7_settings.matrix[0])
+                    * (u32::from(self.mode7_settings.matrix[1]) >> 8))
+                    >> ((id & 3) << 3))
+                    & 0xff) as u8;
+                Some(self.open_bus1)
             }
             _ => todo!("read from unknown PPU register 0x21{:02x}", id),
         }
@@ -489,6 +517,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 self.mode7_settings.x_mirror = val & 1 > 0;
                 self.mode7_settings.y_mirror = val & 2 > 0;
                 self.mode7_settings.fill_zeros = Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0);
+            }
+            0x1b..=0x1e => {
+                // M7x
+                self.mode7_settings.set_matrix((id + 1) & 3, val)
+            }
+            0x1f | 0x20 => {
+                // M7X/M7Y
+                self.mode7_settings.set_center(!id & 1, val)
             }
             0x21 => {
                 // CGADD
