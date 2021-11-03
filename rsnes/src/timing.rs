@@ -18,8 +18,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     pub fn run_cycle<const N: u16>(&mut self) {
         self.spc.tick(N);
         let vend = self.vend();
-        if self.new_scanline && self.scanline_nr < vend && self.scanline_nr != 0 {
-            self.ppu.draw_line(self.scanline_nr - 1)
+        if self.new_scanline && self.scanline_nr < vend {
+            self.ppu.draw_line(self.scanline_nr)
         }
         if self.is_auto_joypad() && self.new_scanline && self.scanline_nr == vend + 2 {
             self.controllers.auto_joypad_timer = 4224;

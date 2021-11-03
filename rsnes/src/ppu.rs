@@ -144,7 +144,8 @@ impl BgMode {
             b(2, 1, 0),
         ];
         static MODE6: [DrawLayer; 6] = [s(3), b(1, 2, 1), s(2), s(1), b(1, 2, 0), s(0)];
-        static MODE7: [DrawLayer; 7] = [
+        static MODE7: [DrawLayer; 5] = [s(3), s(2), s(1), b(1, 3, 0), s(0)];
+        static MODE7_EXTBG: [DrawLayer; 7] = [
             s(3),
             s(2),
             b(2, 0xff, 1),
@@ -153,7 +154,6 @@ impl BgMode {
             s(0),
             b(2, 0xff, 0),
         ];
-        static MODE7_EXTBG: [DrawLayer; 5] = [s(3), s(2), s(1), b(1, 3, 0), s(0)];
         match self.num {
             Mode0 => &MODE0,
             Mode1 => {
@@ -429,17 +429,17 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 // BGnmNBA
                 let val = val & 0x77;
                 let id = usize::from(!id & 2);
-                self.bgs[id].base_addr = val >> 4;
-                self.bgs[id | 1].base_addr = val & 0xf;
+                self.bgs[id].base_addr = val & 0xf;
+                self.bgs[id | 1].base_addr = val >> 4;
             }
             0x0d..=0x14 => {
                 // M7xOFS and BGnxOFS
-                if (0x0d..=0x14).contains(&id) {
+                if (0x0d..=0x0e).contains(&id) {
                     self.mode7_settings.write_offset(id & 1 == 0, val)
                 }
                 let bg = &mut self.bgs[usize::from(((id - 5) >> 1) & 3)];
                 let old = replace(&mut bg.scroll_prev, val);
-                bg.scroll[usize::from(!id & 1)] = u16::from(val)
+                bg.scroll[usize::from(!id & 1)] = (u16::from(val) << 8)
                     | u16::from(if id & 1 > 0 {
                         (old & 0xf8) | replace(&mut bg.scroll_prev_h, val) & 7
                     } else {
@@ -714,10 +714,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             )];
             pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 6;
         }
-        let pixel = u32::from(pixel).wrapping_add(u32::from(palette << palette_dimensions));
         if pixel == 0 {
             None
         } else {
+            let pixel = u32::from(pixel).wrapping_add(u32::from(palette << palette_dimensions));
             let mut color = if self.direct_color_mode && bit_depth == 3 {
                 Color::new(
                     (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
@@ -786,8 +786,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     }
 
     pub fn draw_line(&mut self, y: u16) {
-        let offset = u32::from(y) * SCREEN_WIDTH;
-        let y = y + 1;
+        if y == 0 {
+            return;
+        }
+        let offset = u32::from(y - 1) * SCREEN_WIDTH;
         for x in 0..SCREEN_WIDTH as u16 {
             let Color { r, g, b } = self.fetch_pixel([x, y]);
             self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];
