@@ -108,9 +108,9 @@ const DECODE_BUFFER_SIZE: usize = 3 + 16;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 0, 4, 5, 4, 6, 0,  // 0^
-       2, 0, 4, 5, 0, 0, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 5, 0, 5, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 0, 4, 0, 4, 5, 2,  // 2^
-       2, 0, 4, 5, 4, 0, 0, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
+       2, 0, 4, 5, 4, 5, 0, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
        2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
        0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 4, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
@@ -170,7 +170,7 @@ impl<T: Copy> StereoSample<T> {
 }
 
 impl StereoSample<i16> {
-    pub fn saturating_add32(&self, val: StereoSample<i32>) -> Self {
+    pub fn saturating_add32(self, val: StereoSample<i32>) -> Self {
         let clamped = val.clamp16();
         Self {
             l: self.l.saturating_add(clamped.l),
@@ -184,6 +184,13 @@ impl StereoSample<i32> {
         StereoSample {
             l: self.l.clamp(-0x8000, 0x7fff) as i16,
             r: self.r.clamp(-0x8000, 0x7fff) as i16,
+        }
+    }
+
+    pub fn clip16(self) -> StereoSample<i16> {
+        StereoSample {
+            l: (self.l as u32 & 0xffff) as i16,
+            r: (self.r as u32 & 0xffff) as i16,
         }
     }
 }
@@ -207,6 +214,16 @@ impl core::ops::Mul for StereoSample<i32> {
     }
 }
 
+impl<T2: Copy, T1: core::ops::Mul<T2>> core::ops::Mul<T2> for StereoSample<T1> {
+    type Output = StereoSample<<T1 as core::ops::Mul<T2>>::Output>;
+    fn mul(self, other: T2) -> Self::Output {
+        Self::Output {
+            l: self.l * other,
+            r: self.r * other,
+        }
+    }
+}
+
 impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
     type Output = StereoSample<T::Output>;
     fn shr(self, rhs: R) -> Self::Output {
@@ -214,6 +231,13 @@ impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
             l: self.l >> rhs,
             r: self.r >> rhs,
         }
+    }
+}
+
+impl<T2, T1: core::ops::AddAssign<T2>> core::ops::AddAssign<StereoSample<T2>> for StereoSample<T1> {
+    fn add_assign(&mut self, rhs: StereoSample<T2>) {
+        self.l += rhs.l;
+        self.r += rhs.r;
     }
 }
 
@@ -232,6 +256,7 @@ pub struct Channel {
     vx_out: u8,
     sustain: u16,
     unused: [u8; 3],
+    fir_coefficient: u8,
 
     decode_buffer: [i16; DECODE_BUFFER_SIZE],
     pitch_counter: u16,
@@ -240,6 +265,7 @@ pub struct Channel {
     rate_index: u16,
     end_bit: bool,
     loop_bit: bool,
+    last_sample: i16,
 }
 
 impl Channel {
@@ -257,6 +283,7 @@ impl Channel {
             vx_out: 0,
             sustain: 0,
             unused: [0; 3],
+            fir_coefficient: 0,
             decode_buffer: [0; DECODE_BUFFER_SIZE],
             pitch_counter: 0,
             period: AdsrPeriod::Attack,
@@ -264,6 +291,7 @@ impl Channel {
             rate_index: 0,
             end_bit: false,
             loop_bit: false,
+            last_sample: 0,
         }
     }
 
@@ -300,7 +328,8 @@ impl Channel {
 #[derive(Debug, Clone)]
 pub struct Dsp {
     // in milliseconds
-    echo_delay: u8,
+    echo_delay: u16,
+    echo_index: u16,
     source_dir_addr: u16,
     echo_data_addr: u16,
     channels: [Channel; 8],
@@ -315,12 +344,16 @@ pub struct Dsp {
     master_volume: StereoSample<i8>,
     echo_volume: StereoSample<i8>,
     unused: u8,
+    echo_buffer_offset: u16,
+    fir_buffer: [StereoSample<i16>; 8],
+    fir_buffer_index: u8,
 }
 
 impl Dsp {
     pub const fn new() -> Self {
         Self {
-            echo_delay: 0,
+            echo_delay: 1,
+            echo_index: 1,
             source_dir_addr: 0,
             echo_data_addr: 0,
             channels: [Channel::new(); 8],
@@ -334,6 +367,9 @@ impl Dsp {
             master_volume: StereoSample::new2(0, 0),
             echo_volume: StereoSample::new2(0, 0),
             unused: 0,
+            echo_buffer_offset: 0,
+            fir_buffer: [StereoSample { l: 0, r: 0 }; 8],
+            fir_buffer_index: 0,
         }
     }
 }
@@ -461,7 +497,7 @@ impl<B: AudioBackend> Spc700<B> {
 
     pub fn read_dsp_register(&self, id: u8) -> u8 {
         let rid = id & 0x8f;
-        if rid < 0xa {
+        if rid & 0xe != 0xc {
             let channel = &self.dsp.channels[usize::from(id >> 4)];
             match rid {
                 0 => channel.volume.l as u8,
@@ -476,7 +512,8 @@ impl<B: AudioBackend> Spc700<B> {
                 10 => channel.unused[0],
                 11 => channel.unused[1],
                 14 => channel.unused[2],
-                _ => todo!("read dsp register 0x{:02x}", id),
+                15 => channel.fir_coefficient,
+                _ => unreachable!(),
             }
         } else {
             match id {
@@ -495,7 +532,7 @@ impl<B: AudioBackend> Spc700<B> {
                 0x4d => self.dsp.echo,
                 0x5d => (self.dsp.source_dir_addr >> 8) as u8,
                 0x6d => (self.dsp.echo_data_addr >> 8) as u8,
-                0x7d => self.dsp.echo_delay >> 4,
+                0x7d => (self.dsp.echo_delay >> 9) as u8,
 
                 _ => todo!("read dsp register 0x{:02x}", id),
             }
@@ -504,7 +541,7 @@ impl<B: AudioBackend> Spc700<B> {
 
     pub fn write_dsp_register(&mut self, id: u8, val: u8) {
         let rid = id & 0x8f;
-        if rid < 0xa {
+        if rid & 0xe != 0xc {
             let channel = &mut self.dsp.channels[usize::from(id >> 4)];
             match rid {
                 0 => channel.volume.l = val as i8,
@@ -534,7 +571,8 @@ impl<B: AudioBackend> Spc700<B> {
                 10 => channel.unused[0] = val,
                 11 => channel.unused[1] = val,
                 14 => channel.unused[2] = val,
-                _ => todo!("read dsp register 0x{:02x}", id),
+                15 => channel.fir_coefficient = val,
+                _ => unreachable!(),
             }
         } else {
             match id {
@@ -561,7 +599,7 @@ impl<B: AudioBackend> Spc700<B> {
                     }
                 }
                 0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
-                0x7d => self.dsp.echo_delay = val << 4,
+                0x7d => self.dsp.echo_delay = 1.max((val as u16 & 15) << 9),
 
                 _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
             }
@@ -791,6 +829,7 @@ impl<B: AudioBackend> Spc700<B> {
             debug_assert!(channel.gain < 0x800);
             let sample = ((i32::from(sample) * i32::from(channel.gain)) >> 11) as i16;
             last_sample = sample;
+            channel.last_sample = sample;
             channel.vx_env = (channel.gain >> 4) as u8; // TODO: really `>> 4`?
             channel.vx_out = (sample >> 7) as u8;
             result = result.saturating_add32(
@@ -800,9 +839,57 @@ impl<B: AudioBackend> Spc700<B> {
         let result = if self.dsp.flags & 0x40 > 0 {
             StereoSample::new(0)
         } else {
-            ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16()
-            // TODO: echo
+            let sample = ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16();
+            let echo_addr = self
+                .dsp
+                .echo_data_addr
+                .wrapping_add(self.dsp.echo_buffer_offset);
+            self.dsp.echo_buffer_offset += 4;
+            self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::new2(
+                self.read16(echo_addr) as i16,
+                self.read16(echo_addr.wrapping_add(2)) as i16,
+            ) >> 1;
+            let mut result = StereoSample::new(0i32);
+            for i in 0..8 {
+                result += (self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index + i + 1) & 7]
+                    .to_i32()
+                    * i32::from(self.dsp.channels[usize::from(i)].fir_coefficient))
+                    >> 6;
+                if i == 6 {
+                    result = result.clip16().to_i32()
+                }
+            }
+            self.dsp.fir_buffer_index = (self.dsp.fir_buffer_index + 1) & 7;
+            let result = result.clamp16();
+            let sample =
+                sample.saturating_add32((result.to_i32() * self.dsp.echo_volume.to_i32()) >> 7);
+            if self.dsp.flags & 0x20 > 0 {
+                let sample = self
+                    .dsp
+                    .channels
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| self.dsp.echo & *i as u8 > 0)
+                    .map(|(_, c)| (c.volume.to_i32() * c.last_sample as i32) >> 6)
+                    .fold(StereoSample::new(0i16), StereoSample::saturating_add32)
+                    .to_i32()
+                    * self.dsp.echo_feedback as i32;
+                let sample = (sample >> 7).clamp16();
+                let sample = StereoSample::new2(
+                    (sample.l as u16 & 0xfffe) as i16,
+                    (sample.r as u16 & 0xfffe) as i16,
+                );
+                self.write16(echo_addr, sample.l as u16);
+                self.write16(echo_addr.wrapping_add(2), sample.r as u16);
+            }
+            self.dsp.echo_index -= 1;
+            if self.dsp.echo_index == 0 {
+                self.dsp.echo_index = self.dsp.echo_delay;
+                self.dsp.echo_buffer_offset = 0;
+            }
+
             // TODO: noise
+            sample
         };
         self.backend.push_sample(result)
     }
@@ -897,6 +984,12 @@ impl<B: AudioBackend> Spc700<B> {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::SIGN == 0, &mut cycles)
             }
+            0x15 => {
+                // OR - A |= (imm[16-bit] + X)
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.a |= self.read(addr);
+                self.update_nz8(self.a);
+            }
             0x1a => {
                 // DECW - (imm)[16-bit]--
                 let addr = self.load();
@@ -982,6 +1075,12 @@ impl<B: AudioBackend> Spc700<B> {
                 let addr = self.load().wrapping_add(self.x);
                 self.a &= self.read_small(addr);
                 self.update_nz8(self.a)
+            }
+            0x35 => {
+                // AND - A &= (imm[16-bit] + X)
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.a &= self.read(addr);
+                self.update_nz8(self.a);
             }
             0x38 => {
                 // AND - (imm) &= imm
