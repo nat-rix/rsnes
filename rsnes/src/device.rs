@@ -310,9 +310,10 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             let addr = addr.wrapping_add(i as u8);
             *d = match addr {
                 0x34..=0x3f => self.ppu.read_register(addr).unwrap_or(self.open_bus),
-                0x40..=0x43 => {
+                0x40..=0x7f => {
+                    // APU Ports 2140h-2143h are mirrored to 2144h..217Fh
                     self.spc.refresh();
-                    self.spc.output[(addr & 0b11) as usize]
+                    self.spc.output[(addr & 3) as usize]
                 }
                 0x80 => {
                     let res = self.ram[self.wram_addr.get() as usize];
@@ -409,6 +410,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                 0x83 => self
                     .wram_addr
                     .set((self.wram_addr.get() & 0xffff) | (u32::from(*d & 1) << 16)),
+                0x34 => (),
                 _ => todo!("unimplemented address bus B write at 0x21{:02x}", addr),
             }
         }
