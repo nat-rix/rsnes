@@ -324,19 +324,20 @@ fn main() {
                 DeviceEvent::Key(KeyboardInput {
                     scancode, state, ..
                 }) => {
+                    use rsnes::controller::buttons;
                     let key: u16 = match scancode {
-                        36 => 0x100,  // A
-                        37 => 1,      // B
-                        38 => 0x200,  // X
-                        39 => 2,      // Y
-                        30 => 0x40,   // Left
-                        32 => 0x80,   // Right
-                        17 => 0x10,   // Up
-                        31 => 0x20,   // Down
-                        56 => 0x400,  // L
-                        100 => 0x800, // R
-                        16 => 0x4,    // Start
-                        18 => 0x8,    // Select
+                        0x24 => buttons::A,
+                        0x25 => buttons::B,
+                        0x26 => buttons::X,
+                        0x27 => buttons::Y,
+                        0x11 => buttons::UP,
+                        0x1e => buttons::LEFT,
+                        0x1f => buttons::DOWN,
+                        0x20 => buttons::RIGHT,
+                        0x10 => buttons::L,
+                        0x12 => buttons::R,
+                        0x38 => buttons::START,
+                        0x64 => buttons::SELECT,
                         _ => 0,
                     };
                     if key > 0 {
