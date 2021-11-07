@@ -754,25 +754,102 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             None
         } else {
             let pixel = u32::from(pixel).wrapping_add(u32::from(palette << palette_dimensions));
-            let mut color = if self.direct_color_mode && bit_depth == 3 {
-                Color::new(
-                    (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
-                    (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
-                    (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
-                )
-            } else {
-                let color = self.cgram.read16((pixel & 0xff) as u8);
-                Color::new(
-                    (color & 0x1f) as u8,
-                    ((color >> 5) & 0x1f) as u8,
-                    ((color >> 10) & 0x1f) as u8,
-                )
-            };
-            color.r <<= 3;
-            color.g <<= 3;
-            color.b <<= 3;
-            Some(color)
+            self.pixel_to_color(pixel, bit_depth)
         }
+    }
+
+    fn pixel_to_color(&self, pixel: u32, bit_depth: u8) -> Option<Color> {
+        let mut color = if self.direct_color_mode && bit_depth == 3 {
+            Color::new(
+                (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
+                (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
+                (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
+            )
+        } else {
+            let color = self.cgram.read16((pixel & 0xff) as u8);
+            Color::new(
+                (color & 0x1f) as u8,
+                ((color >> 5) & 0x1f) as u8,
+                ((color >> 10) & 0x1f) as u8,
+            )
+        };
+        color.r <<= 3;
+        color.g <<= 3;
+        color.b <<= 3;
+        Some(color)
+    }
+
+    fn get_bg7_color(
+        &self,
+        bg_nr: u8,
+        bit_depth: u8,
+        priority: bool,
+        [x, y]: [u16; 2],
+    ) -> Option<Color> {
+        let [x, y] = [(x & 0xff) as u8, (y & 0xff) as u8];
+        let x = if self.mode7_settings.x_mirror { !x } else { x };
+        let y = if self.mode7_settings.y_mirror { !y } else { y };
+
+        let dif = [
+            self.mode7_settings.offset[0].wrapping_sub(self.mode7_settings.center[0]),
+            self.mode7_settings.offset[1].wrapping_sub(self.mode7_settings.center[1]),
+        ];
+        let clip = |x: u16| {
+            (if x & 0x2000 > 0 {
+                x | 0xfc00
+            } else {
+                x & 0x3ff
+            }) as i16
+        };
+        let dif = [clip(dif[0] as u16), clip(dif[1] as u16)];
+        let origin = |a, b, c| {
+            ((i32::from(a) * i32::from(dif[0])) & -64i32)
+                + ((i32::from(b) * i32::from(dif[1])) & -64i32)
+                + ((i32::from(b) * i32::from(y)) & -64i32)
+                + (i32::from(c) << 8)
+        };
+        let pixel = [
+            origin(
+                self.mode7_settings.matrix[0] as i16,
+                self.mode7_settings.matrix[1] as i16,
+                self.mode7_settings.center[0],
+            ),
+            origin(
+                self.mode7_settings.matrix[2] as i16,
+                self.mode7_settings.matrix[3] as i16,
+                self.mode7_settings.center[1],
+            ),
+        ];
+        let pixel = [
+            (pixel[0] + self.mode7_settings.matrix[0] as i16 as i32 * x as i32) >> 8,
+            (pixel[1] + self.mode7_settings.matrix[2] as i16 as i32 * x as i32) >> 8,
+        ];
+        let palette_addr = ((((pixel[1] as u32) & 7) as u8) << 3) | (pixel[0] as u32 & 0x7) as u8;
+        let tile_addr =
+            ((pixel[0] >> 3) as u32 & 0x7f) as u16 | (((pixel[1] >> 3) as u32 & 0x7f) << 7) as u16;
+        let out_of_bounds = !(0..1024).contains(&pixel[0]) || !(0..1024).contains(&pixel[1]);
+        let tile = if let Some(true) = self.mode7_settings.fill_zeros.filter(|_| out_of_bounds) {
+            0
+        } else {
+            (self.vram[usize::from(tile_addr)] & 0xff) as u8
+        };
+        let pixel = if let Some(false) = self.mode7_settings.fill_zeros.filter(|_| out_of_bounds) {
+            0
+        } else {
+            (self.vram[usize::from((u16::from(tile) << 6) | u16::from(palette_addr))] >> 8) as u8
+        };
+        self.pixel_to_color(
+            (if bg_nr == 1 {
+                if (pixel & 0x80 == 0) == priority {
+                    return None;
+                }
+                pixel & 0x7f
+            } else {
+                pixel
+            })
+            .into(),
+            bit_depth,
+        )
     }
 
     fn get_sprite_color(&self, priority: u8, [x, y]: [u16; 2]) -> Option<Color> {
@@ -787,11 +864,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             color = if layer.main_screen
                 && !(layer.main_screen_masked && self.is_in_window(x, layer))
             {
-                match layer_info {
-                    DrawLayer::Bg(bg_nr, bit_depth, priority) => {
+                match (layer_info, self.bg_mode.num) {
+                    (DrawLayer::Bg(bg_nr, bit_depth, priority), BgModeNum::Mode7) => {
+                        self.get_bg7_color(*bg_nr, *bit_depth, *priority, [x, y])
+                    }
+                    (DrawLayer::Bg(bg_nr, bit_depth, priority), _) => {
                         self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
                     }
-                    DrawLayer::Sprite(priority) => self.get_sprite_color(*priority, [x, y]),
+                    (DrawLayer::Sprite(priority), _) => self.get_sprite_color(*priority, [x, y]),
                 }
             } else {
                 None
