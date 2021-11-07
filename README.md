@@ -12,8 +12,8 @@ A [SNES](https://en.wikipedia.org/wiki/Super_Nintendo_Entertainment_System) emul
 `Super Mario World` is already running and playing sound that only lacks sound effects and has a faulty volume setting.
 Rendering already works partially (no sprites, only BGs, no color math, etc.).
 
-- 65816 instruction implementation coverage: ≈77,5%
-- SPC instruction implementation coverage: ≈70%
+- 65816 instruction implementation coverage: ≈84,4%
+- SPC instruction implementation coverage: ≈75,8%
 
 ## Structure
 
@@ -27,14 +27,15 @@ This repository is a workspace consisting of two crates
 ## Features
 
 This is a set of features to be implemented in the future (sorted by priority)
-- [ ] Mode 7 support
+
+- [x] Mode 7 support
 - [ ] Sprite support
 - [x] S-DSP echo effect support
 - [ ] S-DSP noise effect support
 - [ ] Save game to files
 - [ ] SA-1 support
 - [ ] emulator running also on [WASM](https://webassembly.org/)
-- [ ] Real Gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
+- [ ] Real gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
 - [ ] Improved documentation
 - [ ] Tests
   - [ ] 65816 processor instruction tests
@@ -48,6 +49,10 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] [GSU](https://en.wikipedia.org/wiki/Super_FX) coprocessor support (also known as Super FX)
   - [ ] GSU1
   - [ ] GSU2
+- [ ] Complete the 65816 instruction set
+- [ ] Complete the SPC700 instruction set
+- [ ] Complete the DSP-1 instruction set
+- [ ] Complete the GSU instruction set
 - [ ] Multitap (MP5) controller support
 - [ ] [SNES Mouse](https://en.wikipedia.org/wiki/Super_NES_Mouse) support
 - [ ] [SNES Super Scope](https://en.wikipedia.org/wiki/Super_Scope) support
