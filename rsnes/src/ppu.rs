@@ -784,45 +784,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         bg_nr: u8,
         bit_depth: u8,
         priority: bool,
-        [x, y]: [u16; 2],
+        x: u16,
+        m7_precalc: &[i32; 2],
     ) -> Option<Color> {
-        let [x, y] = [(x & 0xff) as u8, (y & 0xff) as u8];
+        let x = (x & 0xff) as u8;
         let x = if self.mode7_settings.x_mirror { !x } else { x };
-        let y = if self.mode7_settings.y_mirror { !y } else { y };
 
-        let dif = [
-            self.mode7_settings.offset[0].wrapping_sub(self.mode7_settings.center[0]),
-            self.mode7_settings.offset[1].wrapping_sub(self.mode7_settings.center[1]),
-        ];
-        let clip = |x: u16| {
-            (if x & 0x2000 > 0 {
-                x | 0xfc00
-            } else {
-                x & 0x3ff
-            }) as i16
-        };
-        let dif = [clip(dif[0] as u16), clip(dif[1] as u16)];
-        let origin = |a, b, c| {
-            ((i32::from(a) * i32::from(dif[0])) & -64i32)
-                + ((i32::from(b) * i32::from(dif[1])) & -64i32)
-                + ((i32::from(b) * i32::from(y)) & -64i32)
-                + (i32::from(c) << 8)
-        };
         let pixel = [
-            origin(
-                self.mode7_settings.matrix[0] as i16,
-                self.mode7_settings.matrix[1] as i16,
-                self.mode7_settings.center[0],
-            ),
-            origin(
-                self.mode7_settings.matrix[2] as i16,
-                self.mode7_settings.matrix[3] as i16,
-                self.mode7_settings.center[1],
-            ),
-        ];
-        let pixel = [
-            (pixel[0] + self.mode7_settings.matrix[0] as i16 as i32 * x as i32) >> 8,
-            (pixel[1] + self.mode7_settings.matrix[2] as i16 as i32 * x as i32) >> 8,
+            (m7_precalc[0] + self.mode7_settings.matrix[0] as i16 as i32 * x as i32) >> 8,
+            (m7_precalc[1] + self.mode7_settings.matrix[2] as i16 as i32 * x as i32) >> 8,
         ];
         let palette_addr = ((((pixel[1] as u32) & 7) as u8) << 3) | (pixel[0] as u32 & 0x7) as u8;
         let tile_addr =
@@ -856,7 +826,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         None
     }
 
-    fn fetch_pixel_layer(&mut self, [x, y]: [u16; 2]) -> (u8, Color) {
+    fn fetch_pixel_layer(
+        &mut self,
+        [x, y]: [u16; 2],
+        m7_precalc: &Option<[i32; 2]>,
+    ) -> (u8, Color) {
         let brightness = self.brightness as f32 / 15.0;
         let mut color = None;
         for (i, layer_info) in self.bg_mode.get_layers().iter().enumerate() {
@@ -864,14 +838,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             color = if layer.main_screen
                 && !(layer.main_screen_masked && self.is_in_window(x, layer))
             {
-                match (layer_info, self.bg_mode.num) {
-                    (DrawLayer::Bg(bg_nr, bit_depth, priority), BgModeNum::Mode7) => {
-                        self.get_bg7_color(*bg_nr, *bit_depth, *priority, [x, y])
+                match layer_info {
+                    DrawLayer::Bg(bg_nr, bit_depth, priority) => {
+                        if let Some(m7_precalc) = m7_precalc {
+                            self.get_bg7_color(*bg_nr, *bit_depth, *priority, x, m7_precalc)
+                        } else {
+                            self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
+                        }
                     }
-                    (DrawLayer::Bg(bg_nr, bit_depth, priority), _) => {
-                        self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
-                    }
-                    (DrawLayer::Sprite(priority), _) => self.get_sprite_color(*priority, [x, y]),
+                    DrawLayer::Sprite(priority) => self.get_sprite_color(*priority, [x, y]),
                 }
             } else {
                 None
@@ -892,11 +867,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         )
     }
 
-    fn fetch_pixel(&mut self, [x, y]: [u16; 2]) -> Color {
+    fn fetch_pixel(&mut self, [x, y]: [u16; 2], m7_precalc: &Option<[i32; 2]>) -> Color {
         if self.force_blank {
             Color::BLACK
         } else {
-            let (_layer, color) = self.fetch_pixel_layer([x, y]);
+            let (_layer, color) = self.fetch_pixel_layer([x, y], m7_precalc);
             color
         }
     }
@@ -905,9 +880,46 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if y == 0 {
             return;
         }
+        let m7_precalc = if let BgModeNum::Mode7 = self.bg_mode.num {
+            let y = (y & 0xff) as u8;
+            let y = if self.mode7_settings.y_mirror { !y } else { y };
+
+            let dif = [
+                self.mode7_settings.offset[0].wrapping_sub(self.mode7_settings.center[0]),
+                self.mode7_settings.offset[1].wrapping_sub(self.mode7_settings.center[1]),
+            ];
+            let clip = |x: u16| {
+                (if x & 0x2000 > 0 {
+                    x | 0xfc00
+                } else {
+                    x & 0x3ff
+                }) as i16
+            };
+            let dif = [clip(dif[0] as u16), clip(dif[1] as u16)];
+            let origin = |a, b, c| {
+                ((i32::from(a) * i32::from(dif[0])) & -64i32)
+                    + ((i32::from(b) * i32::from(dif[1])) & -64i32)
+                    + ((i32::from(b) * i32::from(y)) & -64i32)
+                    + (i32::from(c) << 8)
+            };
+            Some([
+                origin(
+                    self.mode7_settings.matrix[0] as i16,
+                    self.mode7_settings.matrix[1] as i16,
+                    self.mode7_settings.center[0],
+                ),
+                origin(
+                    self.mode7_settings.matrix[2] as i16,
+                    self.mode7_settings.matrix[3] as i16,
+                    self.mode7_settings.center[1],
+                ),
+            ])
+        } else {
+            None
+        };
         let offset = u32::from(y - 1) * SCREEN_WIDTH;
         for x in 0..SCREEN_WIDTH as u16 {
-            let Color { r, g, b } = self.fetch_pixel([x, y]);
+            let Color { r, g, b } = self.fetch_pixel([x, y], &m7_precalc);
             self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];
         }
     }
