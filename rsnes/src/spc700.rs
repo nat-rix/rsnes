@@ -107,10 +107,10 @@ const DECODE_BUFFER_SIZE: usize = 3 + 16;
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 0, 4, 5, 4, 6, 0,  // 0^
-       2, 0, 4, 5, 0, 5, 0, 0,   0, 0, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 0, 4, 0, 4, 5, 2,  // 2^
-       2, 0, 4, 5, 4, 5, 0, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
+       2, 0, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 0,  // 0^
+       2, 0, 4, 5, 5, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 5, 4, 0, 4, 5, 2,  // 2^
+       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
        2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
        0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 4, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
@@ -118,7 +118,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
        2, 0, 4, 5, 0, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
        3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
-       2, 0, 4, 5, 0, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
+       2, 0, 4, 5, 4, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 0, 4, 5, 4, 5, 4, 7,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
        2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 0, 3, 4, 3, 4, 0,  // e^
@@ -936,6 +936,12 @@ impl<B: AudioBackend> Spc700<B> {
                 self.a |= self.read_small(self.x);
                 self.update_nz8(self.a);
             }
+            0x07 => {
+                // OR - A |= ((imm + X)[16-bit])
+                let addr = self.load().wrapping_add(self.x);
+                self.a |= self.read(self.read16_small(addr));
+                self.update_nz8(self.a);
+            }
             0x08 => {
                 // OR - A |= imm
                 self.a |= self.load();
@@ -948,6 +954,12 @@ impl<B: AudioBackend> Spc700<B> {
                 let val = self.read_small(src) | self.read(dst);
                 self.write(dst, val);
                 self.update_nz8(val);
+            }
+            0x0a => {
+                // OR1 - OR CARRY on (imm2) >> imm1
+                let addr = self.load16();
+                let val = self.read(addr & 0x1fff);
+                self.status |= (val >> (addr >> 13)) & flags::CARRY
             }
             0x0b => {
                 // ASL - (imm) <<= 1
@@ -984,11 +996,44 @@ impl<B: AudioBackend> Spc700<B> {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::SIGN == 0, &mut cycles)
             }
+            0x14 => {
+                // OR - A |= (imm + X)
+                let addr = self.load().wrapping_add(self.x);
+                self.a |= self.read_small(addr);
+                self.update_nz8(self.a);
+            }
             0x15 => {
                 // OR - A |= (imm[16-bit] + X)
                 let addr = self.load16().wrapping_add(self.x.into());
                 self.a |= self.read(addr);
                 self.update_nz8(self.a);
+            }
+            0x16 => {
+                // OR - A |= (imm[16-bit] + Y)
+                let addr = self.load16().wrapping_add(self.y.into());
+                self.a |= self.read(addr);
+                self.update_nz8(self.a);
+            }
+            0x17 => {
+                // OR - A |= ((imm)[16-bit] + Y)
+                let addr = self.load();
+                self.a |= self.read(self.read16_small(addr).wrapping_add(self.y.into()));
+                self.update_nz8(self.a);
+            }
+            0x18 => {
+                // OR - (imm) |= imm
+                let (src, dst) = (self.load(), self.load());
+                let dst = self.get_small(dst);
+                let val = src | self.read(dst);
+                self.write(dst, val);
+                self.update_nz8(val);
+            }
+            0x19 => {
+                // OR - (X) |= (Y)
+                let x = self.get_small(self.x);
+                let res = self.read(x) | self.read_small(self.y);
+                self.write(x, res);
+                self.update_nz8(res)
             }
             0x1a => {
                 // DECW - (imm)[16-bit]--
@@ -1040,6 +1085,12 @@ impl<B: AudioBackend> Spc700<B> {
                 self.a &= self.load();
                 self.update_nz8(self.a)
             }
+            0x2a => {
+                // OR1 - NOR CARRY on (imm2) >> imm1
+                let addr = self.load16();
+                let val = !self.read(addr & 0x1fff);
+                self.status |= (val >> (addr >> 13)) & flags::CARRY
+            }
             0x2b => {
                 // ROL - (imm) <<= 1
                 let addr = self.load();
@@ -1079,6 +1130,12 @@ impl<B: AudioBackend> Spc700<B> {
             0x35 => {
                 // AND - A &= (imm[16-bit] + X)
                 let addr = self.load16().wrapping_add(self.x.into());
+                self.a &= self.read(addr);
+                self.update_nz8(self.a);
+            }
+            0x36 => {
+                // AND - A &= (imm[16-bit] + Y)
+                let addr = self.load16().wrapping_add(self.y.into());
                 self.a &= self.read(addr);
                 self.update_nz8(self.a);
             }
@@ -1515,6 +1572,11 @@ impl<B: AudioBackend> Spc700<B> {
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::CARRY > 0, &mut cycles)
             }
+            0xb4 => {
+                // SBC - A -= (imm + X) + CARRY
+                let addr = self.load().wrapping_add(self.x);
+                self.a = self.adc(self.a, !self.read_small(addr));
+            }
             0xb5 => {
                 // SBC - A -= (imm16 + X) + CARRY
                 let addr = self.load16().wrapping_add(self.x.into());
@@ -1898,7 +1960,7 @@ impl<B: AudioBackend> Spc700<B> {
     pub fn update_timer(&mut self, i: usize) {
         if self.timer_enable & (1 << i) > 0 {
             self.timers[i] = self.timers[i].wrapping_add(1);
-            while self.timers[i] >= self.timer_max[i] {
+            if self.timers[i] >= self.timer_max[i] {
                 self.timers[i] -= self.timer_max[i];
                 self.counters[i].set(self.counters[i].get().wrapping_add(1) & 0xf);
             }

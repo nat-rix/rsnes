@@ -632,7 +632,6 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                     todo!("enable super imposing")
                 }
             }
-            0x34.. => unreachable!(),
             _ => todo!("write to unknown PPU register 0x21{:02x}", id),
         }
     }
