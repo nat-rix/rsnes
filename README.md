@@ -29,7 +29,7 @@ This repository is a workspace consisting of two crates
 This is a set of features to be implemented in the future (sorted by priority)
 
 - [x] Mode 7 support
-- [ ] Sprite support
+- [x] Sprite support
 - [x] S-DSP echo effect support
 - [ ] S-DSP noise effect support
 - [ ] Save game to files
