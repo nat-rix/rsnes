@@ -339,6 +339,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     bg_mode: BgMode,
     window_positions: [[u8; 2]; 2],
     force_blank: bool,
+    tile_adr: [u16; 2],
     open_bus1: u8,
     open_bus2: u8,
 }
@@ -380,6 +381,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             bg_mode: BgMode::new(),
             window_positions: [[0; 2]; 2],
             force_blank: true,
+            tile_adr: [0; 2],
             open_bus1: 0,
             open_bus2: 0,
         }
@@ -414,13 +416,17 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         match id {
             0x00 => {
                 // INIDISP
-                self.force_blank = val & 0x80 > 0;
+                if replace(&mut self.force_blank, val & 0x80 > 0) && !self.force_blank {
+                    self.oam.oam_reset()
+                };
                 self.brightness = val & 0b1111;
             }
             0x01 => {
                 // OBSEL
                 // TODO: name select bits and name base select bits
                 self.obj_size = ObjectSize::from_upper_bits(val);
+                self.tile_adr[0] = u16::from(val & 7) << 13;
+                self.tile_adr[1] = (u16::from((val >> 3) + 1) << 12).wrapping_add(self.tile_adr[0]);
             }
             0x02 => {
                 // OAMADDL
@@ -642,6 +648,12 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             .unwrap()
     }
 
+    pub fn vblank(&mut self) {
+        if !self.force_blank {
+            self.oam.oam_reset();
+        }
+    }
+
     fn get_layer_by_info(&self, layer_info: &DrawLayer) -> &Layer {
         match layer_info {
             DrawLayer::Bg(n, _, _) => &self.bgs[usize::from(*n)].layer,
@@ -821,14 +833,91 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         )
     }
 
-    fn get_sprite_color(&self, priority: u8, [x, y]: [u16; 2]) -> Option<Color> {
-        None
+    fn get_sprite_buffers(&self, y: u16) -> [u16; 0x100] {
+        let mut buffer = [0; 0x100];
+        let offset = if self.oam.priority {
+            ((self.oam.addr_inc & 0xff) as u8) >> 1
+        } else {
+            0
+        };
+        let mut sprites_per_line = 0u8;
+        let mut tiles = 0u8;
+        'sprite_loop: for sprite_id in 0u8..128 {
+            let obj = &self.oam.objs[usize::from(sprite_id.wrapping_add(offset) & 0x7f)];
+            let sprite_size = self.obj_size.get_size(obj.is_large);
+            if ((y & 0xff) as u8).wrapping_sub(1).wrapping_sub(obj.y) < sprite_size[1]
+                && obj.x + i16::from(sprite_size[0]) > 0
+            {
+                sprites_per_line += 1;
+                if sprites_per_line > 32 {
+                    break;
+                }
+                let sx3 = obj.x >> 3;
+                let ty = if obj.attrs & 0x80 > 0 {
+                    sprite_size[1]
+                        .wrapping_add(obj.y)
+                        .wrapping_sub((y & 0xff) as u8)
+                } else {
+                    ((y & 0xff) as u8).wrapping_sub(obj.y).wrapping_sub(1)
+                };
+                let name = self.tile_adr[usize::from(obj.attrs & 1)];
+                let tile = (obj.tile_nr & 0xf0).wrapping_add((ty & 0xf8) << 1);
+                for tx in 0.max(-sx3) as u8..(sprite_size[0] >> 3).min((32 - sx3.min(32)) as u8) {
+                    tiles += 1;
+                    if tiles > 34 {
+                        break 'sprite_loop;
+                    }
+                    let fx = if obj.attrs & 0x40 > 0 {
+                        sprite_size[0] - 1 - (tx << 3)
+                    } else {
+                        tx << 3
+                    };
+                    let tile = tile | ((obj.tile_nr & 0xf) + (fx >> 3));
+                    let name = name
+                        .wrapping_add(u16::from(tile) << 4)
+                        .wrapping_add(u16::from(ty & 7));
+                    let bytes = [
+                        self.vram[usize::from(name) & (VRAM_SIZE - 1)],
+                        self.vram[usize::from(name.wrapping_add(8)) & (VRAM_SIZE - 1)],
+                    ];
+                    for i in 0u8..8 {
+                        let px = if obj.attrs & 0x40 > 0 { i } else { 7 - i };
+                        let byte = ((bytes[0] >> px) & 1)
+                            | ((bytes[0] >> (8 + px)) & 1) << 1
+                            | ((bytes[1] >> px) & 1) << 2
+                            | ((bytes[1] >> (8 + px)) & 1) << 3;
+                        let tx = i16::from(tx << 3) + obj.x + i16::from(i);
+                        if byte > 0 && (0..=0xff).contains(&tx) && buffer[tx as usize] & 0xff == 0 {
+                            buffer[tx as usize] =
+                                u16::from(0x80 ^ ((obj.attrs & 0xe) << 3).wrapping_add(byte as u8))
+                                    | (u16::from(obj.attrs & 0x30) << 4);
+                        }
+                    }
+                }
+            }
+        }
+        buffer
+    }
+
+    fn get_sprite_color(
+        &self,
+        priority: u8,
+        x: u16,
+        sprite_buffer: &[u16; 0x100],
+    ) -> Option<Color> {
+        let v = sprite_buffer[usize::from(x & 0xff)];
+        if priority == (v >> 8) as u8 {
+            self.pixel_to_color((v & 0xff).into(), 0)
+        } else {
+            None
+        }
     }
 
     fn fetch_pixel_layer(
         &mut self,
         [x, y]: [u16; 2],
         m7_precalc: &Option<[i32; 2]>,
+        sprite_buffer: &[u16; 0x100],
     ) -> (u8, Color) {
         let brightness = self.brightness as f32 / 15.0;
         let mut color = None;
@@ -845,7 +934,9 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                             self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
                         }
                     }
-                    DrawLayer::Sprite(priority) => self.get_sprite_color(*priority, [x, y]),
+                    DrawLayer::Sprite(priority) => {
+                        self.get_sprite_color(*priority, x, sprite_buffer)
+                    }
                 }
             } else {
                 None
@@ -866,11 +957,16 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         )
     }
 
-    fn fetch_pixel(&mut self, [x, y]: [u16; 2], m7_precalc: &Option<[i32; 2]>) -> Color {
+    fn fetch_pixel(
+        &mut self,
+        [x, y]: [u16; 2],
+        m7_precalc: &Option<[i32; 2]>,
+        sprite_buffer: &[u16; 0x100],
+    ) -> Color {
         if self.force_blank {
             Color::BLACK
         } else {
-            let (_layer, color) = self.fetch_pixel_layer([x, y], m7_precalc);
+            let (_layer, color) = self.fetch_pixel_layer([x, y], m7_precalc, sprite_buffer);
             color
         }
     }
@@ -916,9 +1012,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         } else {
             None
         };
+        let sprite_buffer = if self.force_blank {
+            [0; 0x100]
+        } else {
+            self.get_sprite_buffers(y)
+        };
         let offset = u32::from(y - 1) * SCREEN_WIDTH;
         for x in 0..SCREEN_WIDTH as u16 {
-            let Color { r, g, b } = self.fetch_pixel([x, y], &m7_precalc);
+            let Color { r, g, b } = self.fetch_pixel([x, y], &m7_precalc, &sprite_buffer);
             self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];
         }
     }
@@ -959,7 +1060,7 @@ impl ObjectSize {
         }
     }
 
-    pub const fn get_obj_width(&self) -> u8 {
+    pub const fn get_small_width(&self) -> u8 {
         match self {
             Self::O8S16 | Self::O8S32 | Self::O8S64 => 8,
             Self::O16S32 | Self::O16S64 | Self::O16x32S32 | Self::O16x32S32x64 => 16,
@@ -967,7 +1068,7 @@ impl ObjectSize {
         }
     }
 
-    pub const fn get_obj_height(&self) -> u8 {
+    pub const fn get_small_height(&self) -> u8 {
         match self {
             Self::O8S16 | Self::O8S32 | Self::O8S64 => 8,
             Self::O16S32 | Self::O16S64 => 16,
@@ -975,7 +1076,7 @@ impl ObjectSize {
         }
     }
 
-    pub const fn get_sprite_width(&self) -> u8 {
+    pub const fn get_large_width(&self) -> u8 {
         match self {
             Self::O8S16 => 16,
             Self::O8S32 | Self::O16S32 | Self::O16x32S32 | Self::O16x32S32x64 => 32,
@@ -983,11 +1084,27 @@ impl ObjectSize {
         }
     }
 
-    pub const fn get_sprite_height(&self) -> u8 {
+    pub const fn get_large_height(&self) -> u8 {
         match self {
             Self::O8S16 => 16,
             Self::O8S32 | Self::O16S32 | Self::O16x32S32 => 32,
             Self::O8S64 | Self::O16S64 | Self::O32S64 | Self::O16x32S32x64 => 64,
+        }
+    }
+
+    pub const fn get_small_size(&self) -> [u8; 2] {
+        [self.get_small_width(), self.get_small_height()]
+    }
+
+    pub const fn get_large_size(&self) -> [u8; 2] {
+        [self.get_large_width(), self.get_large_height()]
+    }
+
+    pub const fn get_size(&self, is_large: bool) -> [u8; 2] {
+        if is_large {
+            self.get_large_size()
+        } else {
+            self.get_small_size()
         }
     }
 }
