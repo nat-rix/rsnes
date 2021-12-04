@@ -50,6 +50,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.do_hdma = false;
             self.dma.hdma_ahead_cycles = self.do_hdma();
         }
+        if self.new_scanline && self.scanline_nr == vend {
+            self.ppu.vblank();
+        }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
         let hpos_start = self.scanline_cycle >> 2;
