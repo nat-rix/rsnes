@@ -281,7 +281,7 @@ impl Cartridge {
             println!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
         }
 
-        let ram_size = header.ram_size;
+        let ram_size = if header.has_ram() { header.ram_size } else { 0 };
 
         Ok(Self {
             rom,
@@ -296,12 +296,16 @@ impl Cartridge {
     }
 
     /// Read from the cartridge
-    pub fn read<D: Data>(&self, addr: Addr24) -> Option<D> {
-        let ram_mask = self.ram.len() - 1;
+    pub fn read<D: Data>(&self, mut addr: Addr24) -> Option<D> {
+        let sram = self.ram.len() > 0;
+        if !sram {
+            addr.bank &= 0x7f
+        }
+        let ram_mask = self.ram.len().wrapping_sub(1);
         let rom_mask = self.rom.len() - 1;
         match &self.mapping {
             MemoryMapping::LoRom => match (addr.bank, addr.addr) {
-                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => Some(D::parse(
+                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) if sram => Some(D::parse(
                     &self.ram,
                     (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & ram_mask,
                 )),
@@ -313,7 +317,7 @@ impl Cartridge {
                 _ => None,
             },
             MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
-                (0..=0x3f, 0x6000..=0x7fff) => Some(D::parse(
+                (0..=0x3f, 0x6000..=0x7fff) if sram => Some(D::parse(
                     &self.ram,
                     (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize)
                         & ram_mask,
@@ -348,31 +352,25 @@ impl Cartridge {
     }
 
     /// Write to the cartridge
-    pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
-        let ram_mask = self.ram.len() - 1;
-        let rom_mask = self.rom.len() - 1;
+    pub fn write<D: Data>(&mut self, mut addr: Addr24, value: D) {
+        let sram = self.ram.len() > 0;
+        if !sram {
+            addr.bank &= 0x7f
+        }
+        let ram_mask = self.ram.len().wrapping_sub(1);
         match &mut self.mapping {
             MemoryMapping::LoRom => match (addr.bank, addr.addr) {
-                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) => value.write_to(
+                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) if sram => value.write_to(
                     &mut self.ram,
                     (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & ram_mask,
-                ),
-                (0x00..=0x7d | 0x80.., _) | (_, 0x8000..) => value.write_to(
-                    &mut self.rom,
-                    (((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize)
-                        & rom_mask,
                 ),
                 _ => (),
             },
             MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
-                (0..=0x3f, 0x6000..=0x7fff) => value.write_to(
+                (0..=0x3f, 0x6000..=0x7fff) if sram => value.write_to(
                     &mut self.ram,
                     (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize)
                         & ram_mask,
-                ),
-                (0x40.., _) | (_, 0x8000..) => value.write_to(
-                    &mut self.rom,
-                    (((addr.bank as usize & 0x3f) << 16) | addr.addr as usize) & rom_mask,
                 ),
                 _ => (),
             },
@@ -402,13 +400,7 @@ impl Cartridge {
                     ((0x00..=0x3f) | (0x80..=0xbf), (0x6000..=0x7fff)) => {
                         todo!("sa1 8kb bw-ram write access at {}", addr)
                     }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x8000..=0xffff)) => {
-                        value.write_to(&mut self.rom, sa1.lorom_addr(addr) as usize)
-                    }
                     (0x40..=0x4f, _) => todo!("sa1 256kb blocks write access at {}", addr),
-                    (0xc0..=0xff, _) => {
-                        value.write_to(&mut self.rom, sa1.hirom_addr(addr) as usize)
-                    }
                     _ => (),
                 }
             }
