@@ -158,11 +158,13 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.cpu.regs.dp & 0xff > 0 {
             *cycles += 1
         }
-        let addr = self.read::<Addr24>(
-            self.cpu
-                .get_data_addr(self.cpu.regs.dp.wrapping_add(addr.into())),
-        );
-        let (new_addr, ov) = addr.addr.overflowing_add(self.cpu.regs.y);
+        let addr = self.read::<Addr24>(Addr24::new(0, self.cpu.regs.dp.wrapping_add(addr.into())));
+        let y = if self.cpu.is_idx8() {
+            self.cpu.regs.y8().into()
+        } else {
+            self.cpu.regs.y
+        };
+        let (new_addr, ov) = addr.addr.overflowing_add(y);
         if ov {
             Addr24::new(addr.bank.wrapping_add(1), new_addr)
         } else {
