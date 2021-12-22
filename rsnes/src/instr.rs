@@ -8,17 +8,17 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        7, 6, 7, 4, 5, 3, 5, 6,   3, 2, 2, 4, 6, 4, 6, 5,  // 0^
-       2, 0, 5, 0, 5, 4, 0, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
+       2, 0, 5, 0, 5, 4, 6, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
        6, 0, 8, 4, 3, 3, 5, 0,   4, 2, 2, 5, 4, 4, 6, 5,  // 2^
-       2, 0, 0, 0, 4, 0, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
-       6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 0, 0,  // 4^
+       2, 0, 0, 7, 4, 0, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
+       6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 6, 0,  // 4^
        2, 0, 0, 0, 1, 4, 0, 6,   2, 4, 3, 2, 4, 4, 7, 0,  // 5^
        6, 0, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
-       2, 5, 0, 0, 4, 4, 0, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
+       2, 5, 0, 7, 4, 4, 0, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
-       2, 6, 5, 0, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
-       2, 0, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
-       2, 5, 5, 0, 4, 4, 4, 6,   2, 4, 2, 2, 4, 4, 4, 5,  // b^
+       2, 6, 5, 7, 4, 4, 0, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
+       2, 6, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
+       2, 5, 5, 7, 4, 4, 4, 6,   2, 4, 2, 2, 4, 4, 4, 5,  // b^
        2, 0, 3, 4, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
        2, 5, 5, 0, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
        2, 0, 3, 4, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
@@ -206,6 +206,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     pub fn load_stack_relative(&mut self) -> Addr24 {
         let addr = self.load::<u8>();
         Addr24::new(0, self.cpu.regs.sp.wrapping_add(addr.into()))
+    }
+
+    /// SR Indirect Indexed, Y
+    pub fn load_sr_indirect_indexed_y(&mut self) -> Addr24 {
+        let indirect = self.cpu.regs.sp.wrapping_add(self.load::<u8>().into());
+        let addr = self.read::<u16>(Addr24::new(0, indirect));
+        let y = if self.cpu.is_idx8() {
+            self.cpu.regs.y8().into()
+        } else {
+            self.cpu.regs.y
+        };
+        self.cpu.get_data_addr(addr.wrapping_add(y))
     }
 
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
@@ -462,6 +474,24 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x16 => {
+                // ASL - Arithmetic left shift on DP Indexed, X
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    let newval = val << 1;
+                    self.write(addr, newval);
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x80);
+                    self.cpu.update_nz8(newval);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    let newval = val << 1;
+                    self.write(addr, newval);
+                    self.cpu.regs.status.set_if(Status::CARRY, val >= 0x8000);
+                    self.cpu.update_nz16(newval);
+                    cycles += 2
+                }
+            }
             0x17 => {
                 // ORA - Or A with DP Indirect Long Indexed, Y
                 let addr = self.load_indirect_long_indexed_y(&mut cycles);
@@ -688,6 +718,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 } else {
                     self.cpu.regs.a &= self.read::<u16>(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1;
                 }
             }
             0x2e => {
@@ -725,6 +756,19 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x30 => {
                 // BMI - Branch if Negative Flag set
                 self.branch_near(self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
+            }
+            0x33 => {
+                // AND - And A with SR Indirect Indexed, Y
+                let addr = self.load_sr_indirect_indexed_y();
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
             }
             0x34 => {
                 // BIT - Test Bit from absolute index
@@ -917,6 +961,25 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.regs.a ^= self.read::<u16>(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0x4e => {
+                // LSR - SHR on absolute
+                let addr = self.load::<u16>();
+                let addr = self.cpu.get_data_addr(addr);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
                 }
             }
             0x50 => {
@@ -1192,6 +1255,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x71 => {
                 // ADC - Add with Carry DP Indirect Indexed, Y
                 let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.add_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.add_carry16(op1);
+                    cycles += 1;
+                }
+            }
+            0x73 => {
+                // ADC - SR Indirect Indexed, Y Add with Carry
+                let addr = self.load_sr_indirect_indexed_y();
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.add_carry8(op1);
@@ -1494,6 +1569,16 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1;
                 }
             }
+            0x93 => {
+                // STA - Store A to Stack Relative
+                let addr = self.load_sr_indirect_indexed_y();
+                if self.cpu.is_reg8() {
+                    self.write::<u8>(addr, self.cpu.regs.a8());
+                } else {
+                    self.write::<u16>(addr, self.cpu.regs.a);
+                    cycles += 1;
+                }
+            }
             0x94 => {
                 // STY - Store Y to DP Indexed, X
                 let addr = self.load_dp_indexed_x(&mut cycles);
@@ -1599,6 +1684,20 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     let y = self.load::<u16>();
                     self.cpu.update_nz16(y);
                     self.cpu.regs.y = y;
+                    cycles += 1;
+                }
+            }
+            0xa1 => {
+                // LDA - Load DP Indexed Indirect, X into A
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
                     cycles += 1;
                 }
             }
@@ -1813,6 +1912,20 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     let val = self.read::<u16>(addr);
                     self.cpu.update_nz16(val);
                     self.cpu.regs.a = val;
+                    cycles += 1;
+                }
+            }
+            0xb3 => {
+                // LDA - Load SR Indirect Indexed,Y into A
+                let addr = self.load_sr_indirect_indexed_y();
+                if self.cpu.is_reg8() {
+                    let val = self.read(addr);
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read(addr);
+                    self.cpu.regs.a = val;
+                    self.cpu.update_nz16(val);
                     cycles += 1;
                 }
             }
