@@ -85,6 +85,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             if self.scanline_nr >= 262 {
                 self.scanline_nr -= 262;
                 self.new_frame = true;
+                self.nmi_vblank_bit.set(false);
                 self.spc.refresh();
             }
         }
