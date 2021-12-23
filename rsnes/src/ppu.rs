@@ -192,6 +192,22 @@ impl Color {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
+
+    pub const fn with_brightness(self, brightness: u8) -> Self {
+        let b = brightness & 0xff;
+        const fn comp(v: u8, b: u8) -> u8 {
+            if b == 0 {
+                0
+            } else {
+                ((v as u16 * b as u16 + 1) >> 4) as u8
+            }
+        }
+        Self {
+            r: comp(self.r, b),
+            g: comp(self.g, b),
+            b: comp(self.b, b),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -680,13 +696,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         }
     }
 
-    fn get_bg_color(
-        &self,
-        bg_nr: u8,
-        bit_depth: u8,
-        priority: bool,
-        [x, y]: [u16; 2],
-    ) -> Option<Color> {
+    fn get_bg_color(&self, bg_nr: u8, bit_depth: u8, priority: bool, [x, y]: [u16; 2]) -> u32 {
         let bg = &self.bgs[usize::from(bg_nr)];
         let [x, y] = [(x + bg.scroll[0]) & 0x3ff, (y + bg.scroll[1]) & 0x3ff];
         let is_y16 = bg.is_16x16_tiles;
@@ -706,7 +716,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         }
         let tile_info = self.vram[usize::from(tilemap_addr & 0x7fff)];
         if priority ^ ((tile_info & 0x2000) > 0) {
-            return None;
+            return 0;
         }
         let palette = ((tile_info >> 10) & 7) as u8;
         let palette = if let BgModeNum::Mode0 = self.bg_mode.num {
@@ -762,22 +772,22 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 6;
         }
         if pixel == 0 {
-            None
+            0
         } else {
-            let pixel = u32::from(pixel).wrapping_add(u32::from(palette << palette_dimensions));
-            self.pixel_to_color(pixel, bit_depth)
+            u32::from(pixel).wrapping_add(u32::from(palette) << palette_dimensions)
         }
     }
 
-    fn pixel_to_color(&self, pixel: u32, bit_depth: u8) -> Option<Color> {
-        let mut color = if self.direct_color_mode && bit_depth == 3 {
+    fn pixel_to_color(&self, pixel: Option<u32>, bit_depth: u8) -> Color {
+        let val = pixel.unwrap_or(0);
+        let mut color = if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
             Color::new(
-                (((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7)) as u8,
-                (((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8)) as u8,
-                (((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8)) as u8,
+                (((val & 0x7) << 2) | ((val & 0x100) >> 7)) as u8,
+                (((val & 0x38) >> 1) | ((val & 0x200) >> 8)) as u8,
+                (((val & 0xc0) >> 3) | ((val & 0x400) >> 8)) as u8,
             )
         } else {
-            let color = self.cgram.read16((pixel & 0xff) as u8);
+            let color = self.cgram.read16((val & 0xff) as u8);
             Color::new(
                 (color & 0x1f) as u8,
                 ((color >> 5) & 0x1f) as u8,
@@ -787,7 +797,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         color.r <<= 3;
         color.g <<= 3;
         color.b <<= 3;
-        Some(color)
+        color
     }
 
     fn get_bg7_color(
@@ -797,7 +807,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         priority: bool,
         x: u16,
         m7_precalc: &[i32; 2],
-    ) -> Option<Color> {
+    ) -> u32 {
         let x = (x & 0xff) as u8;
         let x = if self.mode7_settings.x_mirror { !x } else { x };
 
@@ -819,18 +829,16 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         } else {
             (self.vram[usize::from((u16::from(tile) << 6) | u16::from(palette_addr))] >> 8) as u8
         };
-        self.pixel_to_color(
-            (if bg_nr == 1 {
-                if (pixel & 0x80 == 0) == priority {
-                    return None;
-                }
-                pixel & 0x7f
+        (if bg_nr == 1 {
+            if (pixel & 0x80 == 0) == priority {
+                0
             } else {
-                pixel
-            })
-            .into(),
-            bit_depth,
-        )
+                pixel & 0x7f
+            }
+        } else {
+            pixel
+        })
+        .into()
     }
 
     fn get_sprite_buffers(&self, y: u16) -> [u16; 0x100] {
@@ -899,17 +907,12 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         buffer
     }
 
-    fn get_sprite_color(
-        &self,
-        priority: u8,
-        x: u16,
-        sprite_buffer: &[u16; 0x100],
-    ) -> Option<Color> {
+    fn get_sprite_color(&self, priority: u8, x: u16, sprite_buffer: &[u16; 0x100]) -> u8 {
         let v = sprite_buffer[usize::from(x & 0xff)];
         if priority == (v >> 8) as u8 {
-            self.pixel_to_color((v & 0xff).into(), 0)
+            (v & 0xff) as u8
         } else {
-            None
+            0
         }
     }
 
@@ -919,15 +922,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         m7_precalc: &Option<[i32; 2]>,
         sprite_buffer: &[u16; 0x100],
     ) -> (u8, Color) {
-        let brightness = self.brightness as f32 / 15.0;
         let mut color = None;
+        let mut g_bit_depth = 0;
         for (i, layer_info) in self.bg_mode.get_layers().iter().enumerate() {
             let layer = self.get_layer_by_info(layer_info);
-            color = if layer.main_screen
-                && !(layer.main_screen_masked && self.is_in_window(x, layer))
-            {
-                match layer_info {
+            if layer.main_screen && !(layer.main_screen_masked && self.is_in_window(x, layer)) {
+                let pixel = match layer_info {
                     DrawLayer::Bg(bg_nr, bit_depth, priority) => {
+                        g_bit_depth = *bit_depth;
                         if let Some(m7_precalc) = m7_precalc {
                             self.get_bg7_color(*bg_nr, *bit_depth, *priority, x, m7_precalc)
                         } else {
@@ -935,26 +937,17 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                         }
                     }
                     DrawLayer::Sprite(priority) => {
-                        self.get_sprite_color(*priority, x, sprite_buffer)
+                        g_bit_depth = 0;
+                        self.get_sprite_color(*priority, x, sprite_buffer).into()
                     }
+                };
+                if pixel > 0 {
+                    color = Some(pixel);
+                    break;
                 }
-            } else {
-                None
-            };
-            if color.is_some() {
-                break;
             }
         }
-        (
-            0,
-            color.unwrap_or_else(|| {
-                Color::new(
-                    (self.fixed_color.r as f32 / 32.0 * 255.0 * brightness) as u8,
-                    (self.fixed_color.g as f32 / 32.0 * 255.0 * brightness) as u8,
-                    (self.fixed_color.b as f32 / 32.0 * 255.0 * brightness) as u8,
-                )
-            }),
-        )
+        (0, self.pixel_to_color(color, g_bit_depth))
     }
 
     fn fetch_pixel(
@@ -967,7 +960,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             Color::BLACK
         } else {
             let (_layer, color) = self.fetch_pixel_layer([x, y], m7_precalc, sprite_buffer);
-            color
+            color.with_brightness(self.brightness)
         }
     }
 
