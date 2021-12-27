@@ -1,5 +1,6 @@
 use crate::oam::{CgRam, Oam};
 use core::mem::replace;
+use core::ops::{Add, Sub};
 
 pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
@@ -180,32 +181,65 @@ impl BgMode {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
+pub struct Color<T: std::fmt::Debug + Clone + Copy = u8> {
+    pub r: T,
+    pub g: T,
+    pub b: T,
 }
 
 impl Color {
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
 
-    pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-
     pub const fn with_brightness(self, brightness: u8) -> Self {
         let b = brightness & 0xff;
         const fn comp(v: u8, b: u8) -> u8 {
-            if b == 0 {
-                0
-            } else {
-                ((v as u16 * b as u16 + 1) >> 4) as u8
-            }
+            ((v as u16 * b as u16 + 1) >> 4) as _
         }
         Self {
             r: comp(self.r, b),
             g: comp(self.g, b),
             b: comp(self.b, b),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug + Clone + Copy> Color<T> {
+    pub fn new(r: T, g: T, b: T) -> Self {
+        Self { r, g, b }
+    }
+
+    pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Color<U>
+    where
+        U: std::fmt::Debug + Clone + Copy,
+    {
+        Color {
+            r: f(self.r),
+            g: f(self.g),
+            b: f(self.b),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug + Clone + Copy + Into<i16>> Add for Color<T> {
+    type Output = Color<i16>;
+
+    fn add(self, other: Self) -> Color<i16> {
+        Color {
+            r: self.r.into() + other.r.into(),
+            g: self.g.into() + other.g.into(),
+            b: self.b.into() + other.b.into(),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug + Clone + Copy + Into<i16>> Sub for Color<T> {
+    type Output = Color<i16>;
+
+    fn sub(self, other: Self) -> Color<i16> {
+        Color {
+            r: self.r.into() - other.r.into(),
+            g: self.g.into() - other.g.into(),
+            b: self.b.into() - other.b.into(),
         }
     }
 }
@@ -351,7 +385,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     color_behaviour: u8,
     subtract_color: bool,
     half_color: bool,
-    fixed_color: Color,
+    fixed_color: Color<u8>,
     bg_mode: BgMode,
     window_positions: [[u8; 2]; 2],
     force_blank: bool,
@@ -628,13 +662,13 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             0x32 => {
                 // COLDATA
                 if val & 0x20 > 0 {
-                    self.fixed_color.r = val
+                    self.fixed_color.r = val << 3
                 }
                 if val & 0x40 > 0 {
-                    self.fixed_color.g = val
+                    self.fixed_color.g = val << 3
                 }
                 if val & 0x80 > 0 {
-                    self.fixed_color.b = val
+                    self.fixed_color.b = val << 3
                 }
             }
             0x33 => {
@@ -766,7 +800,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 (u16::from(bg.base_addr) << 12)
                     .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
                     .wrapping_add(ty)
-                    .wrapping_add(32)
+                    .wrapping_add(24)
                     & 0x7fff,
             )];
             pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 6;
@@ -780,7 +814,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
 
     fn pixel_to_color(&self, pixel: Option<u32>, bit_depth: u8) -> Color {
         let val = pixel.unwrap_or(0);
-        let mut color = if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
+        (if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
             Color::new(
                 (((val & 0x7) << 2) | ((val & 0x100) >> 7)) as u8,
                 (((val & 0x38) >> 1) | ((val & 0x200) >> 8)) as u8,
@@ -793,11 +827,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 ((color >> 5) & 0x1f) as u8,
                 ((color >> 10) & 0x1f) as u8,
             )
-        };
-        color.r <<= 3;
-        color.g <<= 3;
-        color.b <<= 3;
-        color
+        })
+        .map(|c| c << 3)
     }
 
     fn get_bg7_color(
@@ -916,38 +947,105 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         }
     }
 
+    fn fetch_pixel_on_screen_layer(
+        &mut self,
+        layer_info: &DrawLayer,
+        [x, y]: [u16; 2],
+        m7_precalc: &Option<[i32; 2]>,
+        sprite_buffer: &[u16; 0x100],
+        subscreen_needed: bool,
+    ) -> Option<(u32, u8, bool, [bool; 2])> {
+        let layer = self.get_layer_by_info(layer_info);
+        let is_in_screen =
+            |screen, screen_masked| screen && !(screen_masked && self.is_in_window(x, layer));
+        let in_main_screen = is_in_screen(layer.main_screen, layer.main_screen_masked);
+        let in_sub_screen = is_in_screen(layer.sub_screen, layer.sub_screen_masked);
+        if in_main_screen || (subscreen_needed && in_sub_screen) {
+            let (pixel, bit_depth) = match layer_info {
+                DrawLayer::Bg(bg_nr, bit_depth, priority) => (
+                    if let Some(m7_precalc) = m7_precalc {
+                        self.get_bg7_color(*bg_nr, *bit_depth, *priority, x, m7_precalc)
+                    } else {
+                        let bg = self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y]);
+                        bg
+                    },
+                    *bit_depth,
+                ),
+                DrawLayer::Sprite(priority) => {
+                    (self.get_sprite_color(*priority, x, sprite_buffer).into(), 0)
+                }
+            };
+            if pixel > 0 {
+                return Some((
+                    pixel,
+                    bit_depth,
+                    layer.color_math,
+                    [in_main_screen, subscreen_needed && in_sub_screen],
+                ));
+            }
+        }
+        None
+    }
+
     fn fetch_pixel_layer(
         &mut self,
         [x, y]: [u16; 2],
         m7_precalc: &Option<[i32; 2]>,
         sprite_buffer: &[u16; 0x100],
-    ) -> (u8, Color) {
-        let mut color = None;
-        let mut g_bit_depth = 0;
-        for (i, layer_info) in self.bg_mode.get_layers().iter().enumerate() {
-            let layer = self.get_layer_by_info(layer_info);
-            if layer.main_screen && !(layer.main_screen_masked && self.is_in_window(x, layer)) {
-                let pixel = match layer_info {
-                    DrawLayer::Bg(bg_nr, bit_depth, priority) => {
-                        g_bit_depth = *bit_depth;
-                        if let Some(m7_precalc) = m7_precalc {
-                            self.get_bg7_color(*bg_nr, *bit_depth, *priority, x, m7_precalc)
-                        } else {
-                            self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y])
-                        }
+    ) -> Color<u8> {
+        let mut colors = [None; 2];
+        let prevent = self.color_behaviour & 3;
+        let mut color_math = prevent != 3
+            && (prevent == 0 || (self.is_in_window(x, &self.color_layer) ^ (prevent & 1 == 0)));
+        for layer_info in self.bg_mode.get_layers() {
+            let res = self.fetch_pixel_on_screen_layer(
+                layer_info,
+                [x, y],
+                m7_precalc,
+                sprite_buffer,
+                color_math && self.add_subscreen && colors[1].is_none(),
+            );
+            if let Some((pixel, bit_depth, layer_color_math, is_screen)) = res {
+                let color = self.pixel_to_color(Some(pixel), bit_depth);
+                if is_screen[0] && colors[0].is_none() {
+                    colors[0] = Some(color);
+                    color_math &= layer_color_math;
+                    if colors[1].is_some() || !color_math || !self.add_subscreen {
+                        break;
                     }
-                    DrawLayer::Sprite(priority) => {
-                        g_bit_depth = 0;
-                        self.get_sprite_color(*priority, x, sprite_buffer).into()
+                }
+                if is_screen[1] {
+                    colors[1] = Some(color);
+                    if colors[0].is_some() {
+                        break;
                     }
-                };
-                if pixel > 0 {
-                    color = Some(pixel);
-                    break;
                 }
             }
         }
-        (0, self.pixel_to_color(color, g_bit_depth))
+        colors[1] = colors[1].filter(|_| colors[0].is_some() && color_math);
+        match colors {
+            [None, _] => self.pixel_to_color(None, 0),
+            [Some(main), _] if !color_math => main,
+            [Some(main), secondary] => {
+                let op = if self.subtract_color {
+                    Color::sub
+                } else {
+                    Color::add
+                };
+                let color: Color<i16> =
+                    if let (Some(secondary), true) = (secondary, self.add_subscreen) {
+                        op(main, secondary)
+                    } else {
+                        op(main, self.fixed_color)
+                    };
+                (if self.half_color && (secondary.is_some() || !self.add_subscreen) {
+                    color.map(|c| c >> 1)
+                } else {
+                    color
+                })
+                .map(|c| c.clamp(0, 0xff) as u8)
+            }
+        }
     }
 
     fn fetch_pixel(
@@ -959,8 +1057,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if self.force_blank {
             Color::BLACK
         } else {
-            let (_layer, color) = self.fetch_pixel_layer([x, y], m7_precalc, sprite_buffer);
-            color.with_brightness(self.brightness)
+            self.fetch_pixel_layer([x, y], m7_precalc, sprite_buffer)
+                .with_brightness(self.brightness)
         }
     }
 
