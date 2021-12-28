@@ -367,6 +367,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     cgram: CgRam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
+    vram_data_buffer: u8,
     /// A value between 0 and 15 with 15 being maximum brightness
     brightness: u8,
     obj_size: ObjectSize,
@@ -402,6 +403,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             cgram: CgRam::new(),
             vram: [0; VRAM_SIZE],
             vram_addr_unmapped: 0,
+            vram_data_buffer: 0,
             brightness: 0x0f,
             obj_size: ObjectSize::O8S16,
             remap_mode: RemapMode::NoRemap,
@@ -456,6 +458,26 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                     >> ((id & 3) << 3))
                     & 0xff) as u8;
                 Some(self.open_bus1)
+            }
+            0x39 | 0x3a => {
+                // VMDATALREAD / VMDATAHREAD
+                let [f1, f2] = if id == 0x39 {
+                    [|v| v & 0xff, |v| v >> 8]
+                } else {
+                    [|v| v >> 8, |v| v & 0xff]
+                };
+                let val = if self.increment_first ^ (id == 0x3a) {
+                    let buf = self.get_vram_word(self.vram_addr_unmapped);
+                    self.vram_data_buffer = f2(buf) as u8;
+                    self.vram_addr_unmapped = self
+                        .vram_addr_unmapped
+                        .wrapping_add(self.vram_increment_amount.into());
+                    f1(buf) as u8
+                } else {
+                    self.vram_data_buffer
+                };
+                self.open_bus1 = val;
+                Some(val)
             }
             _ => todo!("read from unknown PPU register 0x21{:02x}", id),
         }
@@ -690,6 +712,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             _ => todo!("write to unknown PPU register 0x21{:02x}", id),
         }
+    }
+
+    fn get_vram_word(&self, index: u16) -> u16 {
+        self.vram[usize::from(self.remap_mode.remap(index) & 0x7fff)]
     }
 
     fn get_vram_word_mut(&mut self, index: u16) -> &mut u16 {
