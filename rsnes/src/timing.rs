@@ -92,23 +92,25 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     }
 
     pub fn run_cpu<const N: u16>(&mut self) {
-        while self.cpu_ahead_cycles <= 0 {
+        let needs_refresh = self.cpu_ahead_cycles <= 0;
+        self.cpu_ahead_cycles -= i32::from(N);
+        if needs_refresh {
             self.memory_cycles = 0;
             let cycles = (if self.shall_nmi {
                 if replace(&mut self.cpu.wait_mode, false) {
-                    break;
+                    return;
                 }
                 self.shall_nmi = false;
                 self.nmi()
             } else if self.shall_irq {
                 if replace(&mut self.cpu.wait_mode, false) {
-                    break;
+                    return;
                 }
                 self.shall_irq = false;
                 self.irq()
             } else {
                 if self.cpu.wait_mode {
-                    break;
+                    return;
                 }
                 // > Internal operation CPU cycles always take 6 master cycles
                 // source: <https://wiki.superfamicom.org/memory-mapping>
@@ -116,7 +118,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }) + self.memory_cycles;
             self.cpu_ahead_cycles += cycles as i32;
         }
-        self.cpu_ahead_cycles -= i32::from(N);
     }
 
     pub fn vend(&self) -> u16 {
@@ -135,14 +136,14 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             XSlow = 12,
         }
         use Speed::*;
-        fn romaccess<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>(
-            device: &Device<B, FB>,
-        ) -> Speed {
-            if device.cpu.access_speed {
-                Fast
-            } else {
-                Slow
-            }
+        macro_rules! romaccess {
+            () => {
+                if self.cpu.access_speed {
+                    Fast
+                } else {
+                    Slow
+                }
+            };
         }
         (match addr.bank {
             0x00..=0x3f => match addr.addr {
@@ -166,9 +167,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 0x4200..=0x43ff => Fast,
                 0x4400..=0x5fff => Fast,
                 0x6000..=0x7fff => Slow,
-                0x8000..=0xffff => romaccess(self),
+                0x8000..=0xffff => romaccess!(),
             },
-            0xc0..=0xff => romaccess(self),
+            0xc0..=0xff => romaccess!(),
         }) as u8 as Cycles
     }
 }
