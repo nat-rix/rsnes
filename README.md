@@ -9,11 +9,33 @@ A [SNES](https://en.wikipedia.org/wiki/Super_Nintendo_Entertainment_System) emul
 
 ## Implementation Status
 
-`Super Mario World` is already running and playing sound that only lacks sound effects and has a faulty volume setting.
-Rendering already works partially (no sprites, only BGs, no color math, etc.).
+Some games are already playable, but many graphics and sounds are faulty.
+Comparatively functioning games are e.g. Donkey Kong Country, Wolfenstein 3D,
+F-Zero and Super Mario World.
 
-- 65816 instruction implementation coverage: ≈84,4%
-- SPC instruction implementation coverage: ≈75,8%
+- 65816 instruction implementation coverage: ≈87.1%
+- SPC instruction implementation coverage: ≈75.8%
+
+## Usage
+
+This keyboard keys will drive the controller
+
+| Keyboard key on QWERTY | Controller key |
+|------------------------|----------------|
+| **W**                  | **↑**          |
+| **A**                  | **←**          |
+| **S**                  | **↓**          |
+| **D**                  | **→**          |
+| **Q**                  | **L**          |
+| **E**                  | **R**          |
+| **Left Alt**           | **Start**      |
+| **Right Alt**          | **Select**     |
+| **J**                  | **A**          |
+| **K**                  | **B**          |
+| **L**                  | **X**          |
+| **;** *\**             | **Y**          |
+
+*\** the button right of *L*
 
 ## Structure
 
@@ -30,11 +52,11 @@ This is a set of features to be implemented in the future (sorted by priority)
 
 - [x] Mode 7 support
 - [x] Sprite support
+- [x] Color math
 - [x] S-DSP echo effect support
 - [ ] S-DSP noise effect support
 - [ ] Save game to files
 - [ ] SA-1 support
-- [ ] emulator running also on [WASM](https://webassembly.org/)
 - [ ] Real gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
 - [ ] Improved documentation
 - [ ] Tests
@@ -42,6 +64,9 @@ This is a set of features to be implemented in the future (sorted by priority)
   - [ ] SPC-700 processor instruction tests
   - [ ] Audio tests
   - [ ] Video output tests
+- [ ] configurable UI
+  - [ ] configurable key bindings
+- [ ] emulator running also on [WASM](https://webassembly.org/)
 - [ ] [DSP](https://en.wikipedia.org/wiki/NEC_%C2%B5PD7720#%C2%B5PD77C25) coprocessor support
   - [ ] DSP-1, DSP-1A, DSP-1B
   - [ ] DSP-2, DSP-3, DSP-4 (low priority)
