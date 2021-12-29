@@ -92,9 +92,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x4212 => {
                 // HVBJOY - PPU status
                 // TODO: better timing and auto joypad timing
-                let in_hblank = self.scanline_cycle >= 1096 || self.scanline_cycle <= 2;
+                let in_hblank = self.ppu.scanline_cycle >= 1096 || self.ppu.scanline_cycle <= 2;
                 Some(
-                    (((self.scanline_nr >= self.vend()) as u8) << 7)
+                    (((self.ppu.scanline_nr >= self.vend()) as u8) << 7)
                         | ((in_hblank as u8) << 6)
                         | (self.controllers.auto_joypad_timer > 0) as u8
                         | (self.open_bus & 0x3e),
@@ -134,7 +134,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x4201 => {
                 // WRIO - Programmable I/O-Port
                 if self.controllers.set_pio(val) {
-                    // TODO: latch ppu counters
+                    self.ppu.latch()
                 }
             }
             0x4202 => {

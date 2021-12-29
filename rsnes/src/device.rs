@@ -170,10 +170,6 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     ram: [u8; RAM_SIZE],
     wram_addr: Cell<u32>,
     pub(crate) memory_cycles: Cycles,
-    /// Some people refer to this as H-Pos
-    pub(crate) scanline_cycle: u16,
-    /// Some people refer to this as V-Pos
-    pub(crate) scanline_nr: u16,
     pub(crate) cpu_ahead_cycles: i32,
     pub(crate) new_scanline: bool,
     pub new_frame: bool,
@@ -201,8 +197,6 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             ram: [0; RAM_SIZE],
             wram_addr: Cell::new(0),
             memory_cycles: 0,
-            scanline_cycle: 0,
-            scanline_nr: 0,
             cpu_ahead_cycles: 52,
             new_scanline: true,
             new_frame: true,
@@ -320,6 +314,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                     self.increment_wram_addr();
                     res
                 }
+                0x84..=0xff => self.open_bus,
                 _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
             }
         }
@@ -410,7 +405,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                 0x83 => self
                     .wram_addr
                     .set((self.wram_addr.get() & 0xffff) | (u32::from(*d & 1) << 16)),
-                0x34 => (),
+                0x34 | 0x84..=0xff => (),
                 _ => todo!("unimplemented address bus B write at 0x21{:02x}", addr),
             }
         }

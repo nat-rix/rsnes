@@ -126,7 +126,7 @@ impl ControllerPorts {
     pub fn set_pio(&mut self, val: u8) -> bool {
         self.port1.pio = val & 0x40 > 0;
         let pio2 = val & 0x80 > 0;
-        !replace(&mut self.port2.pio, pio2) && pio2
+        replace(&mut self.port2.pio, pio2) && !pio2
     }
 
     pub fn set_strobe(&mut self, bit: bool) {

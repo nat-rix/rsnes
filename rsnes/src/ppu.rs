@@ -364,6 +364,10 @@ impl Mode7Settings {
 pub struct Ppu<FB: crate::backend::FrameBuffer> {
     pub(crate) oam: Oam,
     pub frame_buffer: FB,
+    /// Some people refer to this as H-Pos
+    pub(crate) scanline_cycle: u16,
+    /// Some people refer to this as V-Pos
+    pub(crate) scanline_nr: u16,
     cgram: CgRam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
@@ -391,6 +395,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     window_positions: [[u8; 2]; 2],
     force_blank: bool,
     tile_adr: [u16; 2],
+    counter_latch: [(u16, bool); 2],
     open_bus1: u8,
     open_bus2: u8,
 }
@@ -400,6 +405,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         Self {
             oam: Oam::new(),
             frame_buffer,
+            scanline_cycle: 0,
+            scanline_nr: 0,
             cgram: CgRam::new(),
             vram: [0; VRAM_SIZE],
             vram_addr_unmapped: 0,
@@ -434,6 +441,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             window_positions: [[0; 2]; 2],
             force_blank: true,
             tile_adr: [0; 2],
+            counter_latch: Default::default(),
             open_bus1: 0,
             open_bus2: 0,
         }
@@ -459,6 +467,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                     & 0xff) as u8;
                 Some(self.open_bus1)
             }
+            0x37 => {
+                // SLHV - Software Latch for H/V Counter
+                self.latch();
+                None
+            }
             0x39 | 0x3a => {
                 // VMDATALREAD / VMDATAHREAD
                 let [f1, f2] = if id == 0x39 {
@@ -478,6 +491,17 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 };
                 self.open_bus1 = val;
                 Some(val)
+            }
+            0x3c | 0x3d => {
+                // OPHCT / OPVCT
+                let hv = (id & 1) as usize;
+                let (val, high) = &mut self.counter_latch[hv];
+                self.open_bus2 = if replace(high, !*high) {
+                    ((*val >> 8) & 1) as u8 | (self.open_bus2 & 0xfe)
+                } else {
+                    (*val & 0xff) as u8
+                };
+                Some(self.open_bus2)
             }
             _ => todo!("read from unknown PPU register 0x21{:02x}", id),
         }
@@ -712,6 +736,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             _ => todo!("write to unknown PPU register 0x21{:02x}", id),
         }
+    }
+
+    pub fn latch(&mut self) {
+        self.counter_latch[0].0 = self.scanline_cycle >> 2;
+        self.counter_latch[1].0 = self.scanline_nr;
     }
 
     fn get_vram_word(&self, index: u16) -> u16 {
