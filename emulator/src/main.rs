@@ -212,10 +212,7 @@ fn main() {
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler {
-                    filtering: true,
-                    comparison: false,
-                },
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
         ],
@@ -296,6 +293,7 @@ fn main() {
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
+        multiview: None,
     });
     let mut surf_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -361,11 +359,11 @@ fn main() {
                     while !snes.new_frame {
                         snes.run_cycle::<1>();
                     }
-                    let now = std::time::Instant::now();
-                    if last_rerendered + std::time::Duration::from_millis(60) <= now {
-                        window.request_redraw();
-                        last_rerendered = now;
-                    }
+                }
+                let now = std::time::Instant::now();
+                if last_rerendered + std::time::Duration::from_millis(16) <= now {
+                    window.request_redraw();
+                    last_rerendered = now;
                 }
             }
             Event::RedrawRequested(_) => {
