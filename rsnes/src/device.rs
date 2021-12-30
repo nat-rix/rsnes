@@ -50,10 +50,6 @@ pub trait Data: std::fmt::Debug + Sized + Default + Clone + Copy {
     fn from_open_bus(open_bus: u8) -> Self;
 }
 
-#[repr(transparent)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InverseU16(pub u16);
-
 impl Data for u8 {
     type Arr = [u8; 1];
     fn to_bytes(self) -> [u8; 1] {
@@ -97,33 +93,6 @@ impl Data for u16 {
     }
     fn from_open_bus(open_bus: u8) -> Self {
         open_bus as u16 | ((open_bus as u16) << 8)
-    }
-}
-
-impl Data for InverseU16 {
-    type Arr = [u8; 2];
-    fn to_bytes(self) -> [u8; 2] {
-        self.0.to_be_bytes()
-    }
-    fn from_bytes(bytes: &[u8; 2]) -> Self {
-        Self(u16::from_be_bytes(*bytes))
-    }
-    fn parse(data: &[u8], index: usize) -> Self {
-        Self(u16::from_be_bytes([
-            data[index],
-            data[(index + 1) % data.len()],
-        ]))
-    }
-    fn write_to(self, data: &mut [u8], index: usize) {
-        let [x, y] = self.to_bytes();
-        data[index] = x;
-        data[(index + 1) % data.len()] = y;
-    }
-    fn to_open_bus(self) -> u8 {
-        (self.0 & 0xff) as u8
-    }
-    fn from_open_bus(open_bus: u8) -> Self {
-        Self(open_bus as u16 | ((open_bus as u16) << 8))
     }
 }
 
