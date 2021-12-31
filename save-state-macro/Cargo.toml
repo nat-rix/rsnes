@@ -1,10 +1,11 @@
 [package]
-name = "rsnes"
+name = "save-state-macro"
 version = "0.1.0"
 edition = "2021"
-description = "a siple SNES emulator"
-keywords = ["emulator", "snes", "famicom"]
-categories = ["emulators"]
+description = "save state derive macro helper crate for rsnes"
+
+[lib]
+proc-macro = true
 
 [profile.release]
 opt-level = 3
@@ -21,4 +22,5 @@ opt-level = 3
 
 [dependencies]
 save-state = { path = "../save-state" }
-save-state-macro = { path = "../save-state-macro" }
+syn = "1.0"
+quote = "1.0"

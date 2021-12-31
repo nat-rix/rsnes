@@ -2,5 +2,7 @@
 resolver = "2"
 members = [
     "rsnes",
-    "emulator"
+    "emulator",
+    "save-state",
+    "save-state-macro"
 ]
