@@ -9,9 +9,10 @@
 
 use crate::device::Addr24;
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
+use save_state_macro::*;
 
 /// Structure containing the processor registers
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Regs {
     /// The accumulator register
     pub a: u16,
@@ -61,7 +62,7 @@ impl Regs {
 
 /// Processor status flags
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Status(pub u8);
 
 macro_rules! bitor { ($t:ident, $($vs:ident)|*) => { $t($(<$t>::$vs.0)|*) }; }
@@ -153,7 +154,7 @@ impl Not for Status {
 }
 
 /// Structure for emulating the 65816 Processor
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Cpu {
     pub regs: Regs,
     pub(crate) nmitimen: u8,

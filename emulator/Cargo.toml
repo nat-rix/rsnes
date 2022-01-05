@@ -18,14 +18,13 @@ clap = { version="3.0.0-rc.9", features = ["cargo", "derive"] }
 winit = "0.26"
 cpal = "0.13"
 pollster = "0.2"
+rsnes = { path = "../rsnes" }
+save-state = { path = "../save-state" }
 
 [dependencies.wgpu]
 version = "0.12"
 default-features = false
 features = ["spirv"]
-
-[dependencies.rsnes]
-path = "../rsnes"
 
 [build-dependencies.shaderc]
 version = "0.7"

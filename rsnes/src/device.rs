@@ -12,6 +12,7 @@ use crate::{
     timing::Cycles,
 };
 use core::cell::Cell;
+use save_state_macro::*;
 
 const RAM_SIZE: usize = 0x20000;
 
@@ -35,6 +36,18 @@ impl Addr24 {
 impl std::fmt::Display for Addr24 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:02x}:{:04x}", self.bank, self.addr)
+    }
+}
+
+impl save_state::InSaveState for Addr24 {
+    fn serialize(&self, state: &mut save_state::SaveStateSerializer) {
+        self.bank.serialize(state);
+        self.addr.serialize(state);
+    }
+
+    fn deserialize(&mut self, state: &mut save_state::SaveStateDeserializer) {
+        self.bank.deserialize(state);
+        self.addr.deserialize(state);
     }
 }
 
@@ -126,7 +139,7 @@ impl Data for Addr24 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) cpu: Cpu,
     pub spc: Spc700<B>,

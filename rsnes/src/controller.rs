@@ -1,4 +1,5 @@
 use core::{cell::Cell, mem::replace};
+use save_state_macro::*;
 
 pub mod buttons {
     pub const B: u16 = 1;
@@ -54,9 +55,37 @@ impl Controller {
     }
 }
 
+impl save_state::InSaveState for Controller {
+    fn serialize(&self, state: &mut save_state::SaveStateSerializer) {
+        let n: u8 = match self {
+            Self::None => 0,
+            Self::Standard(..) => 1,
+        };
+        n.serialize(state);
+        match self {
+            Self::None => (),
+            Self::Standard(v) => v.serialize(state),
+        }
+    }
+
+    fn deserialize(&mut self, state: &mut save_state::SaveStateDeserializer) {
+        let mut n: u8 = 0;
+        n.deserialize(state);
+        *self = match n {
+            0 => Self::None,
+            1 => {
+                let mut cntrl = StandardController::default();
+                cntrl.deserialize(state);
+                Self::Standard(cntrl)
+            }
+            _ => panic!("unexpected discriminant value {}", n),
+        }
+    }
+}
+
 /// The standard SNES-Controller with A,B,X,Y,Left,Right,Up,Down,
 /// L,R,Start,Select buttons
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone, InSaveState)]
 pub struct StandardController {
     shift_register: Cell<u16>,
     pub pressed_buttons: u16,
@@ -71,7 +100,7 @@ impl StandardController {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct ControllerPort {
     pub controller: Controller,
     pio: bool,
@@ -105,7 +134,7 @@ impl ControllerPort {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct ControllerPorts {
     pub port1: ControllerPort,
     pub port2: ControllerPort,

@@ -1,22 +1,25 @@
 use crate::oam::{CgRam, Oam};
 use core::mem::replace;
 use core::ops::{Add, Sub};
+use save_state::{SaveStateDeserializer, SaveStateSerializer};
+use save_state_macro::*;
 
 pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
 pub const MAX_SCREEN_HEIGHT: u32 = 239;
 pub const CHIP_5C78_VERSION: u8 = 3;
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum BgModeNum {
-    Mode0,
-    Mode1,
-    Mode2,
-    Mode3,
-    Mode4,
-    Mode5,
-    Mode6,
-    Mode7,
+    Mode0 = 0,
+    Mode1 = 1,
+    Mode2 = 2,
+    Mode3 = 3,
+    Mode4 = 4,
+    Mode5 = 5,
+    Mode6 = 6,
+    Mode7 = 7,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -180,6 +183,20 @@ impl BgMode {
     }
 }
 
+impl save_state::InSaveState for BgMode {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        ((self.num as u8) | ((self.bg3_priority as u8) << 3) | ((self.extbg as u8) << 4))
+            .serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut n: u8 = 0;
+        n.deserialize(state);
+        self.set_bits(n);
+        self.extbg = n & 16 > 0;
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Color<T: std::fmt::Debug + Clone + Copy = u8> {
     pub r: T,
@@ -244,7 +261,23 @@ impl<T: std::fmt::Debug + Clone + Copy + Into<i16>> Sub for Color<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+impl<T: std::fmt::Debug + Clone + Copy + save_state::InSaveState> save_state::InSaveState
+    for Color<T>
+{
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        self.r.serialize(state);
+        self.g.serialize(state);
+        self.b.serialize(state);
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        self.r.deserialize(state);
+        self.g.deserialize(state);
+        self.b.deserialize(state);
+    }
+}
+
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Background {
     tilemap_addr: u8,
     base_addr: u8,
@@ -274,7 +307,7 @@ impl Background {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Layer {
     mask_logic: MaskLogic,
     windows: [bool; 2],
@@ -314,7 +347,7 @@ pub enum MaskLogic {
 }
 
 impl MaskLogic {
-    pub fn from_byte(val: u8) -> Self {
+    pub const fn from_byte(val: u8) -> Self {
         match val & 3 {
             0 => Self::Or,
             1 => Self::And,
@@ -323,9 +356,30 @@ impl MaskLogic {
             _ => unreachable!(),
         }
     }
+
+    pub const fn to_byte(self) -> u8 {
+        match self {
+            Self::Or => 0,
+            Self::And => 1,
+            Self::Xor => 2,
+            Self::XNor => 3,
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+impl save_state::InSaveState for MaskLogic {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        self.to_byte().serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut n: u8 = 0;
+        n.deserialize(state);
+        *self = Self::from_byte(n)
+    }
+}
+
+#[derive(Debug, Clone, InSaveState)]
 pub struct Mode7Settings {
     x_mirror: bool,
     y_mirror: bool,
@@ -360,9 +414,10 @@ impl Mode7Settings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Ppu<FB: crate::backend::FrameBuffer> {
     pub(crate) oam: Oam,
+    #[except((|_v, _s| ()), (|_v, _s| ()))]
     pub frame_buffer: FB,
     /// Some people refer to this as H-Pos
     pub(crate) scanline_cycle: u16,
@@ -1192,7 +1247,7 @@ pub enum ObjectSize {
 }
 
 impl ObjectSize {
-    pub fn from_upper_bits(bits: u8) -> Self {
+    pub const fn from_upper_bits(bits: u8) -> Self {
         match bits >> 5 {
             0b000 => Self::O8S16,
             0b001 => Self::O8S32,
@@ -1204,6 +1259,20 @@ impl ObjectSize {
             0b111 => Self::O16x32S32,
             _ => unreachable!(),
         }
+    }
+
+    pub const fn to_upper_bits(self) -> u8 {
+        let n: u8 = match self {
+            Self::O8S16 => 0b000,
+            Self::O8S32 => 0b001,
+            Self::O8S64 => 0b010,
+            Self::O16S32 => 0b011,
+            Self::O16S64 => 0b100,
+            Self::O32S64 => 0b101,
+            Self::O16x32S32x64 => 0b110,
+            Self::O16x32S32 => 0b111,
+        };
+        n << 5
     }
 
     pub const fn get_small_width(&self) -> u8 {
@@ -1255,6 +1324,18 @@ impl ObjectSize {
     }
 }
 
+impl save_state::InSaveState for ObjectSize {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        self.to_upper_bits().serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut n: u8 = 0;
+        n.deserialize(state);
+        *self = Self::from_upper_bits(n)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemapMode {
     NoRemap,
@@ -1264,13 +1345,22 @@ pub enum RemapMode {
 }
 
 impl RemapMode {
-    pub fn from_bits(bits: u8) -> Self {
+    pub const fn from_bits(bits: u8) -> Self {
         match bits & 0b11 {
             0b00 => Self::NoRemap,
             0b01 => Self::First,
             0b10 => Self::Second,
             0b11 => Self::Third,
             _ => unreachable!(),
+        }
+    }
+
+    pub const fn to_bits(self) -> u8 {
+        match self {
+            Self::NoRemap => 0b00,
+            Self::First => 0b01,
+            Self::Second => 0b10,
+            Self::Third => 0b11,
         }
     }
 
@@ -1281,5 +1371,17 @@ impl RemapMode {
             Self::Second => (addr & 0xfe00) | ((addr & 0x3f) << 3) | ((addr >> 6) & 0b111),
             Self::Third => (addr & 0xfc00) | ((addr & 0x7f) << 3) | ((addr >> 7) & 0b111),
         }
+    }
+}
+
+impl save_state::InSaveState for RemapMode {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        self.to_bits().serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut n: u8 = 0;
+        n.deserialize(state);
+        *self = Self::from_bits(n)
     }
 }

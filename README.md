@@ -20,20 +20,22 @@ F-Zero and Super Mario World.
 
 This keyboard keys will drive the controller
 
-| Keyboard key on QWERTY | Controller key |
-|------------------------|----------------|
-| **W**                  | **↑**          |
-| **A**                  | **←**          |
-| **S**                  | **↓**          |
-| **D**                  | **→**          |
-| **Q**                  | **L**          |
-| **E**                  | **R**          |
-| **Left Alt**           | **Start**      |
-| **Right Alt**          | **Select**     |
-| **J**                  | **A**          |
-| **K**                  | **B**          |
-| **L**                  | **X**          |
-| **;** *\**             | **Y**          |
+| Keyboard key on QWERTY | Controller key       |
+|------------------------|----------------------|
+| **W**                  | **↑**                |
+| **A**                  | **←**                |
+| **S**                  | **↓**                |
+| **D**                  | **→**                |
+| **Q**                  | **L**                |
+| **E**                  | **R**                |
+| **Left Alt**           | **Start**            |
+| **Right Alt**          | **Select**           |
+| **J**                  | **A**                |
+| **K**                  | **B**                |
+| **L**                  | **X**                |
+| **;** *\**             | **Y**                |
+| 0-9                    | Store Save State 0-9 |
+| Shift + 0-9            | Load Save State 0-9  |
 
 *\** the button right of *L*
 
@@ -81,7 +83,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] Multitap (MP5) controller support
 - [ ] [SNES Mouse](https://en.wikipedia.org/wiki/Super_NES_Mouse) support
 - [ ] [SNES Super Scope](https://en.wikipedia.org/wiki/Super_Scope) support
-- [ ] Save States
+- [x] Save States
 - [ ] Capcom CX4 coprocessor support (this processor is only used in Mega Man X2 and Mega Man X3)
 - [ ] SPC7110 data compression chip
 

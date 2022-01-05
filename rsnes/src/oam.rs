@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy)]
+use save_state_macro::*;
+
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Object {
     pub x: i16,
     pub y: u8,
@@ -34,7 +36,7 @@ impl Object {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Oam {
     pub(crate) objs: [Object; 128],
     // 10-bit value
@@ -95,7 +97,7 @@ impl Oam {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct CgRam {
     data: [u8; 512],
     // 9-bit value

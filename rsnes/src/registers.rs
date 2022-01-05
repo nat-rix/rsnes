@@ -1,8 +1,9 @@
 use crate::device::Device;
+use save_state_macro::*;
 
 const CHIP_5A22_VERSION: u8 = 2;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct MathRegisters {
     multiplicands: [u8; 2],
     dividend: u16,

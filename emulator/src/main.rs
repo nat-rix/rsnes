@@ -2,6 +2,7 @@ use clap::{ErrorKind, Parser};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use pollster::FutureExt;
 use rsnes::{backend::ArrayFrameBuffer, device::Device, spc700::StereoSample};
+use save_state::InSaveState;
 use std::path::PathBuf;
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent},
@@ -306,6 +307,9 @@ fn main() {
 
     let mut last_rerendered = std::time::Instant::now();
 
+    let mut shift = [false; 2];
+    let mut savestates: [Option<Vec<u8>>; 10] = [(); 10].map(|()| None);
+
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
         match ev {
@@ -336,7 +340,34 @@ fn main() {
                         0x12 => buttons::R,
                         0x38 => buttons::START,
                         0x64 => buttons::SELECT,
-                        _ => 0,
+                        _ => {
+                            match scancode {
+                                0x2a => shift[0] = state == winit::event::ElementState::Pressed,
+                                0x36 => shift[1] = state == winit::event::ElementState::Pressed,
+                                2..=11 if state == winit::event::ElementState::Pressed => {
+                                    let id = if scancode == 11 { 0 } else { scancode - 1 };
+                                    let state = &mut savestates[id as usize];
+                                    if shift[0] || shift[1] {
+                                        if let Some(state) = state {
+                                            // load save state
+                                            let mut deserializer =
+                                                save_state::SaveStateDeserializer {
+                                                    data: state.iter(),
+                                                };
+                                            snes.deserialize(&mut deserializer);
+                                        }
+                                    } else {
+                                        // store save state
+                                        let mut serializer =
+                                            save_state::SaveStateSerializer { data: vec![] };
+                                        snes.serialize(&mut serializer);
+                                        *state = Some(serializer.data);
+                                    }
+                                }
+                                _ => (),
+                            }
+                            0
+                        }
                     };
                     if key > 0 {
                         match &mut snes.controllers.port1.controller {

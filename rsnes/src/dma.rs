@@ -1,4 +1,5 @@
 use crate::device::{Addr24, Device};
+use save_state_macro::*;
 
 pub mod flags {
     pub const MODE: u8 = 0b111;
@@ -8,7 +9,7 @@ pub mod flags {
     pub const PPU_TO_CPU: u8 = 0x80;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Channel {
     a_bus: Addr24,
     b_bus: u8,
@@ -79,7 +80,7 @@ impl Channel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Dma {
     channels: [Channel; 8],
     running: bool,

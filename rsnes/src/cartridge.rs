@@ -9,6 +9,8 @@ use std::convert::TryInto;
 
 use crate::device::{Addr24, Data};
 use crate::sa1::Sa1;
+use save_state::{SaveStateDeserializer, SaveStateSerializer};
+use save_state_macro::*;
 
 const MINIMUM_SIZE: usize = 0x8000;
 
@@ -35,21 +37,22 @@ impl std::fmt::Display for ReadRomError {
     }
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 enum RomType {
-    LoRom,
-    HiRom,
-    LoRomSDD1,
-    LoRomSA1,
+    LoRom = 0,
+    HiRom = 1,
+    LoRomSDD1 = 2,
+    LoRomSA1 = 3,
     // > ExHiRom only used by "Dai Kaiju Monogatari 2 (JP)" and "Tales of Phantasia (JP)"
     // source: nocache SNES hardware specification
     //         <https://problemkaputt.de/fullsnes.htm>
-    ExHiRom,
-    HiRomSPC7110,
+    ExHiRom = 5,
+    HiRomSPC7110 = 10,
 }
 
 impl RomType {
-    fn from_byte(byte: u8) -> Option<RomType> {
+    const fn from_byte(byte: u8) -> Option<RomType> {
         Some(match byte {
             0 => Self::LoRom,
             1 => Self::HiRom,
@@ -71,6 +74,25 @@ impl RomType {
     }
 }
 
+impl save_state::InSaveState for RomType {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        (*self as u8).serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = Self::from_byte(i).unwrap_or_else(|| panic!("unknown enum discriminant {}", i))
+    }
+}
+
+impl Default for RomType {
+    fn default() -> Self {
+        Self::from_byte(0).unwrap()
+    }
+}
+
+#[repr(u8)]
 #[derive(Debug, Clone)]
 pub enum MemoryMapping {
     LoRom,
@@ -78,7 +100,43 @@ pub enum MemoryMapping {
     LoRomSa1 { sa1: Sa1 },
 }
 
-#[derive(Debug, Clone)]
+impl save_state::InSaveState for MemoryMapping {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        let v: u8 = match self {
+            Self::LoRom => 0,
+            Self::HiRom => 1,
+            Self::LoRomSa1 { .. } => 2,
+        };
+        v.serialize(state);
+        match self {
+            Self::LoRom | Self::HiRom => (),
+            Self::LoRomSa1 { sa1 } => sa1.serialize(state),
+        }
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = match i {
+            0 => Self::LoRom,
+            1 => Self::HiRom,
+            2 => {
+                let mut sa1 = Sa1::default();
+                sa1.deserialize(state);
+                Self::LoRomSa1 { sa1 }
+            }
+            _ => panic!("unknown enum discriminant {}", i),
+        }
+    }
+}
+
+impl Default for MemoryMapping {
+    fn default() -> Self {
+        Self::LoRom
+    }
+}
+
+#[derive(Debug, Default, Clone, InSaveState)]
 pub struct ExtendedHeader {
     maker: [u8; 2],
     game: [u8; 4],
@@ -89,27 +147,102 @@ pub struct ExtendedHeader {
 
 #[derive(Debug, Clone)]
 pub enum OptExtendedHeader {
+    None,
     Old { subtype: u8 },
     Later { subtype: u8, header: ExtendedHeader },
-    None,
 }
 
+impl save_state::InSaveState for OptExtendedHeader {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        let i: u8 = match self {
+            Self::None => 0,
+            Self::Old { .. } => 1,
+            Self::Later { .. } => 2,
+        };
+        i.serialize(state);
+        match self {
+            Self::None => (),
+            Self::Old { subtype } => subtype.serialize(state),
+            Self::Later { subtype, header } => {
+                subtype.serialize(state);
+                header.serialize(state);
+            }
+        }
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = match i {
+            0 => Self::None,
+            1 => {
+                let mut subtype: u8 = 0;
+                subtype.deserialize(state);
+                Self::Old { subtype }
+            }
+            2 => {
+                let mut subtype: u8 = 0;
+                subtype.deserialize(state);
+                let mut header = ExtendedHeader::default();
+                header.deserialize(state);
+                Self::Later { subtype, header }
+            }
+            _ => panic!("unknown enum discriminant {}", i),
+        }
+    }
+}
+
+impl Default for OptExtendedHeader {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum Coprocessor {
-    Dsp,
-    Gsu,
-    Obc1,
-    Sa1,
-    Sdd1,
-    Srtc,
-    Spc7110,
-    St01x,
-    St018,
-    Cx4,
-    Unknown,
+    Dsp = 0,
+    Gsu = 1,
+    Obc1 = 2,
+    Sa1 = 3,
+    Sdd1 = 4,
+    Srtc = 5,
+    Spc7110 = 6,
+    St01x = 7,
+    St018 = 8,
+    Cx4 = 9,
+    Unknown = 0xff,
 }
 
-#[derive(Debug, Clone)]
+impl save_state::InSaveState for Coprocessor {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        (*self as u8).serialize(state)
+    }
+
+    #[allow(non_upper_case_globals)]
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        macro_rules! deser {
+            ($($val:ident),*) => {{
+                $(const $val: u8 = Coprocessor::$val as u8;)*
+                match i {
+                    $($val => Self::$val,)*
+                    _ => Self::Unknown,
+                }
+            }};
+        }
+        *self = deser!(Dsp, Gsu, Obc1, Sa1, Sdd1, Srtc, Spc7110, St01x, St018, Cx4)
+    }
+}
+
+impl Default for Coprocessor {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Default, Clone, InSaveState)]
 pub struct Header {
     name: String,
     speed: u8,
@@ -237,7 +370,7 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone, InSaveState)]
 pub struct Cartridge {
     header: Header,
     rom: Vec<u8>,

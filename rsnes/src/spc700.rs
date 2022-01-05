@@ -11,6 +11,8 @@ use crate::{
     timing::{Cycles, APU_CPU_TIMING_PROPORTION},
 };
 use core::{cell::Cell, iter::once, mem::take};
+use save_state::{SaveStateDeserializer, SaveStateSerializer};
+use save_state_macro::*;
 
 pub const MEMORY_SIZE: usize = 64 * 1024;
 
@@ -151,23 +153,49 @@ enum AdsrPeriod {
     Release = 4,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct StereoSample<T> {
+impl save_state::InSaveState for AdsrPeriod {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        (*self as usize as u8).serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = match i {
+            0 => Self::Attack,
+            1 => Self::Decay,
+            2 => Self::Sustain,
+            3 => Self::Gain,
+            4 => Self::Release,
+            _ => panic!("unknown enum discriminant {}", i),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, InSaveState)]
+pub struct StereoSample<T: save_state::InSaveState> {
     pub l: T,
     pub r: T,
 }
 
-impl<T> StereoSample<T> {
-    pub const fn new2(l: T, r: T) -> Self {
-        Self { l, r }
-    }
+macro_rules! impl_new_for_stereo_sample {
+    ($t:ty) => {
+        impl StereoSample<$t> {
+            pub const fn new(val: $t) -> Self {
+                Self { l: val, r: val }
+            }
+            pub const fn new2(l: $t, r: $t) -> Self {
+                Self { l, r }
+            }
+        }
+    };
+    ($t1:ty $(, $t:ty)*) => {
+        impl_new_for_stereo_sample!($t1);
+        impl_new_for_stereo_sample!($($t),*);
+    };
 }
 
-impl<T: Copy> StereoSample<T> {
-    pub fn new(val: T) -> Self {
-        Self { l: val, r: val }
-    }
-}
+impl_new_for_stereo_sample! { u8, i8, u16, i16, u32, i32 }
 
 impl StereoSample<i16> {
     pub fn saturating_add32(self, val: StereoSample<i32>) -> Self {
@@ -195,7 +223,7 @@ impl StereoSample<i32> {
     }
 }
 
-impl<T: Into<i32>> StereoSample<T> {
+impl<T: Into<i32> + save_state::InSaveState> StereoSample<T> {
     pub fn to_i32(self) -> StereoSample<i32> {
         StereoSample {
             l: self.l.into(),
@@ -214,7 +242,11 @@ impl core::ops::Mul for StereoSample<i32> {
     }
 }
 
-impl<T2: Copy, T1: core::ops::Mul<T2>> core::ops::Mul<T2> for StereoSample<T1> {
+impl<T2: Copy, T1: core::ops::Mul<T2> + save_state::InSaveState> core::ops::Mul<T2>
+    for StereoSample<T1>
+where
+    <T1 as core::ops::Mul<T2>>::Output: save_state::InSaveState,
+{
     type Output = StereoSample<<T1 as core::ops::Mul<T2>>::Output>;
     fn mul(self, other: T2) -> Self::Output {
         Self::Output {
@@ -224,7 +256,10 @@ impl<T2: Copy, T1: core::ops::Mul<T2>> core::ops::Mul<T2> for StereoSample<T1> {
     }
 }
 
-impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
+impl<R: Copy, T: core::ops::Shr<R> + save_state::InSaveState> core::ops::Shr<R> for StereoSample<T>
+where
+    T::Output: save_state::InSaveState,
+{
     type Output = StereoSample<T::Output>;
     fn shr(self, rhs: R) -> Self::Output {
         StereoSample {
@@ -234,14 +269,16 @@ impl<R: Copy, T: core::ops::Shr<R>> core::ops::Shr<R> for StereoSample<T> {
     }
 }
 
-impl<T2, T1: core::ops::AddAssign<T2>> core::ops::AddAssign<StereoSample<T2>> for StereoSample<T1> {
+impl<T2: save_state::InSaveState, T1: core::ops::AddAssign<T2> + save_state::InSaveState>
+    core::ops::AddAssign<StereoSample<T2>> for StereoSample<T1>
+{
     fn add_assign(&mut self, rhs: StereoSample<T2>) {
         self.l += rhs.l;
         self.r += rhs.r;
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct Channel {
     volume: StereoSample<i8>,
     // pitch (corresponds to `pitch * 125/8 Hz`)
@@ -271,7 +308,7 @@ pub struct Channel {
 impl Channel {
     pub const fn new() -> Self {
         Self {
-            volume: StereoSample::new2(0, 0),
+            volume: StereoSample::<i8>::new(0),
             pitch: 0,
             source_number: 0,
             dir_addr: 0,
@@ -325,7 +362,7 @@ impl Channel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Dsp {
     // in milliseconds
     echo_delay: u16,
@@ -364,8 +401,8 @@ impl Dsp {
             fade_in: 0,
             fade_out: 0,
             flags: 0x80,
-            master_volume: StereoSample::new2(0, 0),
-            echo_volume: StereoSample::new2(0, 0),
+            master_volume: StereoSample::<i8>::new(0),
+            echo_volume: StereoSample::<i8>::new(0),
             unused: 0,
             echo_buffer_offset: 0,
             fir_buffer: [StereoSample { l: 0, r: 0 }; 8],
@@ -374,7 +411,7 @@ impl Dsp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, InSaveState)]
 pub struct Spc700<B: AudioBackend> {
     mem: [u8; MEMORY_SIZE],
     /// data, the main processor sends to us
@@ -382,6 +419,7 @@ pub struct Spc700<B: AudioBackend> {
     /// data, we send to the main processor
     pub output: [u8; 4],
     dsp: Dsp,
+    #[except((|_v, _s| ()), (|_v, _s| ()))]
     pub backend: B,
 
     a: u8,
@@ -696,7 +734,7 @@ impl<B: AudioBackend> Spc700<B> {
             }
         }
         let mut last_sample = 0;
-        let mut result = StereoSample::new(0i16);
+        let mut result = StereoSample::<i16>::new(0);
         for (i, channel) in self.dsp.channels.iter_mut().enumerate() {
             if fade_out & (1 << i) > 0 {
                 channel.period = AdsrPeriod::Release
@@ -833,11 +871,11 @@ impl<B: AudioBackend> Spc700<B> {
             channel.vx_env = (channel.gain >> 4) as u8; // TODO: really `>> 4`?
             channel.vx_out = (sample >> 7) as u8;
             result = result.saturating_add32(
-                (StereoSample::new(i32::from(sample)) * channel.volume.to_i32()) >> 6,
+                (StereoSample::<i32>::new(sample.into()) * channel.volume.to_i32()) >> 6,
             );
         }
         let result = if self.dsp.flags & 0x40 > 0 {
-            StereoSample::new(0)
+            StereoSample::<i16>::new(0)
         } else {
             let sample = ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16();
             let echo_addr = self
@@ -845,11 +883,11 @@ impl<B: AudioBackend> Spc700<B> {
                 .echo_data_addr
                 .wrapping_add(self.dsp.echo_buffer_offset);
             self.dsp.echo_buffer_offset += 4;
-            self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::new2(
+            self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::<i16>::new2(
                 self.read16(echo_addr) as i16,
                 self.read16(echo_addr.wrapping_add(2)) as i16,
             ) >> 1;
-            let mut result = StereoSample::new(0i32);
+            let mut result = StereoSample::<i32>::new(0);
             for i in 0..8 {
                 result += (self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index + i + 1) & 7]
                     .to_i32()
@@ -871,11 +909,11 @@ impl<B: AudioBackend> Spc700<B> {
                     .enumerate()
                     .filter(|(i, _)| self.dsp.echo & *i as u8 > 0)
                     .map(|(_, c)| (c.volume.to_i32() * c.last_sample as i32) >> 6)
-                    .fold(StereoSample::new(0i16), StereoSample::saturating_add32)
+                    .fold(StereoSample::<i16>::new(0), StereoSample::saturating_add32)
                     .to_i32()
                     * self.dsp.echo_feedback as i32;
                 let sample = (sample >> 7).clamp16();
-                let sample = StereoSample::new2(
+                let sample = StereoSample::<i16>::new2(
                     (sample.l as u16 & 0xfffe) as i16,
                     (sample.r as u16 & 0xfffe) as i16,
                 );

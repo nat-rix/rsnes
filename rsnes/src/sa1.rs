@@ -8,10 +8,11 @@
 //! - <https://problemkaputt.de/fullsnes.htm>
 
 use crate::device::Addr24;
+use save_state_macro::*;
 
 const IRAM_SIZE: usize = 0x800;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, InSaveState)]
 struct Block {
     hirom_bank: u8,
     lorom_bank: u8,
@@ -39,7 +40,7 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, DefaultByNew, Clone, InSaveState)]
 pub struct Sa1 {
     pub(crate) iram: [u8; IRAM_SIZE],
     blocks: [Block; 4],
