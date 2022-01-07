@@ -111,19 +111,19 @@ static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 0, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 0,  // 0^
        2, 0, 4, 5, 5, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 5, 3, 4, 3, 0,   2, 0, 5, 4, 0, 4, 5, 2,  // 2^
-       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 0, 2, 3, 8,  // 3^
-       2, 0, 4, 5, 3, 0, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
-       0, 0, 4, 5, 0, 0, 0, 0,   0, 0, 4, 5, 2, 2, 4, 3,  // 5^
+       2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
+       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
+       2, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
+       0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
        0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
-       2, 0, 4, 5, 0, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
+       2, 0, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
        3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
        2, 0, 4, 5, 4, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 0, 4, 5, 4, 5, 4, 7,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
        2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 0, 3, 4, 3, 4, 0,  // e^
+       2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 5, 3, 4, 3, 4, 0,  // e^
        2, 0, 4, 5, 4, 5, 5, 6,   3, 4, 5, 4, 2, 2, 4, 0,  // f^
 ];
 
@@ -1123,6 +1123,15 @@ impl<B: AudioBackend> Spc700<B> {
                 self.a &= self.load();
                 self.update_nz8(self.a)
             }
+            0x29 => {
+                // AND - (imm) &= (imm)
+                let src = self.load();
+                let dst = self.load();
+                let [src, dst] = [src, dst].map(|v| self.get_small(v));
+                let val = self.read(src) & self.read(dst);
+                self.write(dst, val);
+                self.update_nz8(val)
+            }
             0x2a => {
                 // OR1 - NOR CARRY on (imm2) >> imm1
                 let addr = self.load16();
@@ -1194,6 +1203,13 @@ impl<B: AudioBackend> Spc700<B> {
                 self.write16(addr, val);
                 self.update_nz16(val)
             }
+            0x3c => {
+                // ROL - A <<= 1
+                let c = self.a & 0x80;
+                self.a = (self.a << 1) | (self.status & flags::CARRY);
+                self.set_status(c > 0, flags::CARRY);
+                self.update_nz8(self.a);
+            }
             0x3d => {
                 // INC - X
                 self.x = self.x.wrapping_add(1);
@@ -1216,9 +1232,15 @@ impl<B: AudioBackend> Spc700<B> {
                 self.status |= flags::ZERO_PAGE
             }
             0x44 => {
-                // EOR - A := A ^ (dp)
+                // EOR - A := A ^ (imm)
                 let addr = self.load();
                 self.a ^= self.read_small(addr);
+                self.update_nz8(self.a)
+            }
+            0x45 => {
+                // EOR - A := a ^ (imm[16-bit])
+                let addr = self.load16();
+                self.a ^= self.read(addr);
                 self.update_nz8(self.a)
             }
             0x48 => {
@@ -1255,6 +1277,33 @@ impl<B: AudioBackend> Spc700<B> {
                 let val = self.read(addr);
                 self.update_nz8(self.a.wrapping_add(!val).wrapping_add(1));
                 self.write(addr, val & !self.a)
+            }
+            0x54 => {
+                // EOR - A := A ^ (imm+X)
+                let addr = self.load().wrapping_add(self.x);
+                self.a ^= self.read_small(addr);
+                self.update_nz8(self.a)
+            }
+            0x55 => {
+                // EOR - A := A ^ (imm[16-bit]+X)
+                let addr = self.load16().wrapping_add(self.x.into());
+                self.a ^= self.read(addr);
+                self.update_nz8(self.a)
+            }
+            0x56 => {
+                // EOR - A := A ^ (imm[16-bit]+Y)
+                let addr = self.load16().wrapping_add(self.y.into());
+                self.a ^= self.read(addr);
+                self.update_nz8(self.a)
+            }
+            0x58 => {
+                // EOR - (imm) ^= imm
+                let val = self.load();
+                let addr = self.load();
+                let addr = self.get_small(addr);
+                let val = self.read(addr) ^ val;
+                self.write(addr, val);
+                self.update_nz8(val);
             }
             0x5a => {
                 // CMPW - YA - (imm)[16-bit]
@@ -1477,6 +1526,11 @@ impl<B: AudioBackend> Spc700<B> {
                 // BCC - Branch if CARRY not set
                 let rel = self.load();
                 self.branch_rel(rel, self.status & flags::CARRY == 0, &mut cycles)
+            }
+            0x94 => {
+                // ADC - A += (imm + X) + CARRY
+                let addr = self.load().wrapping_add(self.x);
+                self.a = self.adc(self.a, self.read_small(addr));
             }
             0x95 => {
                 // ADC - A -= (imm16 + X) + CARRY
@@ -1796,6 +1850,13 @@ impl<B: AudioBackend> Spc700<B> {
                 let addr = self.load16();
                 self.x = self.read(addr);
                 self.update_nz8(self.x);
+            }
+            0xea => {
+                // NOT1 - Complement Bit in Memory address
+                let imm = self.load16();
+                let addr = imm & 0x1fff;
+                let val = self.read(addr) ^ (1u8 << (imm >> 13));
+                self.write(addr, val)
             }
             0xeb => {
                 // MOV - Y := (IMM)
