@@ -370,7 +370,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             let addr = addr.wrapping_add(i as u8);
             match addr {
                 0x00..=0x33 => self.ppu.write_register(addr, *d),
-                0x40..=0x43 => {
+                0x40..=0x7f => {
                     self.spc.refresh();
                     self.spc.input[(addr & 0b11) as usize] = *d
                 }
