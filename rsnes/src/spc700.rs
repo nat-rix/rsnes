@@ -10,7 +10,7 @@ use crate::{
     backend::AudioBackend,
     timing::{Cycles, APU_CPU_TIMING_PROPORTION},
 };
-use core::{cell::Cell, iter::once, mem::take};
+use core::{cell::Cell, iter::once, mem::replace};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
 
@@ -110,7 +110,7 @@ const DECODE_BUFFER_SIZE: usize = 3 + 16;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 0, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 0,  // 0^
-       2, 0, 4, 5, 5, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 0, 4, 5, 4, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
        2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
        2, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
@@ -293,7 +293,7 @@ pub struct Channel {
     vx_out: u8,
     sustain: u16,
     unused: [u8; 3],
-    fir_coefficient: u8,
+    fir_coefficient: i8,
 
     decode_buffer: [i16; DECODE_BUFFER_SIZE],
     pitch_counter: u16,
@@ -400,7 +400,7 @@ impl Dsp {
             echo: 0,
             fade_in: 0,
             fade_out: 0,
-            flags: 0x80,
+            flags: 0xe0,
             master_volume: StereoSample::<i8>::new(0),
             echo_volume: StereoSample::<i8>::new(0),
             unused: 0,
@@ -492,6 +492,19 @@ impl<B: AudioBackend> Spc700<B> {
         u16::from_le_bytes([self.read(addr), self.read(addr.wrapping_add(1))])
     }
 
+    fn read16_norom(&self, addr: u16) -> u16 {
+        u16::from_le_bytes([
+            self.mem[usize::from(addr)],
+            self.mem[usize::from(addr.wrapping_add(1))],
+        ])
+    }
+
+    fn write16_norom(&mut self, addr: u16, val: u16) {
+        let [a, b] = val.to_le_bytes();
+        self.mem[usize::from(addr)] = a;
+        self.mem[usize::from(addr.wrapping_add(1))] = b;
+    }
+
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0xf3 => self.read_dsp_register(self.mem[0xf2]),
@@ -550,7 +563,7 @@ impl<B: AudioBackend> Spc700<B> {
                 10 => channel.unused[0],
                 11 => channel.unused[1],
                 14 => channel.unused[2],
-                15 => channel.fir_coefficient,
+                15 => channel.fir_coefficient as u8,
                 _ => unreachable!(),
             }
         } else {
@@ -609,7 +622,7 @@ impl<B: AudioBackend> Spc700<B> {
                 10 => channel.unused[0] = val,
                 11 => channel.unused[1] = val,
                 14 => channel.unused[2] = val,
-                15 => channel.fir_coefficient = val,
+                15 => channel.fir_coefficient = val as i8,
                 _ => unreachable!(),
             }
         } else {
@@ -723,8 +736,9 @@ impl<B: AudioBackend> Spc700<B> {
     }
 
     pub fn sound_cycle(&mut self) {
-        let (fade_in, fade_out) = if self.dispatch_counter & 0x3f == 0 {
-            (take(&mut self.dsp.fade_in), self.dsp.fade_out)
+        let (fade_in, fade_out) = if self.dispatch_counter & 0x3f > 0 {
+            let new = self.dsp.fade_in & self.dsp.fade_out;
+            (replace(&mut self.dsp.fade_in, new), self.dsp.fade_out)
         } else {
             (0, 0)
         };
@@ -797,31 +811,31 @@ impl<B: AudioBackend> Spc700<B> {
                         };
                         let older = channel.decode_buffer[index + 1];
                         let old = channel.decode_buffer[index + 2];
-                        let sample = match header & 0b1100 {
-                            0 => sample,
-                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4))
-                                .clamp(-0x8000, 0x7fff)
-                                as i16,
-                            0b1000 => (i32::from(sample)
-                                + i32::from(old) * 2
-                                + ((-3 * i32::from(old)) >> 5)
-                                - i32::from(older)
-                                + i32::from(older >> 4))
-                            .clamp(-0x8000, 0x7fff) as i16,
-                            0b1100 => (i32::from(sample)
-                                + i32::from(old) * 2
-                                + ((-13 * i32::from(old)) >> 6)
-                                - i32::from(older)
-                                + ((i32::from(older) * 3) >> 4))
-                                .clamp(-0x8000, 0x7fff)
-                                as i16,
+                        let sample = (match header & 0b1100 {
+                            0 => sample.into(),
+                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4)),
+                            0b1000 => {
+                                i32::from(sample)
+                                    + i32::from(old) * 2
+                                    + ((-3 * i32::from(old)) >> 5)
+                                    - i32::from(older)
+                                    + i32::from(older >> 4)
+                            }
+                            0b1100 => {
+                                i32::from(sample)
+                                    + i32::from(old) * 2
+                                    + ((-13 * i32::from(old)) >> 6)
+                                    - i32::from(older)
+                                    + ((i32::from(older) * 3) >> 4)
+                            }
                             _ => unreachable!(),
-                        };
+                        })
+                        .clamp(-0x8000, 0x7fff) as i16;
                         // this behaviour is documented by nocash FullSNES
                         let sample = if sample > 0x3fff {
                             -0x8000 + sample
                         } else if sample < -0x4000 {
-                            -0x8000 - sample
+                            sample - -0x8000
                         } else {
                             sample
                         };
@@ -848,6 +862,7 @@ impl<B: AudioBackend> Spc700<B> {
                     * i32::from(channel.decode_buffer[brr_index + 3]))
                     >> 10);
             let sample = (sample.clamp(i16::MIN.into(), i16::MAX.into()) as i16) >> 1;
+
             if let AdsrPeriod::Release = channel.period {
                 let (new_gain, ov) = channel.gain.overflowing_sub(8);
                 channel.gain = if ov || new_gain > 0x7ff { 0 } else { new_gain };
@@ -874,62 +889,60 @@ impl<B: AudioBackend> Spc700<B> {
                 (StereoSample::<i32>::new(sample.into()) * channel.volume.to_i32()) >> 6,
             );
         }
-        let result = if self.dsp.flags & 0x40 > 0 {
+        let sample = ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16();
+        let echo_addr = self
+            .dsp
+            .echo_data_addr
+            .wrapping_add(self.dsp.echo_buffer_offset);
+        self.dsp.echo_buffer_offset += 4;
+        self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::<i16>::new2(
+            self.read16_norom(echo_addr) as i16,
+            self.read16_norom(echo_addr.wrapping_add(2)) as i16,
+        ) >> 1;
+        let mut result = StereoSample::<i32>::new(0);
+        for i in 0..8 {
+            let fir_value =
+                self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index + i + 1) & 7].to_i32();
+            result +=
+                (fir_value * i32::from(self.dsp.channels[usize::from(i)].fir_coefficient)) >> 6;
+            if i == 6 {
+                result = result.clip16().to_i32()
+            }
+        }
+        self.dsp.fir_buffer_index = (self.dsp.fir_buffer_index + 1) & 7;
+        let result = result.clamp16();
+        let sample =
+            sample.saturating_add32((result.to_i32() * self.dsp.echo_volume.to_i32()) >> 7);
+        if self.dsp.flags & 0x20 == 0 {
+            let sample = self
+                .dsp
+                .channels
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.dsp.echo & (1u8 << *i) > 0)
+                .map(|(_, c)| (c.volume.to_i32() * c.last_sample as i32) >> 6)
+                .fold(StereoSample::<i16>::new(0), StereoSample::saturating_add32);
+            let sample =
+                sample.saturating_add32((result.to_i32() * i32::from(self.dsp.echo_feedback)) >> 7);
+            let sample = StereoSample::<i16>::new2(
+                (sample.l as u16 & 0xfffe) as i16,
+                (sample.r as u16 & 0xfffe) as i16,
+            );
+            self.write16_norom(echo_addr, sample.l as u16);
+            self.write16_norom(echo_addr.wrapping_add(2), sample.r as u16);
+        }
+        self.dsp.echo_index -= 1;
+        if self.dsp.echo_index == 0 {
+            self.dsp.echo_index = self.dsp.echo_delay;
+            self.dsp.echo_buffer_offset = 0;
+        }
+        // TODO: noise
+        let sample = if self.dsp.flags & 0x40 > 0 {
             StereoSample::<i16>::new(0)
         } else {
-            let sample = ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16();
-            let echo_addr = self
-                .dsp
-                .echo_data_addr
-                .wrapping_add(self.dsp.echo_buffer_offset);
-            self.dsp.echo_buffer_offset += 4;
-            self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::<i16>::new2(
-                self.read16(echo_addr) as i16,
-                self.read16(echo_addr.wrapping_add(2)) as i16,
-            ) >> 1;
-            let mut result = StereoSample::<i32>::new(0);
-            for i in 0..8 {
-                result += (self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index + i + 1) & 7]
-                    .to_i32()
-                    * i32::from(self.dsp.channels[usize::from(i)].fir_coefficient))
-                    >> 6;
-                if i == 6 {
-                    result = result.clip16().to_i32()
-                }
-            }
-            self.dsp.fir_buffer_index = (self.dsp.fir_buffer_index + 1) & 7;
-            let result = result.clamp16();
-            let sample =
-                sample.saturating_add32((result.to_i32() * self.dsp.echo_volume.to_i32()) >> 7);
-            if self.dsp.flags & 0x20 > 0 {
-                let sample = self
-                    .dsp
-                    .channels
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| self.dsp.echo & *i as u8 > 0)
-                    .map(|(_, c)| (c.volume.to_i32() * c.last_sample as i32) >> 6)
-                    .fold(StereoSample::<i16>::new(0), StereoSample::saturating_add32)
-                    .to_i32()
-                    * self.dsp.echo_feedback as i32;
-                let sample = (sample >> 7).clamp16();
-                let sample = StereoSample::<i16>::new2(
-                    (sample.l as u16 & 0xfffe) as i16,
-                    (sample.r as u16 & 0xfffe) as i16,
-                );
-                self.write16(echo_addr, sample.l as u16);
-                self.write16(echo_addr.wrapping_add(2), sample.r as u16);
-            }
-            self.dsp.echo_index -= 1;
-            if self.dsp.echo_index == 0 {
-                self.dsp.echo_index = self.dsp.echo_delay;
-                self.dsp.echo_buffer_offset = 0;
-            }
-
-            // TODO: noise
             sample
         };
-        self.backend.push_sample(result)
+        self.backend.push_sample(sample)
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
