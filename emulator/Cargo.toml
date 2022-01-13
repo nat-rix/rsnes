@@ -17,6 +17,7 @@ codegen-units = 1
 clap = { version="3.0", features = ["cargo", "derive"] }
 winit = "0.26"
 cpal = "0.13"
+ringbuf = "0.2"
 pollster = "0.2"
 rsnes = { path = "../rsnes" }
 save-state = { path = "../save-state" }

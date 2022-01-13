@@ -1,18 +1,21 @@
+#![feature(result_option_inspect)]
+
 use clap::{ErrorKind, Parser};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    Sample,
+};
 use pollster::FutureExt;
 use rsnes::{backend::ArrayFrameBuffer, device::Device, spc700::StereoSample};
 use save_state::InSaveState;
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
-};
-
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
 };
 
 #[derive(Parser, Clone)]
@@ -45,71 +48,115 @@ fn cartridge_from_file(path: &std::path::Path) -> rsnes::cartridge::Cartridge {
 }
 
 struct AudioBackend {
-    data: Arc<Mutex<Vec<i16>>>,
+    producer: ringbuf::Producer<i16>,
     _stream: cpal::platform::Stream,
-    ahead: Arc<AtomicUsize>,
 }
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(32000);
+const TIME_PER_GPU_FRAME: Duration = Duration::from_micros(8_333);
+const TIME_UNTIL_TIMER_RESET: Duration = Duration::from_millis(500);
 
 impl AudioBackend {
+    fn write_data<T: Sample>(data: &mut [T], consumer: &mut ringbuf::Consumer<i16>, channels: u16) {
+        for frame in data.chunks_exact_mut(channels.into()) {
+            let [l, r] = [(), ()].map(|_| T::from(&consumer.pop().unwrap_or(0)));
+            if channels == 2 {
+                frame[0] = l;
+                frame[1] = r;
+            } else {
+                // TODO: join channels together
+                for i in 0..channels {
+                    frame[usize::from(i)] = l;
+                }
+            }
+        }
+    }
+
+    fn create_stream<T: Sample>(
+        device: &cpal::Device,
+        cfg: &cpal::StreamConfig,
+    ) -> Result<
+        (
+            <cpal::Device as DeviceTrait>::Stream,
+            ringbuf::Producer<i16>,
+        ),
+        cpal::BuildStreamError,
+    > {
+        let channels = cfg.channels;
+        let ringbuf_size = (match cfg.buffer_size {
+            cpal::BufferSize::Fixed(val) => val,
+            cpal::BufferSize::Default => 1024,
+        } + cfg.sample_rate.0 / 6)
+            * u32::from(channels);
+        let (mut producer, mut consumer) = ringbuf::RingBuffer::new(ringbuf_size as usize).split();
+        // add a little latency
+        for _ in 0..ringbuf_size / 5 {
+            producer.push(0).unwrap();
+        }
+        device
+            .build_output_stream(
+                cfg,
+                move |data: &mut [T], _| Self::write_data::<T>(data, &mut consumer, channels),
+                |_| (),
+            )
+            .map(|stream| (stream, producer))
+    }
+
     fn new() -> Option<Self> {
-        let host = cpal::default_host();
+        let host = cpal::available_hosts()
+            .into_iter()
+            .find_map(|id| cpal::host_from_id(id).ok())
+            .unwrap_or_else(cpal::default_host);
         let device = host.default_output_device()?;
         let cfg_range = device
             .supported_output_configs()
             .ok()?
-            .filter(|cfg| {
-                matches!(cfg.sample_format(), cpal::SampleFormat::I16)
-                    && cfg.channels() == 2
-                    && (cfg.min_sample_rate()..=cfg.max_sample_rate()).contains(&SAMPLE_RATE)
-            })
-            .min_by_key(|cfg| match cfg.buffer_size() {
-                cpal::SupportedBufferSize::Unknown => cpal::FrameCount::MAX,
-                cpal::SupportedBufferSize::Range { min, .. } => *min,
+            // TODO: implement resampling
+            .filter(|cfg| (cfg.min_sample_rate()..=cfg.max_sample_rate()).contains(&SAMPLE_RATE))
+            .min_by_key(|cfg| {
+                (
+                    match cfg.channels() {
+                        0 => u16::MAX,
+                        1 => 12,
+                        2 => 0,
+                        n => n,
+                    },
+                    match cfg.sample_format() {
+                        cpal::SampleFormat::I16 => 0u8,
+                        cpal::SampleFormat::U16 => 1,
+                        cpal::SampleFormat::F32 => 2,
+                    },
+                    match cfg.buffer_size() {
+                        cpal::SupportedBufferSize::Unknown => cpal::FrameCount::MAX,
+                        cpal::SupportedBufferSize::Range { min, .. } => *min,
+                    },
+                )
             })?;
-        let cfg = cfg_range.with_sample_rate(SAMPLE_RATE).config();
-        let data = Arc::new(Mutex::new(vec![]));
-        let stream_data = Arc::clone(&data);
-        let ahead = Arc::new(AtomicUsize::new(0));
-        let ahead_ref = Arc::clone(&ahead);
-        let stream = device
-            .build_output_stream(
-                &cfg,
-                move |data: &mut [i16], _| {
-                    if let Ok(mut sdata) = stream_data.lock() {
-                        let size = data.len().min(sdata.len());
-                        if size > 0 {
-                            data[..size].copy_from_slice(&sdata.as_slice()[..size]);
-                        }
-                        if sdata.len() < data.len() {
-                            data[sdata.len()..].fill(0)
-                        }
-                        if sdata.len() > data.len() {
-                            sdata.copy_within(data.len().., 0);
-                        }
-                        let diff = sdata.len().max(data.len()) - data.len();
-                        ahead_ref.store(diff, Ordering::Relaxed);
-                        sdata.truncate(diff);
-                    }
-                },
-                |_| (),
-            )
-            .ok()?;
+        let sample_type = cfg_range.sample_format();
+        let sample_rate =
+            SAMPLE_RATE.clamp(cfg_range.min_sample_rate(), cfg_range.max_sample_rate());
+        let cfg = cfg_range.with_sample_rate(sample_rate).config();
+
+        let create_stream = match sample_type {
+            cpal::SampleFormat::I16 => Self::create_stream::<i16>,
+            cpal::SampleFormat::U16 => Self::create_stream::<u16>,
+            cpal::SampleFormat::F32 => Self::create_stream::<f32>,
+        };
+        let (stream, producer) = create_stream(&device, &cfg).ok()?;
         stream.play().ok()?;
         Some(Self {
-            data,
+            producer,
             _stream: stream,
-            ahead,
         })
     }
 }
 
 impl rsnes::backend::AudioBackend for AudioBackend {
     fn push_sample(&mut self, sample: StereoSample<i16>) {
-        let mut lock = self.data.lock().unwrap();
-        lock.push(sample.l);
-        lock.push(sample.r);
+        let _ = self
+            .producer
+            .push(sample.l)
+            .and_then(|()| self.producer.push(sample.r));
     }
 }
 
@@ -305,10 +352,11 @@ fn main() {
     };
     surf.configure(&device, &surf_config);
 
-    let mut last_rerendered = std::time::Instant::now();
-
     let mut shift = [false; 2];
     let mut savestates: [Option<Vec<u8>>; 10] = [(); 10].map(|()| None);
+
+    let mut next_device_update = Instant::now();
+    let mut next_graphics_update = next_device_update;
 
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -385,16 +433,25 @@ fn main() {
                 _ => (),
             },
             Event::MainEventsCleared => {
-                if snes.spc.backend.ahead.load(Ordering::Relaxed) < 20_000 {
+                let now = Instant::now();
+                if now >= next_device_update {
                     snes.run_cycle::<1>();
+                    let mut cycle_count = 1u64;
                     while !snes.new_frame {
                         snes.run_cycle::<1>();
+                        cycle_count += 1
+                    }
+                    // a more precise calculation is not possible by using floats
+                    next_device_update += Duration::from_nanos((8800 * cycle_count) / 189);
+                    // reset the next update timer if it fell to far behind
+                    if now > next_device_update + TIME_UNTIL_TIMER_RESET {
+                        next_device_update = now;
                     }
                 }
-                let now = std::time::Instant::now();
-                if last_rerendered + std::time::Duration::from_millis(16) <= now {
+                let now = Instant::now();
+                if now >= next_graphics_update {
                     window.request_redraw();
-                    last_rerendered = now;
+                    next_graphics_update = now + TIME_PER_GPU_FRAME;
                 }
             }
             Event::RedrawRequested(_) => {
@@ -443,7 +500,9 @@ fn main() {
                         surface_texture.present();
                     }
                     Err(wgpu::SurfaceError::Timeout) => {
-                        eprintln!("[warning] surface acquire timeout");
+                        if options.verbose {
+                            eprintln!("[warning] surface acquire timeout");
+                        }
                     }
                     Err(err) => error!("Failed to acquire next swap chain texture ({})", err),
                 };
