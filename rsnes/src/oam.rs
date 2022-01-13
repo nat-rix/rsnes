@@ -21,7 +21,7 @@ impl Object {
     }
 
     pub fn write_low_low(&mut self, val1: u8, val2: u8) {
-        self.x = (((self.x as u16) & 0x100) | u16::from(val1)) as i16;
+        self.x = (((self.x as u16) & 0xff00) | u16::from(val1)) as i16;
         self.y = val2;
     }
 
@@ -31,7 +31,7 @@ impl Object {
     }
 
     pub fn write_high(&mut self, val: u8) {
-        self.x = ((self.x as u16 & 0xff) | (u16::from(val & 1) << 8)) as i16;
+        self.x = ((self.x as u16 & 0xff) | (0u16.wrapping_sub((val & 1).into()) & 0xff00)) as i16;
         self.is_large = val & 2 > 0;
     }
 }

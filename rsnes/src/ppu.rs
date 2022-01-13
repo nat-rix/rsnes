@@ -1011,7 +1011,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 };
                 let name = self.tile_adr[usize::from(obj.attrs & 1)];
                 let tile = (obj.tile_nr & 0xf0).wrapping_add((ty & 0xf8) << 1);
-                for tx in 0.max(-sx3) as u8..(sprite_size[0] >> 3).min((32 - sx3.min(32)) as u8) {
+                for tx in 0.max(-sx3 - 1) as u8..(sprite_size[0] >> 3).min((32 - sx3.min(32)) as u8)
+                {
                     tiles += 1;
                     if tiles > 34 {
                         break 'sprite_loop;
