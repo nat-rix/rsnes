@@ -218,6 +218,22 @@ impl Color {
             b: comp(self.b, b),
         }
     }
+
+    pub fn saturating_add(self, other: Self) -> Self {
+        Self {
+            r: self.r.saturating_add(other.r),
+            g: self.g.saturating_add(other.g),
+            b: self.b.saturating_add(other.b),
+        }
+    }
+
+    pub fn saturating_sub(self, other: Self) -> Self {
+        Self {
+            r: self.r.saturating_sub(other.r),
+            g: self.g.saturating_sub(other.g),
+            b: self.b.saturating_sub(other.b),
+        }
+    }
 }
 
 impl<T: std::fmt::Debug + Clone + Copy> Color<T> {
@@ -1133,30 +1149,30 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 }
             }
         }
-        colors[1] = colors[1].filter(|_| colors[0].is_some() && color_math);
-        match colors {
-            [None, _] => self.pixel_to_color(None, 0),
+        let myres = match colors {
             [Some(main), _] if !color_math => main,
-            [Some(main), secondary] => {
+            [main, secondary] if color_math => {
+                let main = main.unwrap_or_else(|| self.pixel_to_color(None, 0));
                 let op = if self.subtract_color {
-                    Color::sub
+                    Color::saturating_sub
                 } else {
-                    Color::add
+                    Color::saturating_add
                 };
-                let color: Color<i16> =
-                    if let (Some(secondary), true) = (secondary, self.add_subscreen) {
-                        op(main, secondary)
-                    } else {
-                        op(main, self.fixed_color)
-                    };
-                (if self.half_color && (secondary.is_some() || !self.add_subscreen) {
+                let color: Color = if let (Some(secondary), true) = (secondary, self.add_subscreen)
+                {
+                    op(main, secondary)
+                } else {
+                    op(main, self.fixed_color)
+                };
+                if self.half_color && (secondary.is_some() || !self.add_subscreen) {
                     color.map(|c| c >> 1)
                 } else {
                     color
-                })
-                .map(|c| c.clamp(0, 0xff) as u8)
+                }
             }
-        }
+            _ => self.pixel_to_color(None, 0),
+        };
+        myres
     }
 
     fn fetch_pixel(
