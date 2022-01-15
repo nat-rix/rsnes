@@ -18,6 +18,8 @@ use winit::{
     window::WindowBuilder,
 };
 
+const MASTER_CYCLES_PER_TICK: u16 = 1;
+
 #[derive(Parser, Clone)]
 #[clap(
     version = clap::crate_version!(),
@@ -435,11 +437,11 @@ fn main() {
             Event::MainEventsCleared => {
                 let now = Instant::now();
                 if now >= next_device_update {
-                    snes.run_cycle::<1>();
-                    let mut cycle_count = 1u64;
+                    snes.run_cycle::<MASTER_CYCLES_PER_TICK>();
+                    let mut cycle_count = u64::from(MASTER_CYCLES_PER_TICK);
                     while !snes.new_frame {
-                        snes.run_cycle::<1>();
-                        cycle_count += 1
+                        snes.run_cycle::<MASTER_CYCLES_PER_TICK>();
+                        cycle_count += u64::from(MASTER_CYCLES_PER_TICK)
                     }
                     // a more precise calculation is not possible by using floats
                     next_device_update += Duration::from_nanos((8800 * cycle_count) / 189);
