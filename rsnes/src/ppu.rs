@@ -593,7 +593,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 // TODO: name select bits and name base select bits
                 self.obj_size = ObjectSize::from_upper_bits(val);
                 self.tile_adr[0] = u16::from(val & 7) << 13;
-                self.tile_adr[1] = (u16::from((val >> 3) + 1) << 12).wrapping_add(self.tile_adr[0]);
+                self.tile_adr[1] =
+                    (u16::from(((val >> 3) & 3) + 1) << 12).wrapping_add(self.tile_adr[0]);
             }
             0x02 => {
                 // OAMADDL
