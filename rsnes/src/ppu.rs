@@ -532,10 +532,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             0x34..=0x36 => {
                 // MPYx
-                self.open_bus1 = (((u32::from(self.mode7_settings.matrix[0])
-                    * (u32::from(self.mode7_settings.matrix[1]) >> 8))
-                    >> ((id & 3) << 3))
-                    & 0xff) as u8;
+                let res = (i32::from(self.mode7_settings.matrix[0] as i16)
+                    * (i32::from((self.mode7_settings.matrix[1] >> 8) as i8)))
+                    as u32;
+                self.open_bus1 = ((res >> ((id & 3) << 3)) & 0xff) as u8;
                 Some(self.open_bus1)
             }
             0x37 => {
