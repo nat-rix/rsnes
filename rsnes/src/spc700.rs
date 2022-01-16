@@ -2072,8 +2072,8 @@ impl<B: AudioBackend> Spc700<B> {
     pub fn update_timer(&mut self, i: usize) {
         if self.timer_enable & (1 << i) > 0 {
             self.timers[i] = self.timers[i].wrapping_add(1);
-            if self.timers[i] >= self.timer_max[i] {
-                self.timers[i] -= self.timer_max[i];
+            if self.timers[i] == self.timer_max[i] {
+                self.timers[i] = 0;
                 self.counters[i].set(self.counters[i].get().wrapping_add(1) & 0xf);
             }
         }
