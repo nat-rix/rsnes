@@ -779,14 +779,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             0x32 => {
                 // COLDATA
+                let color = val & 0x1f;
                 if val & 0x20 > 0 {
-                    self.fixed_color.r = val << 3
+                    self.fixed_color.r = color
                 }
                 if val & 0x40 > 0 {
-                    self.fixed_color.g = val << 3
+                    self.fixed_color.g = color
                 }
                 if val & 0x80 > 0 {
-                    self.fixed_color.b = val << 3
+                    self.fixed_color.b = color
                 }
             }
             0x33 => {
@@ -1106,7 +1107,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 return Some((
                     pixel,
                     bit_depth,
-                    layer.color_math,
+                    layer.color_math && (pixel >= 0xc0 || matches!(layer_info, DrawLayer::Bg(..))),
                     [in_main_screen, subscreen_needed && in_sub_screen],
                 ));
             }
