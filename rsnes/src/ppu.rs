@@ -941,7 +941,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
 
     fn pixel_to_color(&self, pixel: Option<u32>, bit_depth: u8) -> Color {
         let val = pixel.unwrap_or(0);
-        (if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
+        if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
             Color::new(
                 (((val & 0x7) << 2) | ((val & 0x100) >> 7)) as u8,
                 (((val & 0x38) >> 1) | ((val & 0x200) >> 8)) as u8,
@@ -954,8 +954,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 ((color >> 5) & 0x1f) as u8,
                 ((color >> 10) & 0x1f) as u8,
             )
-        })
-        .map(|c| c << 3)
+        }
     }
 
     fn get_bg7_color(
@@ -1165,15 +1164,16 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 } else {
                     op(main, self.fixed_color)
                 };
-                if self.half_color && (secondary.is_some() || !self.add_subscreen) {
+                (if self.half_color && (secondary.is_some() || !self.add_subscreen) {
                     color.map(|c| c >> 1)
                 } else {
                     color
-                }
+                })
+                .map(|c| c.clamp(0, 31))
             }
             _ => self.pixel_to_color(None, 0),
         };
-        myres
+        myres.map(|v| v << 3)
     }
 
     fn fetch_pixel(
