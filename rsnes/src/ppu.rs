@@ -563,6 +563,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 self.open_bus1 = val;
                 Some(val)
             }
+            0x3b => {
+                // RDCGRAM
+                Some(self.cgram.read(&mut self.open_bus2))
+            }
             0x3c | 0x3d => {
                 // OPHCT / OPVCT
                 let hv = (id & 1) as usize;

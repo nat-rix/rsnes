@@ -132,4 +132,15 @@ impl CgRam {
         let addr = usize::from(addr) << 1;
         u16::from_le_bytes([self.data[addr], self.data[addr | 1]])
     }
+
+    pub fn read(&mut self, open_bus: &mut u8) -> u8 {
+        let bit = 0x80 & *open_bus;
+        *open_bus = self.data[usize::from(self.addr & 0x1ff)];
+        if self.addr & 1 == 1 {
+            *open_bus &= 0x7f;
+            *open_bus |= bit;
+        }
+        self.addr = self.addr.wrapping_add(1);
+        *open_bus
+    }
 }
