@@ -257,12 +257,20 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
 
     pub fn nmi(&mut self) -> u32 {
         self.cpu.in_nmi = true;
-        self.interrupt(0xffea)
+        self.interrupt(if self.cpu.regs.is_emulation {
+            0xfffa
+        } else {
+            0xffea
+        })
     }
 
     pub fn irq(&mut self) -> u32 {
         self.irq_bit.set(0x80);
-        self.interrupt(0xffee)
+        self.interrupt(if self.cpu.regs.is_emulation {
+            0xfffe
+        } else {
+            0xffee
+        })
     }
 
     pub fn interrupt(&mut self, vector: u16) -> u32 {
