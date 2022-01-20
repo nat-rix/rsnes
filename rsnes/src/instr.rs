@@ -2187,8 +2187,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xc2 => {
                 // REP - Reset specified bits in the Status Register
                 let mask = Status(!self.load::<u8>());
-                // no `update_status` needed, because no bits got set
-                self.cpu.regs.status &= mask
+                self.cpu.regs.status &= mask;
+                self.cpu.update_status();
             }
             0xc3 => {
                 // CMP - Compare A with Stack Relative
