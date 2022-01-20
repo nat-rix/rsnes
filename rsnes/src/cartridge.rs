@@ -370,6 +370,13 @@ impl Header {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CountryFrameRate {
+    Any,
+    Ntsc,
+    Pal,
+}
+
 #[derive(Debug, Default, Clone, InSaveState)]
 pub struct Cartridge {
     header: Header,
@@ -422,6 +429,19 @@ impl Cartridge {
             mapping: header.rom_type.to_mapping(),
             header,
         })
+    }
+
+    pub const fn get_country_frame_rate(&self) -> CountryFrameRate {
+        use CountryFrameRate::*;
+        match self.header.country {
+            0 | 1 | 13 | 15 => Ntsc,
+            16 => Ntsc, // actually PAL-M
+            2..=5 => Pal,
+            6 => Pal, // actually SECAM
+            7..=12 => Pal,
+            17 => Pal,
+            _ => Any,
+        }
     }
 
     pub const fn header(&self) -> &Header {

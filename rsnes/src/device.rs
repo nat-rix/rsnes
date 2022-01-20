@@ -164,14 +164,15 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) nmi_vblank_bit: Cell<bool>,
     pub(crate) irq_bit: Cell<u8>,
     pub(crate) math_registers: MathRegisters,
+    pub(crate) is_pal: bool,
 }
 
 impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
-    pub fn new(audio_backend: B, frame_buffer: FB) -> Self {
+    pub fn new(audio_backend: B, frame_buffer: FB, is_pal: bool) -> Self {
         Self {
             cpu: Cpu::new(),
-            spc: Spc700::new(audio_backend),
-            ppu: Ppu::new(frame_buffer),
+            spc: Spc700::new(audio_backend, is_pal),
+            ppu: Ppu::new(frame_buffer, is_pal),
             dma: Dma::new(),
             controllers: ControllerPorts::new(),
             cartridge: None,
@@ -190,6 +191,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             nmi_vblank_bit: Cell::new(false),
             irq_bit: Cell::new(0),
             math_registers: MathRegisters::new(),
+            is_pal,
         }
     }
 

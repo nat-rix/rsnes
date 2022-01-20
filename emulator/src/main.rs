@@ -200,9 +200,20 @@ fn main() {
             cartridge.header()
         );
     }
+    let is_pal = matches!(
+        cartridge.get_country_frame_rate(),
+        rsnes::cartridge::CountryFrameRate::Pal
+    );
+    if options.verbose {
+        println!(
+            "[info] Detected {} mode from cartridge",
+            if is_pal { "PAL" } else { "NTSC" }
+        );
+    }
     let mut snes = Device::new(
         AudioBackend::new().unwrap_or_else(|| error!("Failed finding an audio output device")),
         ArrayFrameBuffer([[0; 4]; rsnes::backend::FRAME_BUFFER_SIZE], true),
+        is_pal,
     );
     snes.load_cartridge(cartridge);
 

@@ -13,7 +13,8 @@ pub type Cycles = u32;
 // The APU runs at 1024kHz
 
 /// This is a fractional proportion between the cpu and apu clock speed
-pub(crate) const APU_CPU_TIMING_PROPORTION: (Cycles, Cycles) = (118125, 5632);
+pub(crate) const APU_CPU_TIMING_PROPORTION_NTSC: (Cycles, Cycles) = (118125, 5632);
+pub(crate) const APU_CPU_TIMING_PROPORTION_PAL: (Cycles, Cycles) = (665, 32);
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn run_cycle<const N: u16>(&mut self) {
@@ -82,8 +83,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.new_scanline = true;
             // Test if one frame completed
             // TODO: Take notice of the interlace mode
-            if self.ppu.scanline_nr >= 262 {
-                self.ppu.scanline_nr -= 262;
+            if self.ppu.scanline_nr >= self.scanline_count() {
+                self.ppu.scanline_nr -= self.scanline_count();
                 self.new_frame = true;
                 self.nmi_vblank_bit.set(false);
                 self.spc.refresh();
@@ -124,7 +125,15 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.ppu.overscan {
             0xf0
         } else {
-            0xe1
+            (crate::ppu::MAX_SCREEN_HEIGHT + 1) as _
+        }
+    }
+
+    pub fn scanline_count(&self) -> u16 {
+        if self.is_pal {
+            312
+        } else {
+            262
         }
     }
 

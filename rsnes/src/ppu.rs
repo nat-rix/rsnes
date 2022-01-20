@@ -6,7 +6,7 @@ use save_state_macro::*;
 
 pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
-pub const MAX_SCREEN_HEIGHT: u32 = 239;
+pub const MAX_SCREEN_HEIGHT: u32 = 224;
 pub const CHIP_5C78_VERSION: u8 = 3;
 
 #[repr(u8)]
@@ -469,10 +469,11 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     counter_latch: [(u16, bool); 2],
     open_bus1: u8,
     open_bus2: u8,
+    is_pal: bool,
 }
 
 impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
-    pub fn new(frame_buffer: FB) -> Self {
+    pub fn new(frame_buffer: FB, is_pal: bool) -> Self {
         Self {
             oam: Oam::new(),
             frame_buffer,
@@ -515,6 +516,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             counter_latch: Default::default(),
             open_bus1: 0,
             open_bus2: 0,
+            is_pal,
         }
     }
 
@@ -527,6 +529,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 // TODO: implement counter latching
                 // TODO: implement PAL mode
                 let val = (self.open_bus2 & 0x20) | CHIP_5C78_VERSION;
+                let val = if self.is_pal { 0x10 | val } else { val };
                 self.open_bus2 = val;
                 Some(val)
             }

@@ -8,7 +8,7 @@
 
 use crate::{
     backend::AudioBackend,
-    timing::{Cycles, APU_CPU_TIMING_PROPORTION},
+    timing::{Cycles, APU_CPU_TIMING_PROPORTION_NTSC, APU_CPU_TIMING_PROPORTION_PAL},
 };
 use core::{cell::Cell, iter::once, mem::replace};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
@@ -437,10 +437,11 @@ pub struct Spc700<B: AudioBackend> {
     dispatch_counter: u16,
     pub(crate) master_cycles: Cycles,
     cycles_ahead: Cycles,
+    timing_proportion: (Cycles, Cycles),
 }
 
 impl<B: AudioBackend> Spc700<B> {
-    pub fn new(backend: B) -> Self {
+    pub fn new(backend: B, is_pal: bool) -> Self {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
             let mut mem = [0; MEMORY_SIZE];
             mem[0xf0] = F0_RESET;
@@ -467,6 +468,11 @@ impl<B: AudioBackend> Spc700<B> {
             dispatch_counter: 0,
             master_cycles: 0,
             cycles_ahead: 7,
+            timing_proportion: if is_pal {
+                APU_CPU_TIMING_PROPORTION_PAL
+            } else {
+                APU_CPU_TIMING_PROPORTION_NTSC
+            },
         }
     }
 
@@ -2058,12 +2064,12 @@ impl<B: AudioBackend> Spc700<B> {
 
     /// Tick in main CPU master cycles
     pub fn tick(&mut self, n: u16) {
-        self.master_cycles += Cycles::from(n) * APU_CPU_TIMING_PROPORTION.1;
+        self.master_cycles += Cycles::from(n) * self.timing_proportion.1;
     }
 
     pub fn refresh(&mut self) {
-        let cycles = self.master_cycles / APU_CPU_TIMING_PROPORTION.0;
-        self.master_cycles %= APU_CPU_TIMING_PROPORTION.0;
+        let cycles = self.master_cycles / self.timing_proportion.0;
+        self.master_cycles %= self.timing_proportion.0;
         for _ in 0..cycles {
             self.run_cycle();
         }
