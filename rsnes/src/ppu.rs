@@ -1130,8 +1130,9 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     ) -> Color<u8> {
         let mut colors = [None; 2];
         let prevent = self.color_behaviour & 3;
-        let mut color_math = prevent != 3
+        let color_math = prevent != 3
             && (prevent == 0 || (self.is_in_window(x, &self.color_layer) ^ (prevent & 1 == 0)));
+        let mut main_layer_color_math = None;
         for layer_info in self.bg_mode.get_layers() {
             let res = self.fetch_pixel_on_screen_layer(
                 layer_info,
@@ -1144,7 +1145,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 let color = self.pixel_to_color(Some(pixel), bit_depth);
                 if is_screen[0] && colors[0].is_none() {
                     colors[0] = Some(color);
-                    color_math &= layer_color_math;
+                    main_layer_color_math = Some(layer_color_math);
                     if colors[1].is_some() || !color_math || !self.add_subscreen {
                         break;
                     }
@@ -1157,7 +1158,9 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 }
             }
         }
-        let myres = match colors {
+        let color_math =
+            color_math & main_layer_color_math.unwrap_or_else(|| self.color_layer.color_math);
+        (match colors {
             [Some(main), _] if !color_math => main,
             [main, secondary] if color_math => {
                 let main = main.unwrap_or_else(|| self.pixel_to_color(None, 0));
@@ -1180,8 +1183,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 .map(|c| c.clamp(0, 31))
             }
             _ => self.pixel_to_color(None, 0),
-        };
-        myres.map(|v| v << 3)
+        })
+        .map(|v| v << 3)
     }
 
     fn fetch_pixel(
