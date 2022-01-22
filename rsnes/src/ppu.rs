@@ -1,5 +1,5 @@
 use crate::oam::{CgRam, Oam};
-use core::mem::replace;
+use core::mem::{replace, take};
 use core::ops::{Add, Sub};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
@@ -442,7 +442,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     cgram: CgRam,
     vram: [u16; VRAM_SIZE],
     vram_addr_unmapped: u16,
-    vram_data_buffer: u8,
+    vram_data_buffer: u16,
     /// A value between 0 and 15 with 15 being maximum brightness
     brightness: u8,
     obj_size: ObjectSize,
@@ -467,6 +467,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     force_blank: bool,
     tile_adr: [u16; 2],
     counter_latch: [(u16, bool); 2],
+    counter_latch_occured: bool,
     open_bus1: u8,
     open_bus2: u8,
     is_pal: bool,
@@ -514,6 +515,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             force_blank: true,
             tile_adr: [0; 2],
             counter_latch: Default::default(),
+            counter_latch_occured: false,
             open_bus1: 0,
             open_bus2: 0,
             is_pal,
@@ -526,10 +528,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             0x3f => {
                 // STAT78
                 // TODO: support interlace
-                // TODO: implement counter latching
-                // TODO: implement PAL mode
-                let val = (self.open_bus2 & 0x20) | CHIP_5C78_VERSION;
+                let val = ((take(&mut self.counter_latch_occured) as u8) << 6)
+                    | (self.open_bus2 & 0x20)
+                    | CHIP_5C78_VERSION;
                 let val = if self.is_pal { 0x10 | val } else { val };
+                self.counter_latch.iter_mut().for_each(|(_, b)| *b = false);
                 self.open_bus2 = val;
                 Some(val)
             }
@@ -548,23 +551,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             0x39 | 0x3a => {
                 // VMDATALREAD / VMDATAHREAD
-                let [f1, f2] = if id == 0x39 {
-                    [|v| v & 0xff, |v| v >> 8]
-                } else {
-                    [|v| v >> 8, |v| v & 0xff]
-                };
-                let val = if self.increment_first ^ (id == 0x3a) {
-                    let buf = self.get_vram_word(self.vram_addr_unmapped);
-                    self.vram_data_buffer = f2(buf) as u8;
+                let is_second = id == 0x3a;
+                self.open_bus1 = self.vram_data_buffer.to_le_bytes()[usize::from(is_second)];
+                if self.increment_first ^ is_second {
+                    self.vram_data_buffer = self.get_vram_word(self.vram_addr_unmapped);
                     self.vram_addr_unmapped = self
                         .vram_addr_unmapped
                         .wrapping_add(self.vram_increment_amount.into());
-                    f1(buf) as u8
-                } else {
-                    self.vram_data_buffer
-                };
-                self.open_bus1 = val;
-                Some(val)
+                }
+                Some(self.open_bus1)
             }
             0x3b => {
                 // RDCGRAM
@@ -665,13 +660,14 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 };
                 self.remap_mode = RemapMode::from_bits(val >> 2);
             }
-            0x16 => {
-                // VMADDL
-                self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff00) | u16::from(val);
-            }
-            0x17 => {
-                // VMADDH
-                self.vram_addr_unmapped = (self.vram_addr_unmapped & 0xff) | (u16::from(val) << 8);
+            0x16 | 0x17 => {
+                // VMADDL / VMADDH
+                self.vram_addr_unmapped = if id == 0x16 {
+                    (self.vram_addr_unmapped & 0xff00) | u16::from(val)
+                } else {
+                    (self.vram_addr_unmapped & 0xff) | (u16::from(val) << 8)
+                };
+                self.vram_data_buffer = self.get_vram_word(self.vram_addr_unmapped);
             }
             0x18 => {
                 // VMDATAL
@@ -821,6 +817,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     pub fn latch(&mut self) {
         self.counter_latch[0].0 = self.scanline_cycle >> 2;
         self.counter_latch[1].0 = self.scanline_nr;
+        self.counter_latch_occured = true;
     }
 
     fn get_vram_word(&self, index: u16) -> u16 {
