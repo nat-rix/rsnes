@@ -56,11 +56,12 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
-        let hpos_start = self.ppu.scanline_cycle >> 2;
-        let hpos_end = hpos_start + ((N + 3) >> 2);
         self.shall_irq = self.shall_irq
             || ((h_irq_enabled || v_irq_enabled)
-                && (!h_irq_enabled || (hpos_start..hpos_end).contains(&self.irq_time_h))
+                && (!h_irq_enabled
+                    || ((self.ppu.scanline_cycle as i16 - N as i16) >> 2
+                        < self.irq_time_h as i16
+                        && self.ppu.scanline_cycle >> 2 >= self.irq_time_h))
                 && (!v_irq_enabled || self.ppu.scanline_nr == self.irq_time_v)
                 && (h_irq_enabled || !v_irq_enabled || self.new_scanline));
         let do_nmi = self.new_scanline && self.ppu.scanline_nr == vend;
