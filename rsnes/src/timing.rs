@@ -66,7 +66,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 && (h_irq_enabled || !v_irq_enabled || self.new_scanline));
         let do_nmi = self.new_scanline && self.ppu.scanline_nr == vend;
         self.nmi_vblank_bit.set(self.nmi_vblank_bit.get() || do_nmi);
-        self.shall_nmi |= self.cpu.nmitimen & 0x80 > 0 && do_nmi;
+        self.shall_nmi = self.cpu.nmitimen & 0x80 > 0 && (self.shall_nmi || do_nmi);
         self.update_counters::<N>();
     }
 
@@ -75,21 +75,35 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         self.math_registers.tick(N);
         self.new_scanline = false;
         self.new_frame = false;
+        let line_length = self.get_line_length();
         // Test if one scanline completed
         // TODO: Take notice of the interlace mode
-        if self.ppu.scanline_cycle >= 1364 {
-            self.ppu.scanline_cycle -= 1364;
+        if self.ppu.scanline_cycle >= line_length {
+            self.ppu.scanline_cycle -= line_length;
             self.ppu.scanline_nr += 1;
             self.do_hdma = true;
             self.new_scanline = true;
+            let scanline_count = self.scanline_count();
             // Test if one frame completed
             // TODO: Take notice of the interlace mode
-            if self.ppu.scanline_nr >= self.scanline_count() {
-                self.ppu.scanline_nr -= self.scanline_count();
+            if self.ppu.scanline_nr >= scanline_count {
+                self.ppu.scanline_nr -= scanline_count;
                 self.new_frame = true;
                 self.nmi_vblank_bit.set(false);
+                self.ppu.field ^= true;
                 self.spc.refresh();
             }
+        }
+    }
+
+    pub fn get_line_length(&self) -> u16 {
+        if !self.is_pal && !self.ppu.interlace && self.ppu.field && self.ppu.scanline_nr == 240 {
+            1360
+        } else if self.is_pal && self.ppu.interlace && self.ppu.field && self.ppu.scanline_nr == 311
+        {
+            1368
+        } else {
+            1364
         }
     }
 

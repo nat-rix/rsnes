@@ -180,7 +180,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             ram: [0; RAM_SIZE],
             wram_addr: Cell::new(0),
             memory_cycles: 0,
-            cpu_ahead_cycles: 52,
+            cpu_ahead_cycles: 186,
             new_scanline: true,
             new_frame: true,
             do_hdma: true,
