@@ -418,14 +418,14 @@ impl Cartridge {
 
         let checksum = rom.iter().fold(0u16, |b, i| b.wrapping_add((*i).into()));
         if checksum != header.checksum {
-            println!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
+            eprintln!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
         }
 
         let ram_size = if header.has_ram() { header.ram_size } else { 0 };
 
         Ok(Self {
             rom,
-            ram: vec![0; ram_size as usize],
+            ram: vec![0x00; ram_size as usize],
             mapping: header.rom_type.to_mapping(),
             header,
         })
