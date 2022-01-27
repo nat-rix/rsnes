@@ -116,7 +116,12 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     /// Absolute Long Indexed, X
     pub fn load_long_indexed_x(&mut self) -> Addr24 {
         let Addr24 { mut bank, addr } = self.load::<Addr24>();
-        let (addr, ov) = self.cpu.regs.x.overflowing_add(addr);
+        let x = if self.cpu.is_idx8() {
+            self.cpu.regs.x8().into()
+        } else {
+            self.cpu.regs.x
+        };
+        let (addr, ov) = x.overflowing_add(addr);
         if ov {
             bank = bank.wrapping_add(1)
         }
