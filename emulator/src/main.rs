@@ -154,7 +154,7 @@ impl AudioBackend {
 }
 
 impl rsnes::backend::AudioBackend for AudioBackend {
-    fn push_sample(&mut self, sample: StereoSample<i16>) {
+    fn push_sample(&mut self, sample: StereoSample) {
         let _ = self
             .producer
             .push(sample.l)

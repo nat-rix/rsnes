@@ -10,7 +10,7 @@ use crate::{
     backend::AudioBackend,
     timing::{Cycles, APU_CPU_TIMING_PROPORTION_NTSC, APU_CPU_TIMING_PROPORTION_PAL},
 };
-use core::{cell::Cell, iter::once, mem::replace};
+use core::{cell::Cell, mem::take};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
 
@@ -23,7 +23,7 @@ static ROM: [u8; 64] = [
     0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF,
 ];
 
-const GAUSS_INTERPOLATION_POINTS: [i32; 16 * 32] = [
+const GAUSS_INTERPOLATION_POINTS: [u16; 16 * 32] = [
     0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000,
     0x000, 0x000, 0x000, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001,
     0x001, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x002, 0x003, 0x003, 0x003, 0x003, 0x003,
@@ -66,43 +66,17 @@ const GAUSS_INTERPOLATION_POINTS: [i32; 16 * 32] = [
     0x518, 0x518, 0x518, 0x519, 0x519,
 ];
 
-const fn calculate_gain_noise_rates() -> [u16; 32] {
-    let mut rates = [0; 32];
-    macro_rules! gen_rates {
-        (t0, $n:expr) => {
-            rates[$n] = if $n < 0x1a {
-                let inv = 0x22 - $n;
-                let x = inv / 3;
-                let y = inv % 3;
-                (1 << (x - 2)) * y + (1 << x)
-            } else {
-                0x20 - $n
-            }
-        };
-        (t1, $off:expr) => {
-            gen_rates!(t0, $off);
-            gen_rates!(t0, $off + 1);
-        };
-        (t2, $off:expr) => {
-            gen_rates!(t1, $off);
-            gen_rates!(t1, $off + 2);
-            gen_rates!(t1, $off + 4);
-            gen_rates!(t1, $off + 6);
-        };
-        (t3, $off:expr) => {
-            gen_rates!(t2, $off);
-            gen_rates!(t2, $off + 8);
-            gen_rates!(t2, $off + 16);
-            gen_rates!(t2, $off + 24);
-        };
-    }
-    gen_rates!(t3, 0);
-    rates
-}
+const DSP_COUNTER_MASKS: [u16; 32] = [
+    0x0000, 0xFFE0, 0x3FF8, 0x1FE7, 0x7FE0, 0x1FF8, 0x0FE7, 0x3FE0, 0x0FF8, 0x07E7, 0x1FE0, 0x07F8,
+    0x03E7, 0x0FE0, 0x03F8, 0x01E7, 0x07E0, 0x01F8, 0x00E7, 0x03E0, 0x00F8, 0x0067, 0x01E0, 0x0078,
+    0x0027, 0x00E0, 0x0038, 0x0007, 0x0060, 0x0018, 0x0020, 0x0000,
+];
 
-const ADSR_GAIN_NOISE_RATES: [u16; 32] = calculate_gain_noise_rates();
-
-const DECODE_BUFFER_SIZE: usize = 3 + 16;
+const DSP_COUNTER_XORS: [u16; 32] = [
+    0xFFFF, 0x0000, 0x3E08, 0x1D04, 0x0000, 0x1E08, 0x0D04, 0x0000, 0x0E08, 0x0504, 0x0000, 0x0608,
+    0x0104, 0x0000, 0x0208, 0x0104, 0x0000, 0x0008, 0x0004, 0x0000, 0x0008, 0x0004, 0x0000, 0x0008,
+    0x0004, 0x0000, 0x0008, 0x0004, 0x0000, 0x0008, 0x0000, 0x0000,
+];
 
 // 0x2f BRA: the 2 instead of 4 cycles are on purpose.
 //           `branch_rel` will increment the cycle count
@@ -144,18 +118,17 @@ pub mod flags {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
+#[repr(u8)]
 enum AdsrPeriod {
     Attack = 0,
     Decay = 1,
     Sustain = 2,
-    Gain = 3,
-    Release = 4,
+    Release = 3,
 }
 
 impl save_state::InSaveState for AdsrPeriod {
     fn serialize(&self, state: &mut SaveStateSerializer) {
-        (*self as usize as u8).serialize(state)
+        (*self as u8).serialize(state)
     }
 
     fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
@@ -165,249 +138,710 @@ impl save_state::InSaveState for AdsrPeriod {
             0 => Self::Attack,
             1 => Self::Decay,
             2 => Self::Sustain,
-            3 => Self::Gain,
-            4 => Self::Release,
+            3 => Self::Release,
             _ => panic!("unknown enum discriminant {}", i),
         }
     }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, InSaveState)]
-pub struct StereoSample<T: save_state::InSaveState> {
-    pub l: T,
-    pub r: T,
+pub struct StereoSample {
+    pub l: i16,
+    pub r: i16,
 }
 
-macro_rules! impl_new_for_stereo_sample {
-    ($t:ty) => {
-        impl StereoSample<$t> {
-            pub const fn new(val: $t) -> Self {
-                Self { l: val, r: val }
-            }
-            pub const fn new2(l: $t, r: $t) -> Self {
-                Self { l, r }
-            }
-        }
-    };
-    ($t1:ty $(, $t:ty)*) => {
-        impl_new_for_stereo_sample!($t1);
-        impl_new_for_stereo_sample!($($t),*);
-    };
-}
+impl StereoSample {
+    pub const fn new(l: i16, r: i16) -> Self {
+        Self { l, r }
+    }
 
-impl_new_for_stereo_sample! { u8, i8, u16, i16, u32, i32 }
+    pub const fn new2(v: i16) -> Self {
+        Self::new(v, v)
+    }
 
-impl StereoSample<i16> {
-    pub fn saturating_add32(self, val: StereoSample<i32>) -> Self {
-        let clamped = val.clamp16();
-        Self {
-            l: self.l.saturating_add(clamped.l),
-            r: self.r.saturating_add(clamped.r),
-        }
+    pub fn map<F: FnMut(i16) -> i16>(self, mut f: F) -> Self {
+        Self::new(f(self.l), f(self.r))
+    }
+
+    pub fn zip_with<F: FnMut(i16, i16) -> i16>(self, rhs: Self, mut f: F) -> Self {
+        Self::new(f(self.l, rhs.l), f(self.r, rhs.r))
+    }
+
+    pub fn wrapping_add(self, rhs: Self) -> Self {
+        self.zip_with(rhs, i16::wrapping_add)
     }
 }
 
-impl StereoSample<i32> {
-    pub fn clamp16(self) -> StereoSample<i16> {
-        StereoSample {
-            l: self.l.clamp(-0x8000, 0x7fff) as i16,
-            r: self.r.clamp(-0x8000, 0x7fff) as i16,
-        }
-    }
+impl core::ops::Add<StereoSample> for StereoSample {
+    type Output = StereoSample;
 
-    pub fn clip16(self) -> StereoSample<i16> {
-        StereoSample {
-            l: (self.l as u32 & 0xffff) as i16,
-            r: (self.r as u32 & 0xffff) as i16,
-        }
+    fn add(self, rhs: Self) -> Self {
+        self.zip_with(rhs, i16::saturating_add)
     }
 }
 
-impl<T: Into<i32> + save_state::InSaveState> StereoSample<T> {
-    pub fn to_i32(self) -> StereoSample<i32> {
-        StereoSample {
-            l: self.l.into(),
-            r: self.r.into(),
-        }
-    }
+fn load16<T: Into<usize> + Copy, const N: usize>(mem: &[u8; N], addr: T) -> u16 {
+    u16::from_le_bytes([mem[addr.into() & (N - 1)], mem[(addr.into() + 1) & (N - 1)]])
 }
 
-impl core::ops::Mul for StereoSample<i32> {
-    type Output = Self;
-    fn mul(self, other: Self) -> Self {
-        Self {
-            l: self.l * other.l,
-            r: self.r * other.r,
-        }
-    }
+fn exp_decrease(val: &mut i16) {
+    *val = val.saturating_sub((val.saturating_sub(1) >> 8) + 1);
 }
 
-impl<T2: Copy, T1: core::ops::Mul<T2> + save_state::InSaveState> core::ops::Mul<T2>
-    for StereoSample<T1>
-where
-    <T1 as core::ops::Mul<T2>>::Output: save_state::InSaveState,
-{
-    type Output = StereoSample<<T1 as core::ops::Mul<T2>>::Output>;
-    fn mul(self, other: T2) -> Self::Output {
-        Self::Output {
-            l: self.l * other,
-            r: self.r * other,
-        }
-    }
-}
+mod regs {
+    pub const VOLL: u8 = 0;
+    pub const PITCHL: u8 = 2;
+    pub const PITCHH: u8 = 3;
+    pub const SRCN: u8 = 4;
+    pub const ADSR1: u8 = 5;
+    pub const ADSR2: u8 = 6;
+    pub const GAIN: u8 = 7;
+    pub const ENVX: u8 = 8;
+    pub const OUTX: u8 = 9;
+    pub const FIR: u8 = 15;
 
-impl<R: Copy, T: core::ops::Shr<R> + save_state::InSaveState> core::ops::Shr<R> for StereoSample<T>
-where
-    T::Output: save_state::InSaveState,
-{
-    type Output = StereoSample<T::Output>;
-    fn shr(self, rhs: R) -> Self::Output {
-        StereoSample {
-            l: self.l >> rhs,
-            r: self.r >> rhs,
-        }
-    }
-}
-
-impl<T2: save_state::InSaveState, T1: core::ops::AddAssign<T2> + save_state::InSaveState>
-    core::ops::AddAssign<StereoSample<T2>> for StereoSample<T1>
-{
-    fn add_assign(&mut self, rhs: StereoSample<T2>) {
-        self.l += rhs.l;
-        self.r += rhs.r;
-    }
+    pub const MVOLL: u8 = 0x0c;
+    pub const EFB: u8 = 0x0d;
+    pub const EVOLL: u8 = 0x2c;
+    pub const PMON: u8 = 0x2d;
+    pub const NON: u8 = 0x3d;
+    pub const KON: u8 = 0x4c;
+    pub const EON: u8 = 0x4d;
+    pub const KOFF: u8 = 0x5c;
+    pub const DIR: u8 = 0x5d;
+    pub const FLG: u8 = 0x6c;
+    pub const ESA: u8 = 0x6d;
+    pub const ENDX: u8 = 0x7c;
+    pub const EDL: u8 = 0x7d;
 }
 
 #[derive(Debug, Clone, Copy, InSaveState)]
-pub struct Channel {
-    volume: StereoSample<i8>,
-    // pitch (corresponds to `pitch * 125/8 Hz`)
-    pitch: u16,
-    source_number: u8,
-    dir_addr: u16,
-    data_addr: u16,
-    adsr: [u8; 2],
-    gain_mode: u8,
+struct Voice {
+    fade_in: u8,
+    brr_base: u16,
+    brr_index: u8,
+    sample_offset: u8,
     gain: u16,
-    vx_env: u8,
-    vx_out: u8,
-    sustain: u16,
-    unused: [u8; 3],
-    fir_coefficient: i8,
-
-    decode_buffer: [i16; DECODE_BUFFER_SIZE],
-    pitch_counter: u16,
+    prev_gain: u16,
+    ipol_index: u16,
+    envx_buf: u8,
     period: AdsrPeriod,
-    period_rate_map: [u16; 4],
-    rate_index: u16,
-    end_bit: bool,
-    loop_bit: bool,
-    last_sample: i16,
+    decode_buffer: [i16; 12],
 }
 
-impl Channel {
+impl Voice {
     pub const fn new() -> Self {
         Self {
-            volume: StereoSample::<i8>::new(0),
-            pitch: 0,
-            source_number: 0,
-            dir_addr: 0,
-            data_addr: 0,
-            adsr: [0; 2],
-            gain_mode: 0,
+            fade_in: 0,
+            brr_base: 0,
+            brr_index: 0,
+            sample_offset: 0,
             gain: 0,
-            vx_env: 0,
-            vx_out: 0,
-            sustain: 0,
-            unused: [0; 3],
-            fir_coefficient: 0,
-            decode_buffer: [0; DECODE_BUFFER_SIZE],
-            pitch_counter: 0,
-            period: AdsrPeriod::Attack,
-            period_rate_map: [0; 4],
-            rate_index: 0,
-            end_bit: false,
-            loop_bit: false,
-            last_sample: 0,
+            prev_gain: 0,
+            ipol_index: 0,
+            envx_buf: 0,
+            period: AdsrPeriod::Release,
+            decode_buffer: [0; 12],
         }
     }
+}
 
-    pub fn update_gain(&mut self, rate: u16) {
-        match self.period {
-            AdsrPeriod::Attack => {
-                self.gain = self
-                    .gain
-                    .saturating_add(if rate == 1 { 1024 } else { 32 })
-                    .min(0x7ff);
-                if self.gain > 0x7df {
-                    self.period = AdsrPeriod::Decay
-                }
-            }
-            AdsrPeriod::Decay | AdsrPeriod::Sustain => {
-                self.gain = self
-                    .gain
-                    .saturating_sub((self.gain.saturating_sub(1) >> 8) + 1);
-                if self.period == AdsrPeriod::Decay && self.gain < self.sustain {
-                    self.period = AdsrPeriod::Sustain
-                }
-            }
-            AdsrPeriod::Gain => todo!("gain mode"),
-            AdsrPeriod::Release => panic!("`update_gain` must not be called in release mode"),
-        }
+#[derive(Debug, Clone, InSaveState)]
+pub struct DspCounter(u16);
+
+impl DspCounter {
+    pub const fn new() -> Self {
+        Self(0)
     }
 
-    pub fn reset(&mut self) {
-        self.period = AdsrPeriod::Release;
-        self.gain = 0;
+    pub fn tick(&mut self) {
+        self.0 ^= if self.0 & 0x7 == 0 { 5 } else { 0 };
+        self.0 = (self.0 ^ if self.0 & 0x18 == 0 { 0x18 } else { 0 }).wrapping_sub(0x29);
+    }
+
+    pub const fn is_triggered(&self, rate: u8) -> bool {
+        let ur = rate as usize;
+        self.0 & DSP_COUNTER_MASKS[ur] == DSP_COUNTER_XORS[ur]
     }
 }
 
 #[derive(Debug, Clone, InSaveState)]
 pub struct Dsp {
-    // in milliseconds
-    echo_delay: u16,
-    echo_index: u16,
-    source_dir_addr: u16,
-    echo_data_addr: u16,
-    channels: [Channel; 8],
+    mem: [u8; 0x80],
+    step_counter: u8,
+    counter: DspCounter,
+
+    dir: u8,
+    srcn: u8,
+    dir_srcn: u16,
+    pitch: u16,
+    next_brr: u16,
+    adsr: [u8; 2],
     pitch_modulation: u8,
-    echo_feedback: i8,
-    noise: u8,
-    echo: u8,
-    fade_in: u8,
-    fade_out: u8,
-    // FLG register (6c)
-    flags: u8,
-    master_volume: StereoSample<i8>,
-    echo_volume: StereoSample<i8>,
-    unused: u8,
-    echo_buffer_offset: u16,
-    fir_buffer: [StereoSample<i16>; 8],
-    fir_buffer_index: u8,
+    output: i16,
+    noise_enabled: u8,
+    noise: u16,
+    looped_voice_bit: u8,
+    echo_enabled: u8,
+    echo_addr: u16,
+    echo_index: u16,
+    echo_length: u16,
+    echo_ring_buf_addr: u8,
+    echo_input: StereoSample,
+    next_fade_in: u8,
+    envx_buf: u8,
+    outx_buf: u8,
+    endx_buf: u8,
+    flag_buf: u8,
+    brr_head: u8,
+    brr_data: u8,
+    is_even: bool,
+    fade_in_enable: u8,
+    fade_out_enable: u8,
+
+    voices: [Voice; 8],
+    echo_history: [StereoSample; 8],
+    echo_history_index: u8,
+    main_sample: StereoSample,
+    echo_sample: StereoSample,
+
+    global_output: StereoSample,
 }
 
 impl Dsp {
     pub const fn new() -> Self {
+        let mut mem = [0; 0x80];
+        mem[regs::FLG as usize] = 0xe0;
+        mem[regs::ENDX as usize] = 0xff;
         Self {
-            echo_delay: 1,
-            echo_index: 1,
-            source_dir_addr: 0,
-            echo_data_addr: 0,
-            channels: [Channel::new(); 8],
+            mem,
+            step_counter: 0,
+            counter: DspCounter::new(),
+            dir: 0,
+            srcn: 0,
+            dir_srcn: 0,
+            pitch: 0,
+            next_brr: 0,
+            adsr: [0; 2],
             pitch_modulation: 0,
-            echo_feedback: 0,
-            noise: 0,
-            echo: 0,
-            fade_in: 0,
-            fade_out: 0,
-            flags: 0xe0,
-            master_volume: StereoSample::<i8>::new(0),
-            echo_volume: StereoSample::<i8>::new(0),
-            unused: 0,
-            echo_buffer_offset: 0,
-            fir_buffer: [StereoSample { l: 0, r: 0 }; 8],
-            fir_buffer_index: 0,
+            output: 0,
+            noise_enabled: 0,
+            noise: 0x4000,
+            looped_voice_bit: 0,
+            echo_enabled: 0,
+            echo_addr: 0,
+            echo_index: 0,
+            echo_length: 0,
+            echo_ring_buf_addr: 0,
+            echo_input: StereoSample::new2(0),
+            next_fade_in: 0,
+            envx_buf: 0,
+            outx_buf: 0,
+            endx_buf: 0,
+            flag_buf: 0,
+            brr_head: 0,
+            brr_data: 0,
+            is_even: true,
+            fade_in_enable: 0,
+            fade_out_enable: 0,
+            voices: [Voice::new(); 8],
+            echo_history: [StereoSample::new2(0); 8],
+            echo_history_index: 0,
+            main_sample: StereoSample::new2(0),
+            echo_sample: StereoSample::new2(0),
+
+            global_output: StereoSample::new2(0),
         }
+    }
+
+    pub fn write(&mut self, adr: u8, val: u8) {
+        if adr < 0x80 {
+            self.mem[usize::from(adr)] = match (adr, adr & 0xf) {
+                (regs::KON, _) => {
+                    self.next_fade_in = val;
+                    val
+                }
+                (regs::ENDX, _) => {
+                    self.endx_buf = 0;
+                    0
+                }
+                (_, regs::ENVX) => {
+                    self.envx_buf = val;
+                    val
+                }
+                (_, regs::OUTX) => {
+                    self.outx_buf = val;
+                    val
+                }
+                _ => val,
+            }
+        }
+    }
+
+    pub const fn read(&self, adr: u8) -> u8 {
+        self.mem[(adr & 0x7f) as usize]
+    }
+
+    pub fn run_step<const STEP: u8>(&mut self, voice: u8, ram: &[u8; MEMORY_SIZE]) {
+        macro_rules! vx {
+            ($id:ident) => {
+                vx!($id | 0)
+            };
+            ($id:ident | $off:literal) => {
+                self.mem[usize::from((voice << 4) | regs::$id | $off)]
+            };
+        }
+        macro_rules! reg {
+            ($id:ident) => {
+                self.mem[usize::from(regs::$id)]
+            };
+        }
+        macro_rules! ram {
+            ($i:expr) => {
+                ram[usize::from($i)]
+            };
+        }
+        macro_rules! voice {
+            () => {
+                self.voices[usize::from(voice)]
+            };
+        }
+        macro_rules! output {
+            (left) => {
+                output!(0 l)
+            };
+            (right) => {
+                output!(1 r)
+            };
+            ($channel:literal $i:ident) => {{
+                let sample =
+                    ((i32::from(self.output) * i32::from(vx!(VOLL | $channel) as i8)) >> 7).clamp(-0x8000, 0x7fff) as i16;
+                let amp = |s: &mut i16| *s = s.saturating_add(sample);
+                amp(&mut self.main_sample.$i);
+                if (self.echo_enabled >> voice) & 1 > 0 {
+                    amp(&mut self.echo_sample.$i)
+                }
+            }};
+        }
+        match STEP {
+            1 => {
+                self.dir_srcn = u16::from(self.srcn << 2).wrapping_add(u16::from(self.dir) << 8);
+                self.srcn = vx!(SRCN);
+            }
+            2 => {
+                let addr = self
+                    .dir_srcn
+                    .wrapping_add(if voice!().fade_in > 0 { 0 } else { 2 });
+                self.next_brr = load16(ram, addr);
+                self.adsr[0] = vx!(ADSR1);
+                self.pitch = vx!(PITCHL).into();
+            }
+            3 => {
+                self.run_step::<10>(voice, ram);
+                self.run_step::<11>(voice, ram);
+                self.run_step::<12>(voice, ram);
+            }
+            4 => {
+                self.looped_voice_bit = 0;
+                if voice!().ipol_index >= 0x4000 {
+                    voice!().ipol_index &= 0x3fff;
+                    let (shift, filter) = (self.brr_head >> 4, self.brr_head & 0b1100);
+                    let new_brr_data = ram![voice!()
+                        .brr_base
+                        .wrapping_add(u16::from(voice!().brr_index))
+                        .wrapping_add(2)];
+                    let nibbles = [
+                        self.brr_data >> 4,
+                        self.brr_data & 0xf,
+                        new_brr_data >> 4,
+                        new_brr_data & 0xf,
+                    ];
+                    for nibble in nibbles {
+                        let nibble = if nibble & 8 > 0 {
+                            (nibble | 0xf0) as i8
+                        } else {
+                            nibble as i8
+                        };
+                        let sample = if shift <= 12 {
+                            (i16::from(nibble) << shift) >> 1
+                        } else {
+                            i16::from(nibble >> 3) << 11
+                        };
+
+                        let wsub = |n, s| usize::from(if n >= s { n - s } else { 12 + n - s });
+                        let old = voice!().decode_buffer[wsub(voice!().sample_offset, 1)];
+                        let older = voice!().decode_buffer[wsub(voice!().sample_offset, 2)];
+                        let sample = (match filter {
+                            0 => sample.into(),
+                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4)),
+                            0b1000 => {
+                                i32::from(sample)
+                                    + i32::from(old) * 2
+                                    + ((-3 * i32::from(old)) >> 5)
+                                    - i32::from(older)
+                                    + i32::from(older >> 4)
+                            }
+                            0b1100 => {
+                                i32::from(sample)
+                                    + i32::from(old) * 2
+                                    + ((-13 * i32::from(old)) >> 6)
+                                    - i32::from(older)
+                                    + ((i32::from(older) * 3) >> 4)
+                            }
+                            _ => unreachable!(),
+                        })
+                        .clamp(-0x8000, 0x7fff) as i16;
+                        // this behaviour is documented by nocash FullSNES
+                        let sample = if sample > 0x3fff {
+                            -0x8000 + sample
+                        } else if sample < -0x4000 {
+                            sample - -0x8000
+                        } else {
+                            sample
+                        };
+                        voice!().decode_buffer[usize::from(voice!().sample_offset)] = sample;
+                        let so = &mut voice!().sample_offset;
+                        *so = if *so > 10 { 0 } else { *so + 1 };
+                    }
+                    voice!().brr_index += 2;
+                    if voice!().brr_index >= 8 {
+                        voice!().brr_index = 0;
+                        voice!().brr_base = voice!().brr_base.wrapping_add(9);
+                        if self.brr_head & 1 > 0 {
+                            voice!().brr_base = self.next_brr;
+                            self.looped_voice_bit = 1 << voice;
+                        }
+                    }
+                }
+                voice!().ipol_index = voice!()
+                    .ipol_index
+                    .saturating_add(self.pitch)
+                    .clamp(0, 0x7fff);
+                output!(left);
+            }
+            5 => {
+                output!(right);
+                self.endx_buf = reg!(ENDX) | self.looped_voice_bit;
+                if voice!().fade_in == 5 {
+                    self.endx_buf &= !(1 << voice)
+                }
+            }
+            6 => self.outx_buf = ((self.output as u16) >> 8) as u8,
+            7 => {
+                reg!(ENDX) = self.endx_buf;
+                self.envx_buf = voice!().envx_buf;
+            }
+            8 => {
+                vx!(OUTX) = self.outx_buf;
+            }
+            9 => {
+                vx!(ENVX) = self.envx_buf;
+            }
+            10 => self.pitch = (self.pitch & 0xff) | (u16::from(vx!(PITCHH) & 0x3f) << 8),
+            11 => {
+                let base = u16::from(voice!().brr_base);
+                let idx = u16::from(voice!().brr_index);
+                self.brr_data = ram![base.wrapping_add(idx).wrapping_add(1)];
+                self.brr_head = ram![base];
+            }
+            12 => {
+                if voice != 0 && (self.pitch_modulation >> voice) & 1 > 0 {
+                    self.pitch = self.pitch.wrapping_add(
+                        ((i32::from(self.output >> 4) * i32::from(self.pitch)) >> 10) as i16 as u16,
+                    );
+                }
+                if voice!().fade_in > 0 {
+                    if voice!().fade_in == 5 {
+                        voice!().brr_base = self.next_brr;
+                        voice!().brr_index = 0;
+                        voice!().sample_offset = 0;
+                        self.brr_head = 0;
+                    }
+                    voice!().gain = 0;
+                    voice!().prev_gain = 0;
+                    voice!().ipol_index = 0;
+                    voice!().fade_in -= 1;
+                    if voice!().fade_in & 3 > 0 {
+                        voice!().ipol_index = 0x4000
+                    }
+                    self.pitch = 0;
+                }
+
+                let gauss = (voice!().ipol_index >> 4) & 0xff;
+                let off = voice!()
+                    .sample_offset
+                    .wrapping_add((voice!().ipol_index >> 12) as u8);
+                let gv = |g, i| {
+                    (i32::from(GAUSS_INTERPOLATION_POINTS[usize::from(g)])
+                        * i32::from(voice!().decode_buffer[usize::from(i % 12)]))
+                        >> 11
+                };
+                let out = if (self.noise_enabled >> voice) & 1 == 0 {
+                    ((i32::from(
+                        ((gv(0xff - gauss, off)
+                            + gv(0x1ff - gauss, off + 1)
+                            + gv(0x100 + gauss, off + 2)) as u32
+                            & 0xffff) as i16,
+                    ) + gv(gauss, off + 3))
+                    .clamp(-0x8000, 0x7fff)) as i16
+                } else {
+                    (self.noise << 1) as i16
+                };
+                self.output = ((i32::from(out) * i32::from(voice!().gain)) >> 11) as i16;
+                voice!().envx_buf = ((voice!().gain >> 4) & 0xff) as u8;
+                if reg!(FLG) & 0x80 > 0 || self.brr_head & 3 == 1 {
+                    voice!().period = AdsrPeriod::Release;
+                    voice!().gain = 0;
+                }
+
+                if self.is_even && (self.fade_in_enable >> voice) & 1 > 0 {
+                    voice!().fade_in = 5;
+                    voice!().period = AdsrPeriod::Attack;
+                } else if self.is_even && (self.fade_out_enable >> voice) & 1 > 0 {
+                    voice!().period = AdsrPeriod::Release;
+                }
+
+                if voice!().fade_in == 0 {
+                    if let AdsrPeriod::Release = voice!().period {
+                        voice!().gain = voice!().gain.saturating_sub(8);
+                    } else {
+                        let mut gain = voice!().gain as i16;
+                        let rate = if self.adsr[0] & 0x80 > 0 {
+                            // Attack/Decay/Sustain Mode
+                            match voice!().period {
+                                AdsrPeriod::Decay | AdsrPeriod::Sustain => {
+                                    exp_decrease(&mut gain);
+                                    if let AdsrPeriod::Decay = voice!().period {
+                                        ((self.adsr[0] >> 3) & 0xe) | 0x10
+                                    } else {
+                                        vx!(ADSR2) & 0x1f
+                                    }
+                                }
+                                AdsrPeriod::Attack => {
+                                    let rate = ((self.adsr[0] & 0xf) << 1) | 1;
+                                    gain = gain.saturating_add(if rate == 31 { 1024 } else { 32 });
+                                    rate
+                                }
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            let new_gain = vx!(GAIN);
+                            if new_gain & 0x80 > 0 {
+                                // Custom Gain
+                                match new_gain & 0x60 {
+                                    0 => {
+                                        // Linear Decrease
+                                        gain = gain.saturating_sub(32)
+                                    }
+                                    0x20 => {
+                                        // Exp Decrease
+                                        exp_decrease(&mut gain);
+                                    }
+                                    0x40 => {
+                                        // Linear Increase
+                                        gain = gain.saturating_add(32)
+                                    }
+                                    0x60 => {
+                                        // Bent Increase
+                                        let d = if voice!().prev_gain >= 0x6000 { 8 } else { 32 };
+                                        gain = gain.saturating_add(d)
+                                    }
+                                    _ => unreachable!(),
+                                }
+                                new_gain & 0x1f
+                            } else {
+                                // Direct Gain
+                                gain = (new_gain as i16) << 4;
+                                31
+                            }
+                        };
+                        if let AdsrPeriod::Decay = voice!().period {
+                            let boundary = if self.adsr[0] & 0x80 > 0 {
+                                vx!(ADSR2)
+                            } else {
+                                vx!(GAIN)
+                            };
+                            if (gain >> 8) == i16::from(boundary >> 5) {
+                                voice!().period = AdsrPeriod::Sustain
+                            }
+                        }
+                        if gain > 0x7ff || gain < 0 {
+                            if let AdsrPeriod::Attack = voice!().period {
+                                voice!().period = AdsrPeriod::Decay
+                            }
+                        }
+                        if self.counter.is_triggered(rate) {
+                            voice!().gain = gain.clamp(0, 0x7ff) as u16
+                        }
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn get_fir<const I: u8>(&self) -> StereoSample {
+        let fir = i32::from(self.mem[usize::from(regs::FIR | (I << 4))] as i8);
+        self.echo_history[usize::from(self.echo_history_index.wrapping_add(I + 1) & 7)]
+            .map(|c| (((i32::from(c) * fir) >> 6) as u32 & 0xffff) as i16)
+    }
+
+    pub fn run_one_step(&mut self, ram: &mut [u8; MEMORY_SIZE]) {
+        macro_rules! step {
+            ($v:literal[$s:literal] $(, $v_:literal[$s_:literal])*) => {{
+                self.run_step::<$s>($v & 7, ram);
+                $(step!($v_[$s_]));*
+            }};
+        }
+        macro_rules! reg {
+            ($id:ident) => {
+                self.mem[usize::from(regs::$id)]
+            };
+        }
+        macro_rules! load_echo_history {
+            (left) => { load_echo_history!(l 0) };
+            (right) => { load_echo_history!(r 2) };
+            ($i:ident $off:literal) => {
+                let sample = load16(ram, self.echo_addr.wrapping_add($off)) as i16;
+                self.echo_history[usize::from(self.echo_history_index)].$i = sample >> 1;
+            };
+        }
+        macro_rules! calculate_echo {
+            (left) => { calculate_echo!(l 0) };
+            (right) => { calculate_echo!(r 16) };
+            (part $i:ident $off:literal $first:ident $reg:ident) => {
+                ((i32::from(self.$first.$i)
+                  * i32::from(self.mem[usize::from(regs::$reg | $off)] as i8)
+                 ) >> 7
+                ) as i16
+            };
+            ($i:ident $off:literal) => {{
+                calculate_echo!(part $i $off main_sample MVOLL)
+                    .saturating_add(
+                calculate_echo!(part $i $off echo_input EVOLL)
+                )
+            }};
+        }
+        macro_rules! echo_to_ram {
+            (left) => { echo_to_ram!(l 0) };
+            (right) => { echo_to_ram!(r 2) };
+            ($i:ident $off:literal) => {{
+                let sample = take(&mut self.echo_sample.$i);
+                if self.flag_buf & 0x20 == 0 {
+                    let adr = self.echo_addr.wrapping_add($off);
+                    let [low, high] = sample.to_le_bytes();
+                    ram[usize::from(adr)] = low;
+                    ram[usize::from(adr.wrapping_add(1))] = high;
+                }
+            }};
+        }
+        match self.step_counter {
+            0 => step!(0[5], 1[2]),
+            1 => step!(0[6], 1[3]),
+            2 => step!(0[7], 1[4], 3[1]),
+            3 => step!(0[8], 1[5], 2[2]),
+            4 => step!(0[9], 1[6], 2[3]),
+            5 => step!(1[7], 2[4], 4[1]),
+            6 => step!(1[8], 2[5], 3[2]),
+            7 => step!(1[9], 2[6], 3[3]),
+            8 => step!(2[7], 3[4], 5[1]),
+            9 => step!(2[8], 3[5], 4[2]),
+            10 => step!(2[9], 3[6], 4[3]),
+            11 => step!(3[7], 4[4], 6[1]),
+            12 => step!(3[8], 4[5], 5[2]),
+            13 => step!(3[9], 4[6], 5[3]),
+            14 => step!(4[7], 5[4], 7[1]),
+            15 => step!(4[8], 5[5], 6[2]),
+            16 => step!(4[9], 5[6], 6[3]),
+            17 => step!(5[7], 6[4], 0[1]),
+            18 => step!(5[8], 6[5], 7[2]),
+            19 => step!(5[9], 6[6], 7[3]),
+            20 => step!(6[7], 7[4], 1[1]),
+            21 => step!(6[8], 7[5], 0[2]),
+            22 => {
+                step!(6[9], 7[6], 0[10]);
+                self.echo_history_index = (self.echo_history_index + 1) & 7;
+                self.echo_addr =
+                    (self.echo_index << 4).wrapping_add(u16::from(self.echo_ring_buf_addr) << 8);
+                load_echo_history!(left);
+                self.echo_input = self.get_fir::<0>();
+            }
+            23 => {
+                step!(7[7]);
+                self.echo_input = self.echo_input + self.get_fir::<1>() + self.get_fir::<2>();
+                load_echo_history!(right);
+            }
+            24 => {
+                step!(7[8]);
+                self.echo_input = self.echo_input
+                    + self.get_fir::<3>()
+                    + self.get_fir::<4>()
+                    + self.get_fir::<5>();
+            }
+            25 => {
+                step!(0[11], 7[9]);
+                self.echo_input =
+                    self.echo_input.wrapping_add(self.get_fir::<6>()) + self.get_fir::<7>();
+            }
+            26 => {
+                self.main_sample.l = calculate_echo!(left);
+
+                let efb = i32::from(reg!(EFB) as i8);
+                self.echo_sample =
+                    self.echo_sample + self.echo_input.map(|c| ((i32::from(c) * efb) >> 7) as i16);
+            }
+            27 => {
+                self.pitch_modulation = reg!(PMON);
+
+                self.main_sample.r = calculate_echo!(right);
+                let out = take(&mut self.main_sample);
+
+                self.global_output = if reg!(FLG) & 0x40 > 0 {
+                    StereoSample::new2(0)
+                } else {
+                    out
+                };
+            }
+            28 => {
+                self.dir = reg!(DIR);
+                self.noise_enabled = reg!(NON);
+                self.echo_enabled = reg!(EON);
+                self.flag_buf = reg!(FLG);
+            }
+            29 => {
+                self.is_even = !self.is_even;
+                if self.is_even {
+                    self.next_fade_in &= !self.fade_in_enable
+                }
+
+                self.echo_ring_buf_addr = reg!(ESA);
+                if self.echo_index == 0 {
+                    self.echo_length = u16::from(reg!(EDL) & 0xf) << 7;
+                }
+                self.echo_index += 1;
+                if self.echo_index >= self.echo_length {
+                    self.echo_index = 0
+                }
+                echo_to_ram!(left);
+                self.flag_buf = reg!(FLG);
+            }
+            30 => {
+                if self.is_even {
+                    self.fade_in_enable = self.next_fade_in;
+                    self.fade_out_enable = reg!(KOFF);
+                }
+                self.counter.tick();
+                if self.counter.is_triggered(reg!(FLG) & 0x1f) {
+                    self.noise = (((self.noise ^ (self.noise >> 1)) & 1) << 14) ^ (self.noise >> 1);
+                }
+                step!(0[12], 7[9]);
+                echo_to_ram!(right);
+            }
+            31 => step!(0[4], 2[1]),
+            _ => unreachable!(),
+        }
+        self.step_counter += 1;
+        self.step_counter &= 0x1f;
     }
 }
 
@@ -457,9 +891,9 @@ impl<B: AudioBackend> Spc700<B> {
             a: 0,
             x: 0,
             y: 0,
-            sp: 0,
+            sp: 0xef,
             pc: 0xffc0,
-            status: 0,
+            status: 2,
 
             timer_max: [0; 3],
             timers: [0; 3],
@@ -467,7 +901,7 @@ impl<B: AudioBackend> Spc700<B> {
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
             dispatch_counter: 0,
             master_cycles: 0,
-            cycles_ahead: 7,
+            cycles_ahead: 2,
             timing_proportion: if is_pal {
                 APU_CPU_TIMING_PROPORTION_PAL
             } else {
@@ -488,6 +922,7 @@ impl<B: AudioBackend> Spc700<B> {
         // always result in 0xffc0, because mem[0xf0] = 0x80
         self.pc = 0xffc0;
         self.status = 0;
+        // TODO: reset dsp
     }
 
     pub fn is_rom_mapped(&self) -> bool {
@@ -498,22 +933,9 @@ impl<B: AudioBackend> Spc700<B> {
         u16::from_le_bytes([self.read(addr), self.read(addr.wrapping_add(1))])
     }
 
-    fn read16_norom(&self, addr: u16) -> u16 {
-        u16::from_le_bytes([
-            self.mem[usize::from(addr)],
-            self.mem[usize::from(addr.wrapping_add(1))],
-        ])
-    }
-
-    fn write16_norom(&mut self, addr: u16, val: u16) {
-        let [a, b] = val.to_le_bytes();
-        self.mem[usize::from(addr)] = a;
-        self.mem[usize::from(addr.wrapping_add(1))] = b;
-    }
-
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0xf3 => self.read_dsp_register(self.mem[0xf2]),
+            0xf3 => self.dsp.read(self.mem[0xf2]),
             0xf4..=0xf7 => self.input[usize::from(addr - 0xf4)],
             0xfd..=0xff => self.counters[usize::from(addr - 0xfd)].take(),
             0xf1 | 0xf8..=0xff => {
@@ -542,124 +964,13 @@ impl<B: AudioBackend> Spc700<B> {
                     }
                 }
             }
-            0xf3 => self.write_dsp_register(self.mem[0xf2], val),
+            0xf3 => self.dsp.write(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
             0xfa | 0xfb | 0xfc => self.timer_max[usize::from(!addr & 3) ^ 1] = val,
             0xf8..=0xff => {
                 todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
             }
             addr => self.mem[addr as usize] = val,
-        }
-    }
-
-    pub fn read_dsp_register(&self, id: u8) -> u8 {
-        let rid = id & 0x8f;
-        if rid & 0xe != 0xc {
-            let channel = &self.dsp.channels[usize::from(id >> 4)];
-            match rid {
-                0 => channel.volume.l as u8,
-                1 => channel.volume.r as u8,
-                2 => (channel.pitch & 0xff) as u8,
-                3 => (channel.pitch >> 8) as u8,
-                4 => channel.source_number,
-                5 | 6 => channel.adsr[usize::from(!rid & 1)],
-                7 => channel.gain_mode,
-                8 => channel.vx_env,
-                9 => channel.vx_out,
-                10 => channel.unused[0],
-                11 => channel.unused[1],
-                14 => channel.unused[2],
-                15 => channel.fir_coefficient as u8,
-                _ => unreachable!(),
-            }
-        } else {
-            match id {
-                0x0c => self.dsp.master_volume.l as u8,
-                0x1c => self.dsp.master_volume.r as u8,
-                0x2c => self.dsp.echo_volume.l as u8,
-                0x3c => self.dsp.echo_volume.r as u8,
-                0x4c => self.dsp.fade_in,
-                0x5c => self.dsp.fade_out,
-                0x6c => self.dsp.flags,
-
-                0x0d => self.dsp.echo_feedback as u8,
-                0x1d => self.dsp.unused,
-                0x2d => self.dsp.pitch_modulation,
-                0x3d => self.dsp.noise,
-                0x4d => self.dsp.echo,
-                0x5d => (self.dsp.source_dir_addr >> 8) as u8,
-                0x6d => (self.dsp.echo_data_addr >> 8) as u8,
-                0x7d => (self.dsp.echo_delay >> 9) as u8,
-
-                _ => todo!("read dsp register 0x{:02x}", id),
-            }
-        }
-    }
-
-    pub fn write_dsp_register(&mut self, id: u8, val: u8) {
-        let rid = id & 0x8f;
-        if rid & 0xe != 0xc {
-            let channel = &mut self.dsp.channels[usize::from(id >> 4)];
-            match rid {
-                0 => channel.volume.l = val as i8,
-                1 => channel.volume.r = val as i8,
-                2 => channel.pitch = (channel.pitch & 0x3f00) | u16::from(val),
-                3 => channel.pitch = (channel.pitch & 0xff) | (u16::from(val & 0x3f) << 8),
-                4 => {
-                    channel.source_number = val;
-                    channel.dir_addr = self.dsp.source_dir_addr.wrapping_add(u16::from(val) << 2);
-                }
-                5 => {
-                    channel.adsr[0] = val;
-                    channel.period_rate_map[AdsrPeriod::Attack as usize] =
-                        ADSR_GAIN_NOISE_RATES[usize::from(((val & 0xf) << 1) | 1)];
-                    channel.period_rate_map[AdsrPeriod::Decay as usize] =
-                        ADSR_GAIN_NOISE_RATES[usize::from(((val & 0x70) >> 3) | 0x10)];
-                }
-                6 => {
-                    channel.adsr[1] = val;
-                    channel.period_rate_map[AdsrPeriod::Sustain as usize] =
-                        ADSR_GAIN_NOISE_RATES[usize::from(val & 0x1f)];
-                    channel.sustain = (u16::from(val >> 5) + 1) * 0x100;
-                }
-                7 => channel.gain_mode = val,
-                8 => channel.vx_env = val,
-                9 => channel.vx_out = val,
-                10 => channel.unused[0] = val,
-                11 => channel.unused[1] = val,
-                14 => channel.unused[2] = val,
-                15 => channel.fir_coefficient = val as i8,
-                _ => unreachable!(),
-            }
-        } else {
-            match id {
-                0x0c => self.dsp.master_volume.l = val as i8,
-                0x1c => self.dsp.master_volume.r = val as i8,
-                0x2c => self.dsp.echo_volume.l = val as i8,
-                0x3c => self.dsp.echo_volume.r = val as i8,
-                0x4c => self.dsp.fade_in = val,
-                0x5c => self.dsp.fade_out = val,
-                0x6c => self.dsp.flags = val,
-
-                0x0d => self.dsp.echo_feedback = val as i8,
-                0x1d => self.dsp.unused = val,
-                0x2d => self.dsp.pitch_modulation = val & 0xfe,
-                0x3d => self.dsp.noise = val,
-                0x4d => self.dsp.echo = val,
-                0x5d => {
-                    self.dsp.source_dir_addr = u16::from(val) << 8;
-                    for channel in &mut self.dsp.channels {
-                        channel.dir_addr = self
-                            .dsp
-                            .source_dir_addr
-                            .wrapping_add(u16::from(channel.source_number) << 2)
-                    }
-                }
-                0x6d => self.dsp.echo_data_addr = u16::from(val) << 8,
-                0x7d => self.dsp.echo_delay = 1.max((val as u16 & 15) << 9),
-
-                _ => todo!("write value 0x{:02x} dsp register 0x{:02x}", val, id),
-            }
         }
     }
 
@@ -739,216 +1050,6 @@ impl<B: AudioBackend> Spc700<B> {
         } else {
             self.status &= !flag
         }
-    }
-
-    pub fn sound_cycle(&mut self) {
-        let (fade_in, fade_out) = if self.dispatch_counter & 0x3f > 0 {
-            let new = self.dsp.fade_in & self.dsp.fade_out;
-            (replace(&mut self.dsp.fade_in, new), self.dsp.fade_out)
-        } else {
-            (0, 0)
-        };
-        if self.dsp.flags & 0x80 > 0 {
-            for channel in self.dsp.channels.iter_mut() {
-                channel.reset()
-            }
-        }
-        let mut last_sample = 0;
-        let mut result = StereoSample::<i16>::new(0);
-        for (i, channel) in self.dsp.channels.iter_mut().enumerate() {
-            if fade_out & (1 << i) > 0 {
-                channel.period = AdsrPeriod::Release
-            } else if fade_in & (1 << i) > 0 {
-                channel.data_addr = u16::from_le_bytes([
-                    self.mem[usize::from(channel.dir_addr)],
-                    self.mem[usize::from(channel.dir_addr.wrapping_add(1))],
-                ]);
-                channel.loop_bit = false;
-                channel.end_bit = false;
-                channel.gain = 0;
-                channel.decode_buffer.fill(0);
-                channel.period = if channel.adsr[0] & 0x80 > 0 {
-                    AdsrPeriod::Attack
-                } else {
-                    AdsrPeriod::Gain
-                };
-            }
-            let step = if self.dsp.pitch_modulation & (1 << i) > 0 && i != 0 {
-                let factor = (last_sample >> 4) + 0x400;
-                ((i32::from(channel.pitch) * i32::from(factor)) >> 10) as u16
-            } else {
-                channel.pitch as u16
-            };
-            let (new_pitch_counter, ov) = channel.pitch_counter.overflowing_add(step);
-            channel.pitch_counter = new_pitch_counter;
-            if ov {
-                if channel.end_bit {
-                    channel.data_addr = u16::from_le_bytes([
-                        self.mem[usize::from(channel.dir_addr.wrapping_add(2))],
-                        self.mem[usize::from(channel.dir_addr.wrapping_add(3))],
-                    ]);
-                    if !channel.loop_bit {
-                        channel.reset()
-                    }
-                }
-                channel
-                    .decode_buffer
-                    .copy_within(DECODE_BUFFER_SIZE - 3..DECODE_BUFFER_SIZE, 0);
-                let header = self.mem[usize::from(channel.data_addr)];
-                channel.end_bit = header & 1 > 0;
-                channel.loop_bit = header & 2 > 0;
-                channel.data_addr = channel.data_addr.wrapping_add(1);
-                for byte_id in 0usize..8 {
-                    let byte = self.mem[usize::from(channel.data_addr)];
-                    channel.data_addr = channel.data_addr.wrapping_add(1);
-                    let index = byte_id << 1;
-                    for (nibble_id, sample) in once(byte >> 4).chain(once(byte & 0xf)).enumerate() {
-                        let index = index | nibble_id;
-                        let sample = if sample & 8 > 0 {
-                            (sample | 0xf0) as i8
-                        } else {
-                            sample as i8
-                        };
-                        let sample = match header >> 4 {
-                            0 => i16::from(sample) >> 1,
-                            s @ 1..=12 => i16::from(sample) << (s - 1),
-                            13..=15 => i16::from(sample >> 3) << 11,
-                            _ => unreachable!(),
-                        };
-                        let older = channel.decode_buffer[index + 1];
-                        let old = channel.decode_buffer[index + 2];
-                        let sample = (match header & 0b1100 {
-                            0 => sample.into(),
-                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4)),
-                            0b1000 => {
-                                i32::from(sample)
-                                    + i32::from(old) * 2
-                                    + ((-3 * i32::from(old)) >> 5)
-                                    - i32::from(older)
-                                    + i32::from(older >> 4)
-                            }
-                            0b1100 => {
-                                i32::from(sample)
-                                    + i32::from(old) * 2
-                                    + ((-13 * i32::from(old)) >> 6)
-                                    - i32::from(older)
-                                    + ((i32::from(older) * 3) >> 4)
-                            }
-                            _ => unreachable!(),
-                        })
-                        .clamp(-0x8000, 0x7fff) as i16;
-                        // this behaviour is documented by nocash FullSNES
-                        let sample = if sample > 0x3fff {
-                            -0x8000 + sample
-                        } else if sample < -0x4000 {
-                            sample - -0x8000
-                        } else {
-                            sample
-                        };
-                        channel.decode_buffer[index + 3] = sample
-                    }
-                }
-            }
-            let interpolation_index = (channel.pitch_counter >> 4) & 0xff;
-            let brr_index = usize::from(channel.pitch_counter >> 12);
-            let sample = (GAUSS_INTERPOLATION_POINTS[usize::from(0xff - interpolation_index)]
-                * i32::from(channel.decode_buffer[brr_index]))
-                >> 10;
-            let sample = sample
-                + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x1ff - interpolation_index)]
-                    * i32::from(channel.decode_buffer[brr_index + 1]))
-                    >> 10);
-            let sample = sample
-                + ((GAUSS_INTERPOLATION_POINTS[usize::from(0x100 + interpolation_index)]
-                    * i32::from(channel.decode_buffer[brr_index + 2]))
-                    >> 10);
-            let sample = i32::from((sample & 0xffff) as i16);
-            let sample = sample
-                + ((GAUSS_INTERPOLATION_POINTS[usize::from(interpolation_index)]
-                    * i32::from(channel.decode_buffer[brr_index + 3]))
-                    >> 10);
-            let sample = (sample.clamp(i16::MIN.into(), i16::MAX.into()) as i16) >> 1;
-
-            if let AdsrPeriod::Release = channel.period {
-                let (new_gain, ov) = channel.gain.overflowing_sub(8);
-                channel.gain = if ov || new_gain > 0x7ff { 0 } else { new_gain };
-            } else {
-                // `channel.period as usize` will always be < 4
-                let rate = channel.period_rate_map[channel.period as usize];
-                if channel.gain_mode & 0x80 == 0 && channel.adsr[0] & 0x80 == 0 {
-                    channel.gain = (channel.gain_mode & 0x7f).into()
-                } else if rate > 0 {
-                    channel.rate_index = channel.rate_index.wrapping_add(1);
-                    if channel.rate_index >= rate {
-                        channel.rate_index = 0;
-                        channel.update_gain(rate)
-                    }
-                }
-            }
-            debug_assert!(channel.gain < 0x800);
-            let sample = ((i32::from(sample) * i32::from(channel.gain)) >> 11) as i16;
-            last_sample = sample;
-            channel.last_sample = sample;
-            channel.vx_env = (channel.gain >> 4) as u8; // TODO: really `>> 4`?
-            channel.vx_out = (sample >> 7) as u8;
-            result = result.saturating_add32(
-                (StereoSample::<i32>::new(sample.into()) * channel.volume.to_i32()) >> 6,
-            );
-        }
-        let sample = ((result.to_i32() * self.dsp.master_volume.to_i32()) >> 7).clamp16();
-        let echo_addr = self
-            .dsp
-            .echo_data_addr
-            .wrapping_add(self.dsp.echo_buffer_offset);
-        self.dsp.echo_buffer_offset += 4;
-        self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index)] = StereoSample::<i16>::new2(
-            self.read16_norom(echo_addr) as i16,
-            self.read16_norom(echo_addr.wrapping_add(2)) as i16,
-        ) >> 1;
-        let mut result = StereoSample::<i32>::new(0);
-        for i in 0..8 {
-            let fir_value =
-                self.dsp.fir_buffer[usize::from(self.dsp.fir_buffer_index + i + 1) & 7].to_i32();
-            result +=
-                (fir_value * i32::from(self.dsp.channels[usize::from(i)].fir_coefficient)) >> 6;
-            if i == 6 {
-                result = result.clip16().to_i32()
-            }
-        }
-        self.dsp.fir_buffer_index = (self.dsp.fir_buffer_index + 1) & 7;
-        let result = result.clamp16();
-        let sample =
-            sample.saturating_add32((result.to_i32() * self.dsp.echo_volume.to_i32()) >> 7);
-        if self.dsp.flags & 0x20 == 0 {
-            let sample = self
-                .dsp
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| self.dsp.echo & (1u8 << *i) > 0)
-                .map(|(_, c)| (c.volume.to_i32() * c.last_sample as i32) >> 6)
-                .fold(StereoSample::<i16>::new(0), StereoSample::saturating_add32);
-            let sample =
-                sample.saturating_add32((result.to_i32() * i32::from(self.dsp.echo_feedback)) >> 7);
-            let sample = StereoSample::<i16>::new2(
-                (sample.l as u16 & 0xfffe) as i16,
-                (sample.r as u16 & 0xfffe) as i16,
-            );
-            self.write16_norom(echo_addr, sample.l as u16);
-            self.write16_norom(echo_addr.wrapping_add(2), sample.r as u16);
-        }
-        self.dsp.echo_index -= 1;
-        if self.dsp.echo_index == 0 {
-            self.dsp.echo_index = self.dsp.echo_delay;
-            self.dsp.echo_buffer_offset = 0;
-        }
-        // TODO: noise
-        let sample = if self.dsp.flags & 0x40 > 0 {
-            StereoSample::<i16>::new(0)
-        } else {
-            sample
-        };
-        self.backend.push_sample(sample)
     }
 
     pub fn dispatch_instruction(&mut self) -> Cycles {
@@ -2090,9 +2191,10 @@ impl<B: AudioBackend> Spc700<B> {
             self.cycles_ahead = self.dispatch_instruction().max(1);
         }
         self.cycles_ahead -= 1;
+        self.dsp.run_one_step(&mut self.mem);
         if self.dispatch_counter & 0xf == 0 {
             if self.dispatch_counter & 0x1f == 0 {
-                self.sound_cycle();
+                self.backend.push_sample(self.dsp.global_output);
                 if self.dispatch_counter & 0x7f == 0 {
                     self.update_timer(0);
                     self.update_timer(1);
