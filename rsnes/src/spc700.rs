@@ -87,16 +87,16 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 4, 5, 4, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
        2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
        2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
-       2, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 4, 6, 0,  // 4^
-       0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
+       2, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 4, 6, 6,  // 4^
+       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
        2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
-       0, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
+       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
        2, 0, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
        2, 0, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
        3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
-       2, 0, 4, 5, 4, 5, 5, 0,   0, 0, 5, 5, 2, 2, 0, 4,  // b^
+       2, 0, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 0, 4, 5, 4, 5, 4, 7,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 4, 5, 5, 6, 6, 7,   4, 0, 5, 5, 2, 2, 6, 0,  // d^
+       2, 0, 4, 5, 5, 6, 6, 7,   4, 5, 5, 5, 2, 2, 6, 0,  // d^
        2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 5, 3, 4, 3, 4, 0,  // e^
        2, 0, 4, 5, 4, 5, 5, 6,   3, 4, 5, 4, 2, 2, 4, 0,  // f^
 ];
@@ -1398,6 +1398,17 @@ impl<B: AudioBackend> Spc700<B> {
                 self.update_nz8(self.a.wrapping_add(!val).wrapping_add(1));
                 self.write(addr, val & !self.a)
             }
+            0x4f => {
+                // PCALL
+                let addr = self.load();
+                self.push16(self.pc);
+                self.pc = u16::from_le_bytes([addr, 0xff])
+            }
+            0x50 => {
+                // BVC - Branch if V=0
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::OVERFLOW == 0, &mut cycles)
+            }
             0x54 => {
                 // EOR - A := A ^ (imm+X)
                 let addr = self.load().wrapping_add(self.x);
@@ -1523,6 +1534,11 @@ impl<B: AudioBackend> Spc700<B> {
             0x6f => {
                 // RET - Return from subroutine
                 self.pc = self.pull16()
+            }
+            0x70 => {
+                // BVS - Branch if V=1
+                let rel = self.load();
+                self.branch_rel(rel, self.status & flags::OVERFLOW > 0, &mut cycles)
             }
             0x74 => {
                 // CMP - A - (imm+X)
@@ -1799,6 +1815,18 @@ impl<B: AudioBackend> Spc700<B> {
                 let addr = self.load16().wrapping_add(self.y.into());
                 self.a = self.adc(self.a, !self.read(addr));
             }
+            0xb7 => {
+                // SBC - A -= ((imm)[16-bit] + Y) + CARRY
+                let addr = self.load();
+                let addr = self.read16_small(addr).wrapping_add(self.y.into());
+                self.a = self.adc(self.a, !self.read(addr));
+            }
+            0xb8 => {
+                // SBC - (imm) -= imm + CARRY
+                let (val, dst) = (self.load(), self.load());
+                let dst = self.get_small(dst);
+                self.adc(self.read(dst), !val);
+            }
             0xba => {
                 // MOVW - YA := (imm)[16-bit]
                 let addr = self.load();
@@ -1918,6 +1946,11 @@ impl<B: AudioBackend> Spc700<B> {
             0xd8 => {
                 // MOV - (imm) := X
                 let addr = self.load();
+                self.write_small(addr, self.x)
+            }
+            0xd9 => {
+                // MOV - (imm) := X
+                let addr = self.load().wrapping_add(self.y);
                 self.write_small(addr, self.x)
             }
             0xda => {
