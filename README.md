@@ -13,8 +13,8 @@ Some games are already playable, but many graphics and sounds are faulty.
 Comparatively functioning games are e.g. Donkey Kong Country, Wolfenstein 3D,
 F-Zero and Super Mario World.
 
-- 65816 instruction implementation coverage: ≈87.1%
-- SPC instruction implementation coverage: ≈75.8%
+- 65816 instruction implementation coverage: ≈91.0%
+- SPC instruction implementation coverage: ≈81.6%
 
 ## Usage
 
@@ -56,7 +56,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [x] Sprite support
 - [x] Color math
 - [x] S-DSP echo effect support
-- [ ] S-DSP noise effect support
+- [x] S-DSP noise effect support
 - [ ] Save game to files
 - [ ] SA-1 support
 - [ ] Real gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
