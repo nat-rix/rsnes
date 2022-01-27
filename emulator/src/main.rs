@@ -371,6 +371,8 @@ fn main() {
     let mut next_device_update = Instant::now();
     let mut next_graphics_update = next_device_update;
 
+    let mut focused = true;
+
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
         match ev {
@@ -381,12 +383,13 @@ fn main() {
                     surf_config.height = size.height;
                     surf.configure(&device, &surf_config);
                 }
+                WindowEvent::Focused(focus) => focused = focus,
                 _ => (),
             },
             Event::DeviceEvent { event, .. } => match event {
                 DeviceEvent::Key(KeyboardInput {
                     scancode, state, ..
-                }) => {
+                }) if focused => {
                     use rsnes::controller::buttons;
                     let key: u16 = match scancode {
                         0x24 => buttons::A,
