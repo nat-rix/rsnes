@@ -425,7 +425,7 @@ impl Cartridge {
 
         Ok(Self {
             rom,
-            ram: vec![0x00; ram_size as usize],
+            ram: vec![0xff; ram_size as usize],
             mapping: header.rom_type.to_mapping(),
             header,
         })
