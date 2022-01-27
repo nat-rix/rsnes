@@ -19,7 +19,7 @@ pub trait FrameBuffer {
     fn request_redraw(&mut self);
 }
 
-pub const FRAME_BUFFER_SIZE: usize = (ppu::MAX_SCREEN_HEIGHT * ppu::SCREEN_WIDTH) as usize;
+pub const FRAME_BUFFER_SIZE: usize = (ppu::MAX_SCREEN_HEIGHT_OVERSCAN * ppu::SCREEN_WIDTH) as usize;
 use crate::ppu;
 #[derive(Debug, Clone)]
 pub struct ArrayFrameBuffer(pub [[u8; 4]; FRAME_BUFFER_SIZE], pub bool);

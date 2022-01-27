@@ -7,6 +7,7 @@ use save_state_macro::*;
 pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
 pub const MAX_SCREEN_HEIGHT: u32 = 224;
+pub const MAX_SCREEN_HEIGHT_OVERSCAN: u32 = 239;
 pub const CHIP_5C78_VERSION: u8 = 3;
 
 #[repr(u8)]

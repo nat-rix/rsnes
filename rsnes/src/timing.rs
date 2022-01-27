@@ -137,11 +137,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     }
 
     pub fn vend(&self) -> u16 {
-        if self.ppu.overscan {
-            0xf0
+        (if self.ppu.overscan {
+            crate::ppu::MAX_SCREEN_HEIGHT_OVERSCAN
         } else {
-            (crate::ppu::MAX_SCREEN_HEIGHT + 1) as _
-        }
+            crate::ppu::MAX_SCREEN_HEIGHT
+        } + 1) as _
     }
 
     pub fn scanline_count(&self) -> u16 {
