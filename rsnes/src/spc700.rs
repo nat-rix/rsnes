@@ -1825,7 +1825,8 @@ impl<B: AudioBackend> Spc700<B> {
                 // SBC - (imm) -= imm + CARRY
                 let (val, dst) = (self.load(), self.load());
                 let dst = self.get_small(dst);
-                self.adc(self.read(dst), !val);
+                let res = self.adc(self.read(dst), !val);
+                self.write(dst, res);
             }
             0xba => {
                 // MOVW - YA := (imm)[16-bit]
