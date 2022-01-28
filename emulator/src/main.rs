@@ -226,7 +226,7 @@ fn main() {
         .with_decorations(true)
         .with_visible(true)
         .with_fullscreen(None)
-        .with_resizable(false)
+        .with_resizable(true)
         .with_maximized(false)
         .with_inner_size(size)
         .with_title(env!("CARGO_PKG_NAME"))
@@ -276,6 +276,16 @@ fn main() {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -322,6 +332,12 @@ fn main() {
         anisotropy_clamp: Some(core::num::NonZeroU8::new(1).unwrap()),
         border_color: None,
     });
+    let screen_size_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 4 * 4,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -333,6 +349,10 @@ fn main() {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: screen_size_buffer.as_entire_binding(),
             },
         ],
     });
@@ -372,6 +392,7 @@ fn main() {
     let mut next_graphics_update = next_device_update;
 
     let mut focused = true;
+    let mut update_screen_size = true;
 
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -379,6 +400,9 @@ fn main() {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                 WindowEvent::Resized(size) => {
+                    if surf_config.width != size.width || surf_config.height != size.height {
+                        update_screen_size = true;
+                    }
                     surf_config.width = size.width;
                     surf_config.height = size.height;
                     surf.configure(&device, &surf_config);
@@ -488,6 +512,28 @@ fn main() {
                                 },
                                 texture_extent,
                             );
+                            if core::mem::take(&mut update_screen_size) {
+                                queue.write_buffer(
+                                    &screen_size_buffer,
+                                    0,
+                                    &surf_config.width.to_ne_bytes(),
+                                );
+                                queue.write_buffer(
+                                    &screen_size_buffer,
+                                    4,
+                                    &surf_config.height.to_ne_bytes(),
+                                );
+                                queue.write_buffer(
+                                    &screen_size_buffer,
+                                    8,
+                                    &u32::from(rsnes::ppu::MAX_SCREEN_HEIGHT).to_ne_bytes(),
+                                );
+                                queue.write_buffer(
+                                    &screen_size_buffer,
+                                    12,
+                                    &u32::from(snes.vend() - 1).to_ne_bytes(),
+                                );
+                            }
                         }
 
                         let frame = &surface_texture.texture;
