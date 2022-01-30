@@ -145,38 +145,85 @@ impl save_state::InSaveState for AdsrPeriod {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, InSaveState)]
-pub struct StereoSample {
-    pub l: i16,
-    pub r: i16,
+pub struct StereoSample<T: save_state::InSaveState = i16> {
+    pub l: T,
+    pub r: T,
 }
 
+macro_rules! impl_int_stereo_sample {
+    ($t:ty) => {
+        impl StereoSample<$t> {
+            pub const fn new2(v: $t) -> Self {
+                Self::new(v, v)
+            }
+
+            pub const fn new(l: $t, r: $t) -> Self {
+                Self { l, r }
+            }
+
+            pub fn wrapping_add(self, rhs: Self) -> Self {
+                self.zip_with(rhs, <$t>::wrapping_add)
+            }
+        }
+    };
+}
+
+impl_int_stereo_sample!(i16);
+impl_int_stereo_sample!(i32);
+
 impl StereoSample {
-    pub const fn new(l: i16, r: i16) -> Self {
-        Self { l, r }
+    pub fn to32(self) -> StereoSample<i32> {
+        StereoSample::<i32>::new(self.l.into(), self.r.into())
+    }
+}
+
+impl StereoSample<i32> {
+    pub fn clip16(self) -> StereoSample<i16> {
+        self.map(|c| ((c as u32) & 0xffff) as i16)
     }
 
-    pub const fn new2(v: i16) -> Self {
-        Self::new(v, v)
+    pub fn clamp16(self) -> StereoSample<i16> {
+        self.map(|c| c.clamp(-0x8000, 0x7fff) as i16)
+    }
+}
+
+impl<T: save_state::InSaveState> StereoSample<T> {
+    pub fn map<U: save_state::InSaveState, F: FnMut(T) -> U>(self, mut f: F) -> StereoSample<U> {
+        StereoSample {
+            l: f(self.l),
+            r: f(self.r),
+        }
     }
 
-    pub fn map<F: FnMut(i16) -> i16>(self, mut f: F) -> Self {
-        Self::new(f(self.l), f(self.r))
-    }
-
-    pub fn zip_with<F: FnMut(i16, i16) -> i16>(self, rhs: Self, mut f: F) -> Self {
-        Self::new(f(self.l, rhs.l), f(self.r, rhs.r))
-    }
-
-    pub fn wrapping_add(self, rhs: Self) -> Self {
-        self.zip_with(rhs, i16::wrapping_add)
+    pub fn zip_with<
+        T2: save_state::InSaveState,
+        U: save_state::InSaveState,
+        F: FnMut(T, T2) -> U,
+    >(
+        self,
+        rhs: StereoSample<T2>,
+        mut f: F,
+    ) -> StereoSample<U> {
+        StereoSample {
+            l: f(self.l, rhs.l),
+            r: f(self.r, rhs.r),
+        }
     }
 }
 
 impl core::ops::Add<StereoSample> for StereoSample {
-    type Output = StereoSample;
+    type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
         self.zip_with(rhs, i16::saturating_add)
+    }
+}
+
+impl core::ops::Add<StereoSample<i32>> for StereoSample<i32> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        self.zip_with(rhs, i32::saturating_add)
     }
 }
 
@@ -276,7 +323,7 @@ pub struct Dsp {
     dir_srcn: u16,
     pitch: u16,
     next_brr: u16,
-    adsr: [u8; 2],
+    adsr: u8,
     pitch_modulation: u8,
     output: i16,
     noise_enabled: u8,
@@ -287,7 +334,7 @@ pub struct Dsp {
     echo_index: u16,
     echo_length: u16,
     echo_ring_buf_addr: u8,
-    echo_input: StereoSample,
+    echo_input: StereoSample<i32>,
     next_fade_in: u8,
     envx_buf: u8,
     outx_buf: u8,
@@ -322,7 +369,7 @@ impl Dsp {
             dir_srcn: 0,
             pitch: 0,
             next_brr: 0,
-            adsr: [0; 2],
+            adsr: 0,
             pitch_modulation: 0,
             output: 0,
             noise_enabled: 0,
@@ -333,7 +380,7 @@ impl Dsp {
             echo_index: 0,
             echo_length: 0,
             echo_ring_buf_addr: 0,
-            echo_input: StereoSample::new2(0),
+            echo_input: StereoSample::<i32>::new2(0),
             next_fade_in: 0,
             envx_buf: 0,
             outx_buf: 0,
@@ -345,12 +392,12 @@ impl Dsp {
             fade_in_enable: 0,
             fade_out_enable: 0,
             voices: [Voice::new(); 8],
-            echo_history: [StereoSample::new2(0); 8],
+            echo_history: [StereoSample::<i16>::new2(0); 8],
             echo_history_index: 0,
-            main_sample: StereoSample::new2(0),
-            echo_sample: StereoSample::new2(0),
+            main_sample: StereoSample::<i16>::new2(0),
+            echo_sample: StereoSample::<i16>::new2(0),
 
-            global_output: StereoSample::new2(0),
+            global_output: StereoSample::<i16>::new2(0),
         }
     }
 
@@ -425,7 +472,7 @@ impl Dsp {
         }
         match STEP {
             1 => {
-                self.dir_srcn = u16::from(self.srcn << 2).wrapping_add(u16::from(self.dir) << 8);
+                self.dir_srcn = (u16::from(self.srcn) << 2).wrapping_add(u16::from(self.dir) << 8);
                 self.srcn = vx!(SRCN);
             }
             2 => {
@@ -433,7 +480,7 @@ impl Dsp {
                     .dir_srcn
                     .wrapping_add(if voice!().fade_in > 0 { 0 } else { 2 });
                 self.next_brr = load16(ram, addr);
-                self.adsr[0] = vx!(ADSR1);
+                self.adsr = vx!(ADSR1);
                 self.pitch = vx!(PITCHL).into();
             }
             3 => {
@@ -464,8 +511,10 @@ impl Dsp {
                         };
                         let sample = if shift <= 12 {
                             (i16::from(nibble) << shift) >> 1
+                        } else if nibble < 0 {
+                            -2048
                         } else {
-                            i16::from(nibble >> 3) << 11
+                            0
                         };
 
                         let wsub = |n, s| usize::from(if n >= s { n - s } else { 12 + n - s });
@@ -473,32 +522,23 @@ impl Dsp {
                         let older = voice!().decode_buffer[wsub(voice!().sample_offset, 2)];
                         let sample = (match filter {
                             0 => sample.into(),
-                            0b0100 => (i32::from(sample) + i32::from(old) + (-i32::from(old) >> 4)),
+                            0b0100 => {
+                                i32::from(sample) + i32::from(old >> 1) - (i32::from(old) >> 5)
+                            }
                             0b1000 => {
-                                i32::from(sample)
-                                    + i32::from(old) * 2
-                                    + ((-3 * i32::from(old)) >> 5)
-                                    - i32::from(older)
-                                    + i32::from(older >> 4)
+                                i32::from(sample) + i32::from(old) + ((-3 * i32::from(old)) >> 6)
+                                    - i32::from(older >> 1)
+                                    + i32::from(older >> 5)
                             }
                             0b1100 => {
-                                i32::from(sample)
-                                    + i32::from(old) * 2
-                                    + ((-13 * i32::from(old)) >> 6)
-                                    - i32::from(older)
-                                    + ((i32::from(older) * 3) >> 4)
+                                i32::from(sample) + i32::from(old) + ((-13 * i32::from(old)) >> 7)
+                                    - i32::from(older >> 1)
+                                    + ((i32::from(older) * 3) >> 5)
                             }
                             _ => unreachable!(),
                         })
                         .clamp(-0x8000, 0x7fff) as i16;
-                        // this behaviour is documented by nocash FullSNES
-                        let sample = if sample > 0x3fff {
-                            -0x8000 + sample
-                        } else if sample < -0x4000 {
-                            sample - -0x8000
-                        } else {
-                            sample
-                        };
+                        let sample = ((sample as u16) << 1) as i16;
                         voice!().decode_buffer[usize::from(voice!().sample_offset)] = sample;
                         let so = &mut voice!().sample_offset;
                         *so = if *so > 10 { 0 } else { *so + 1 };
@@ -547,7 +587,7 @@ impl Dsp {
             12 => {
                 if voice != 0 && (self.pitch_modulation >> voice) & 1 > 0 {
                     self.pitch = self.pitch.wrapping_add(
-                        ((i32::from(self.output >> 4) * i32::from(self.pitch)) >> 10) as i16 as u16,
+                        ((i32::from(self.output >> 5) * i32::from(self.pitch)) >> 10) as i16 as u16,
                     );
                 }
                 if voice!().fade_in > 0 {
@@ -606,19 +646,19 @@ impl Dsp {
                         voice!().gain = voice!().gain.saturating_sub(8);
                     } else {
                         let mut gain = voice!().gain as i16;
-                        let rate = if self.adsr[0] & 0x80 > 0 {
+                        let rate = if self.adsr & 0x80 > 0 {
                             // Attack/Decay/Sustain Mode
                             match voice!().period {
                                 AdsrPeriod::Decay | AdsrPeriod::Sustain => {
                                     exp_decrease(&mut gain);
                                     if let AdsrPeriod::Decay = voice!().period {
-                                        ((self.adsr[0] >> 3) & 0xe) | 0x10
+                                        ((self.adsr >> 3) & 0xe) | 0x10
                                     } else {
                                         vx!(ADSR2) & 0x1f
                                     }
                                 }
                                 AdsrPeriod::Attack => {
-                                    let rate = ((self.adsr[0] & 0xf) << 1) | 1;
+                                    let rate = ((self.adsr & 0xf) << 1) | 1;
                                     gain = gain.saturating_add(if rate == 31 { 1024 } else { 32 });
                                     rate
                                 }
@@ -643,7 +683,7 @@ impl Dsp {
                                     }
                                     0x60 => {
                                         // Bent Increase
-                                        let d = if voice!().prev_gain >= 0x6000 { 8 } else { 32 };
+                                        let d = if voice!().prev_gain >= 0x600 { 8 } else { 32 };
                                         gain = gain.saturating_add(d)
                                     }
                                     _ => unreachable!(),
@@ -656,7 +696,7 @@ impl Dsp {
                             }
                         };
                         if let AdsrPeriod::Decay = voice!().period {
-                            let boundary = if self.adsr[0] & 0x80 > 0 {
+                            let boundary = if self.adsr & 0x80 > 0 {
                                 vx!(ADSR2)
                             } else {
                                 vx!(GAIN)
@@ -680,10 +720,10 @@ impl Dsp {
         }
     }
 
-    pub fn get_fir<const I: u8>(&self) -> StereoSample {
+    pub fn get_fir<const I: u8>(&self) -> StereoSample<i32> {
         let fir = i32::from(self.mem[usize::from(regs::FIR | (I << 4))] as i8);
         self.echo_history[usize::from(self.echo_history_index.wrapping_add(I + 1) & 7)]
-            .map(|c| (((i32::from(c) * fir) >> 6) as u32 & 0xffff) as i16)
+            .map(|c| (i32::from(c) * fir) >> 6)
     }
 
     pub fn run_one_step(&mut self, ram: &mut [u8; MEMORY_SIZE]) {
@@ -780,15 +820,18 @@ impl Dsp {
             }
             25 => {
                 step!(0[11], 7[9]);
-                self.echo_input =
-                    self.echo_input.wrapping_add(self.get_fir::<6>()) + self.get_fir::<7>();
+                self.echo_input = ((self.echo_input + self.get_fir::<6>()).clip16().to32()
+                    + self.get_fir::<7>().clip16().to32())
+                .clamp16()
+                .to32();
             }
             26 => {
                 self.main_sample.l = calculate_echo!(left);
 
                 let efb = i32::from(reg!(EFB) as i8);
-                self.echo_sample =
-                    self.echo_sample + self.echo_input.map(|c| ((i32::from(c) * efb) >> 7) as i16);
+                self.echo_sample = (self.echo_sample.to32()
+                    + self.echo_input.map(|c| (c * efb) >> 7).clip16().to32())
+                .clamp16();
             }
             27 => {
                 self.pitch_modulation = reg!(PMON);
@@ -797,7 +840,7 @@ impl Dsp {
                 let out = take(&mut self.main_sample);
 
                 self.global_output = if reg!(FLG) & 0x40 > 0 {
-                    StereoSample::new2(0)
+                    StereoSample::<i16>::new2(0)
                 } else {
                     out
                 };
@@ -834,7 +877,7 @@ impl Dsp {
                 if self.counter.is_triggered(reg!(FLG) & 0x1f) {
                     self.noise = (((self.noise ^ (self.noise >> 1)) & 1) << 14) ^ (self.noise >> 1);
                 }
-                step!(0[12], 7[9]);
+                step!(0[12]);
                 echo_to_ram!(right);
             }
             31 => step!(0[4], 2[1]),
