@@ -10,6 +10,12 @@ pub const MAX_SCREEN_HEIGHT: u32 = 224;
 pub const MAX_SCREEN_HEIGHT_OVERSCAN: u32 = 239;
 pub const CHIP_5C78_VERSION: u8 = 3;
 
+// TODO: Check the exact value of this.
+// wiki.superfamicom.org/timing states that
+// when we disable Force Blank mid-scanline,
+// there is garbage for about 16-24 pixels.
+pub const RAY_AHEAD_CYCLES: u16 = 20 * 4;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum BgModeNum {
@@ -1204,9 +1210,6 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     }
 
     pub fn draw_line(&mut self, y: u16) {
-        if y == 0 {
-            return;
-        }
         let m7_precalc = if let BgModeNum::Mode7 = self.bg_mode.num {
             let y = (y & 0xff) as u8;
             let y = if self.mode7_settings.y_mirror { !y } else { y };

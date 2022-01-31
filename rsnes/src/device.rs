@@ -154,6 +154,7 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) memory_cycles: Cycles,
     pub(crate) cpu_ahead_cycles: i32,
     pub(crate) new_scanline: bool,
+    pub(crate) scanline_drawn: bool,
     pub new_frame: bool,
     pub(crate) do_hdma: bool,
     // multiplied by 4
@@ -183,6 +184,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             cpu_ahead_cycles: 186,
             new_scanline: true,
             new_frame: true,
+            scanline_drawn: false,
             do_hdma: true,
             irq_time_h: 0x7fc,
             irq_time_v: 0x1ff,
@@ -219,7 +221,8 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
     pub fn read<D: Data>(&mut self, addr: Addr24) -> D {
         let value = self.read_data::<D>(addr);
         self.open_bus = value.to_open_bus();
-        self.memory_cycles += self.get_memory_cycle(addr) * core::mem::size_of::<D::Arr>() as u32;
+        self.memory_cycles +=
+            (self.get_memory_cycle(addr) - 6) * core::mem::size_of::<D::Arr>() as u32;
         value
     }
 
@@ -228,7 +231,8 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
     pub fn write<D: Data>(&mut self, addr: Addr24, value: D) {
         self.open_bus = value.to_open_bus();
         self.write_data(addr, value);
-        self.memory_cycles += self.get_memory_cycle(addr) * core::mem::size_of::<D::Arr>() as u32;
+        self.memory_cycles +=
+            (self.get_memory_cycle(addr) - 6) * core::mem::size_of::<D::Arr>() as u32;
     }
 
     /// Push data on the stack

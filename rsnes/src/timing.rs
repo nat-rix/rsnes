@@ -20,9 +20,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     pub fn run_cycle<const N: u16>(&mut self) {
         self.smp.tick(N);
         let vend = self.vend();
-        if self.new_scanline && self.ppu.scanline_nr < vend {
-            self.ppu.draw_line(self.ppu.scanline_nr)
-        }
         if self.is_auto_joypad() && self.new_scanline && self.ppu.scanline_nr == vend + 2 {
             self.controllers.auto_joypad_timer = 4224;
             self.controllers.auto_joypad()
@@ -54,6 +51,13 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.new_scanline && self.ppu.scanline_nr == vend {
             self.ppu.vblank();
         }
+        if !self.scanline_drawn
+            && self.ppu.scanline_nr + 1 < vend
+            && self.ppu.scanline_cycle + crate::ppu::RAY_AHEAD_CYCLES >= self.get_line_length()
+        {
+            self.scanline_drawn = true;
+            self.ppu.draw_line(self.ppu.scanline_nr + 1)
+        }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
         self.shall_irq = self.shall_irq
@@ -83,6 +87,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.ppu.scanline_nr += 1;
             self.do_hdma = true;
             self.new_scanline = true;
+            self.scanline_drawn = false;
             let scanline_count = self.scanline_count();
             // Test if one frame completed
             // TODO: Take notice of the interlace mode
@@ -175,24 +180,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         (match addr.bank {
             0x00..=0x3f => match addr.addr {
                 0x0000..=0x1fff => Slow,
-                0x2000..=0x20ff => Fast,
-                0x2100..=0x21ff => Fast,
-                0x2200..=0x3fff => Fast,
+                0x2000..=0x3fff => Fast,
                 0x4000..=0x41ff => XSlow,
-                0x4200..=0x43ff => Fast,
-                0x4400..=0x5fff => Fast,
-                0x6000..=0x7fff => Slow,
-                0x8000..=0xffff => Slow,
+                0x4200..=0x5fff => Fast,
+                0x6000..=0xffff => Slow,
             },
             0x40..=0x7f => Slow,
             0x80..=0xbf => match addr.addr {
                 0x0000..=0x1fff => Slow,
-                0x2000..=0x20ff => Fast,
-                0x2100..=0x21ff => Fast,
-                0x2200..=0x3fff => Fast,
+                0x2000..=0x3fff => Fast,
                 0x4000..=0x41ff => XSlow,
-                0x4200..=0x43ff => Fast,
-                0x4400..=0x5fff => Fast,
+                0x4200..=0x5fff => Fast,
                 0x6000..=0x7fff => Slow,
                 0x8000..=0xffff => romaccess!(),
             },
