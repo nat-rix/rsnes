@@ -8,11 +8,11 @@ use crate::timing::Cycles;
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        7, 6, 7, 4, 5, 3, 5, 6,   3, 2, 2, 4, 6, 4, 6, 5,  // 0^
-       2, 0, 5, 0, 5, 4, 6, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
-       6, 0, 8, 4, 3, 3, 5, 6,   4, 2, 2, 5, 4, 4, 6, 5,  // 2^
-       2, 0, 0, 7, 4, 4, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
-       6, 0, 0, 0, 1, 3, 5, 0,   3, 2, 2, 3, 3, 4, 6, 5,  // 4^
-       2, 0, 0, 0, 1, 4, 0, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
+       2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
+       6, 6, 8, 4, 3, 3, 5, 6,   4, 2, 2, 5, 4, 4, 6, 5,  // 2^
+       2, 5, 5, 7, 4, 4, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
+       6, 6, 2, 4, 1, 3, 5, 6,   3, 2, 2, 3, 3, 4, 6, 5,  // 4^
+       2, 5, 5, 7, 1, 4, 0, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
        6, 0, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
        2, 5, 5, 7, 4, 4, 6, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
@@ -439,9 +439,35 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // BPL - Branch if Plus
                 self.branch_near(!self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
             }
+            0x11 => {
+                // ORA - Or A with DP Indirect Indexed, Y
+                let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) | self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a |= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x12 => {
                 // ORA - Or A with DP Indirect
                 let addr = self.load_dp_indirect(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) | self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a |= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x13 => {
+                // ORA - Or A with SR Indirect Indexed, Y
+                let addr = self.load_sr_indirect_indexed_y();
                 if self.cpu.is_reg8() {
                     let val = self.read::<u8>(addr) | self.cpu.regs.a8();
                     self.cpu.regs.set_a8(val);
@@ -611,6 +637,19 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 let new_addr = self.load::<u16>();
                 self.cpu.regs.pc.addr = new_addr;
             }
+            0x21 => {
+                // AND - And A with DP Indexed Indirect, X
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x22 => {
                 // JSR/JSL - Jump to Subroutine Long
                 self.push(start_addr.bank);
@@ -777,6 +816,32 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // BMI - Branch if Negative Flag set
                 self.branch_near(self.cpu.regs.status.has(Status::NEGATIVE), &mut cycles)
             }
+            0x31 => {
+                // AND - And A with DP Indirect Indexed, Y
+                let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x32 => {
+                // AND - And A with DP Indirect
+                let addr = self.load_dp_indirect(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x33 => {
                 // AND - And A with SR Indirect Indexed, Y
                 let addr = self.load_sr_indirect_indexed_y();
@@ -901,6 +966,36 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x41 => {
+                // EOR - XOR DP Indexed Indirect, X on A
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x42 => {
+                // WDM - a worse NOP
+                let _ = self.load::<u8>();
+            }
+            0x43 => {
+                // EOR - XOR SR on A
+                let addr = self.load_stack_relative();
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x44 => {
                 // MVP - Block Move Positive
                 self.block_move::<0xffff>()
@@ -934,6 +1029,19 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.write(addr, val);
                     self.cpu.update_nz16(val);
                     cycles += 2
+                }
+            }
+            0x47 => {
+                // EOR - XOR DP Indirect Long on A
+                let addr = self.load_dp_indirect_long(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
                 }
             }
             0x48 => {
@@ -1031,6 +1139,45 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x50 => {
                 // BVC - Branch if Overflow is set
                 self.branch_near(!self.cpu.regs.status.has(Status::OVERFLOW), &mut cycles)
+            }
+            0x51 => {
+                // EOR - XOR DP Indirect Indexed, Y on A
+                let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x52 => {
+                // EOR - XOR DP Indirect on A
+                let addr = self.load_dp_indirect(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
+            0x53 => {
+                // EOR - XOR DP Indirect on A
+                let addr = self.load_sr_indirect_indexed_y();
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) ^ self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a ^= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
             }
             0x54 => {
                 // MVN - Block Move Negative
