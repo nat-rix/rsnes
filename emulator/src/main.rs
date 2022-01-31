@@ -29,6 +29,8 @@ struct Options {
     input: PathBuf,
     #[clap(short, long)]
     verbose: bool,
+    #[clap(long)]
+    disable_threading: bool,
 }
 
 macro_rules! error {
@@ -51,7 +53,6 @@ fn cartridge_from_file(path: &std::path::Path) -> rsnes::cartridge::Cartridge {
 
 struct AudioBackend {
     producer: ringbuf::Producer<i16>,
-    _stream: cpal::platform::Stream,
 }
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(32000);
@@ -104,7 +105,7 @@ impl AudioBackend {
             .map(|stream| (stream, producer))
     }
 
-    fn new() -> Option<Self> {
+    fn new() -> Option<(Self, cpal::platform::Stream)> {
         let host = cpal::available_hosts()
             .into_iter()
             .find_map(|id| cpal::host_from_id(id).ok())
@@ -146,10 +147,7 @@ impl AudioBackend {
         };
         let (stream, producer) = create_stream(&device, &cfg).ok()?;
         stream.play().ok()?;
-        Some(Self {
-            producer,
-            _stream: stream,
-        })
+        Some((Self { producer }, stream))
     }
 }
 
@@ -210,10 +208,13 @@ fn main() {
             if is_pal { "PAL" } else { "NTSC" }
         );
     }
+    let (audio_backend, _audio_stream) =
+        AudioBackend::new().unwrap_or_else(|| error!("Failed finding an audio output device"));
     let mut snes = Device::new(
-        AudioBackend::new().unwrap_or_else(|| error!("Failed finding an audio output device")),
+        audio_backend,
         ArrayFrameBuffer([[0; 4]; rsnes::backend::FRAME_BUFFER_SIZE], true),
         is_pal,
+        !options.disable_threading,
     );
     snes.load_cartridge(cartridge);
 

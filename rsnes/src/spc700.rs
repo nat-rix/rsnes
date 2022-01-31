@@ -6,10 +6,7 @@
 //! - <https://emudev.de/q00-snes/spc700-the-audio-processor/>
 //! - The first of the two official SNES documentation books
 
-use crate::{
-    backend::AudioBackend,
-    timing::{Cycles, APU_CPU_TIMING_PROPORTION_NTSC, APU_CPU_TIMING_PROPORTION_PAL},
-};
+use crate::timing::Cycles;
 use core::{cell::Cell, mem::take};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
@@ -889,15 +886,13 @@ impl Dsp {
 }
 
 #[derive(Debug, Clone, InSaveState)]
-pub struct Spc700<B: AudioBackend> {
+pub struct Spc700 {
     mem: [u8; MEMORY_SIZE],
     /// data, the main processor sends to us
     pub input: [u8; 4],
     /// data, we send to the main processor
     pub output: [u8; 4],
     dsp: Dsp,
-    #[except((|_v, _s| ()), (|_v, _s| ()))]
-    pub backend: B,
 
     a: u8,
     x: u8,
@@ -912,13 +907,11 @@ pub struct Spc700<B: AudioBackend> {
     timer_enable: u8,
     counters: [Cell<u8>; 3],
     dispatch_counter: u16,
-    pub(crate) master_cycles: Cycles,
     cycles_ahead: Cycles,
-    timing_proportion: (Cycles, Cycles),
 }
 
-impl<B: AudioBackend> Spc700<B> {
-    pub fn new(backend: B, is_pal: bool) -> Self {
+impl Default for Spc700 {
+    fn default() -> Self {
         const fn generate_power_up_memory() -> [u8; MEMORY_SIZE] {
             let mut mem = [0; MEMORY_SIZE];
             mem[0xf0] = F0_RESET;
@@ -930,7 +923,6 @@ impl<B: AudioBackend> Spc700<B> {
             input: [0; 4],
             output: [0; 4],
             dsp: Dsp::new(),
-            backend,
             a: 0,
             x: 0,
             y: 0,
@@ -943,16 +935,12 @@ impl<B: AudioBackend> Spc700<B> {
             timer_enable: 0,
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
             dispatch_counter: 0,
-            master_cycles: 0,
             cycles_ahead: 2,
-            timing_proportion: if is_pal {
-                APU_CPU_TIMING_PROPORTION_PAL
-            } else {
-                APU_CPU_TIMING_PROPORTION_NTSC
-            },
         }
     }
+}
 
+impl Spc700 {
     pub fn reset(&mut self) {
         self.mem[0xf0] = F0_RESET;
         self.input = [0; 4];
@@ -2240,19 +2228,6 @@ impl<B: AudioBackend> Spc700<B> {
         res
     }
 
-    /// Tick in main CPU master cycles
-    pub fn tick(&mut self, n: u16) {
-        self.master_cycles += Cycles::from(n) * self.timing_proportion.1;
-    }
-
-    pub fn refresh(&mut self) {
-        let cycles = self.master_cycles / self.timing_proportion.0;
-        self.master_cycles %= self.timing_proportion.0;
-        for _ in 0..cycles {
-            self.run_cycle();
-        }
-    }
-
     pub fn update_timer(&mut self, i: usize) {
         if self.timer_enable & (1 << i) > 0 {
             self.timers[i] = self.timers[i].wrapping_add(1);
@@ -2263,15 +2238,16 @@ impl<B: AudioBackend> Spc700<B> {
         }
     }
 
-    pub fn run_cycle(&mut self) {
+    pub fn run_cycle(&mut self) -> Option<StereoSample> {
         if self.cycles_ahead == 0 {
             self.cycles_ahead = self.dispatch_instruction().max(1);
         }
         self.cycles_ahead -= 1;
         self.dsp.run_one_step(&mut self.mem);
+        let mut output = None;
         if self.dispatch_counter & 0xf == 0 {
             if self.dispatch_counter & 0x1f == 0 {
-                self.backend.push_sample(self.dsp.global_output);
+                output = Some(self.dsp.global_output);
                 if self.dispatch_counter & 0x7f == 0 {
                     self.update_timer(0);
                     self.update_timer(1);
@@ -2280,5 +2256,6 @@ impl<B: AudioBackend> Spc700<B> {
             self.update_timer(2);
         }
         self.dispatch_counter = self.dispatch_counter.wrapping_add(1);
+        output
     }
 }

@@ -1,7 +1,7 @@
 mod audio {
     use crate::spc700::StereoSample;
 
-    pub trait AudioBackend {
+    pub trait AudioBackend: Send + 'static {
         fn push_sample(&mut self, sample: StereoSample);
     }
     pub struct Dummy;

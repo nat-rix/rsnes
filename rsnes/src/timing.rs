@@ -18,7 +18,7 @@ pub(crate) const APU_CPU_TIMING_PROPORTION_PAL: (Cycles, Cycles) = (665, 32);
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn run_cycle<const N: u16>(&mut self) {
-        self.spc.tick(N);
+        self.smp.tick(N);
         let vend = self.vend();
         if self.new_scanline && self.ppu.scanline_nr < vend {
             self.ppu.draw_line(self.ppu.scanline_nr)
@@ -91,7 +91,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.new_frame = true;
                 self.nmi_vblank_bit.set(false);
                 self.ppu.field ^= true;
-                self.spc.refresh();
+                self.smp.refresh();
+            } else if self.smp.is_threaded() {
+                // if the S-SMP is threaded, refresh it every scanline
+                self.smp.refresh();
             }
         }
     }

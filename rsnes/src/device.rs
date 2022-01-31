@@ -8,7 +8,7 @@ use crate::{
     dma::Dma,
     ppu::Ppu,
     registers::MathRegisters,
-    spc700::Spc700,
+    smp::Smp,
     timing::Cycles,
 };
 use core::cell::Cell;
@@ -139,10 +139,10 @@ impl Data for Addr24 {
     }
 }
 
-#[derive(Debug, Clone, InSaveState)]
+#[derive(Debug, InSaveState)]
 pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) cpu: Cpu,
-    pub spc: Spc700<B>,
+    pub smp: Smp<B>,
     pub ppu: Ppu<FB>,
     pub(crate) dma: Dma,
     pub controllers: ControllerPorts,
@@ -168,10 +168,10 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
 }
 
 impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
-    pub fn new(audio_backend: B, frame_buffer: FB, is_pal: bool) -> Self {
+    pub fn new(audio_backend: B, frame_buffer: FB, is_pal: bool, is_threaded: bool) -> Self {
         Self {
             cpu: Cpu::new(),
-            spc: Spc700::new(audio_backend, is_pal),
+            smp: Smp::new(audio_backend, is_pal, is_threaded),
             ppu: Ppu::new(frame_buffer, is_pal),
             dma: Dma::new(),
             controllers: ControllerPorts::new(),
@@ -298,8 +298,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                 0x34..=0x3f => self.ppu.read_register(addr).unwrap_or(self.open_bus),
                 0x40..=0x7f => {
                     // APU Ports 2140h-2143h are mirrored to 2144h..217Fh
-                    self.spc.refresh();
-                    self.spc.output[(addr & 3) as usize]
+                    self.smp.read_output_port(addr)
                 }
                 0x80 => {
                     let res = self.ram[self.wram_addr.get() as usize];
@@ -380,10 +379,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             let addr = addr.wrapping_add(i as u8);
             match addr {
                 0x00..=0x33 => self.ppu.write_register(addr, *d),
-                0x40..=0x7f => {
-                    self.spc.refresh();
-                    self.spc.input[(addr & 0b11) as usize] = *d
-                }
+                0x40..=0x7f => self.smp.write_input_port(addr, *d),
                 0x80 => {
                     self.ram[(self.wram_addr.get() & 0x1ffff) as usize] = *d;
                     self.increment_wram_addr();
