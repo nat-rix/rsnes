@@ -3,6 +3,7 @@ use crate::{
     spc700::Spc700,
     timing::{Cycles, APU_CPU_TIMING_PROPORTION_NTSC, APU_CPU_TIMING_PROPORTION_PAL},
 };
+use save_state::{InSaveState, SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::InSaveState;
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 
@@ -18,7 +19,15 @@ enum ThreadCommand {
         cycles: Cycles,
         action: Option<Action>,
     },
+    SaveState(Box<Spc700>),
+    GetSaveState,
     KillMe,
+}
+
+#[derive(Debug, Clone)]
+enum MainCommand {
+    Data(u8),
+    SaveState(Box<Spc700>),
 }
 
 type ReturnType = Result<(), RecvError>;
@@ -27,7 +36,7 @@ type ReturnType = Result<(), RecvError>;
 struct Thread {
     join_handle: Option<std::thread::JoinHandle<ReturnType>>,
     send: Sender<ThreadCommand>,
-    recv: Receiver<u8>,
+    recv: Receiver<MainCommand>,
 }
 
 #[derive(Debug, InSaveState)]
@@ -35,7 +44,7 @@ pub struct Smp<B: Backend> {
     pub spc: Option<Spc700>,
     #[except((|_v, _s| ()), (|_v, _s| ()))]
     pub backend: Option<B>,
-    #[except((|_v, _s| ()), (|_v, _s| ()))]
+    #[except(Self::serialize_save_state, Self::deserialize_save_state)]
     thread: Option<Thread>,
     timing_proportion: (Cycles, Cycles),
     master_cycles: Cycles,
@@ -44,7 +53,7 @@ pub struct Smp<B: Backend> {
 fn threaded_spc<B: Backend>(
     mut spc: Spc700,
     mut backend: B,
-    send: Sender<u8>,
+    send: Sender<MainCommand>,
     recv: Receiver<ThreadCommand>,
 ) -> ReturnType {
     loop {
@@ -62,10 +71,14 @@ fn threaded_spc<B: Backend>(
                         spc.input[usize::from(addr & 3)] = data
                     }
                     Some(Action::ReadOutputPort { addr }) => {
-                        let _ = send.send(spc.output[usize::from(addr & 3)]);
+                        let _ = send.send(MainCommand::Data(spc.output[usize::from(addr & 3)]));
                     }
                     None => (),
                 }
+            }
+            ThreadCommand::SaveState(new_spc) => spc = *new_spc,
+            ThreadCommand::GetSaveState => {
+                let _ = send.send(MainCommand::SaveState(Box::new(spc.clone())));
             }
             ThreadCommand::KillMe => break Ok(()),
         }
@@ -150,7 +163,10 @@ impl<B: Backend> Smp<B> {
                 action: Some(Action::ReadOutputPort { addr }),
             });
             // TODO: dont unwrap, make it more elegant
-            thread.recv.recv().unwrap()
+            match thread.recv.recv().unwrap() {
+                MainCommand::Data(d) => d,
+                _ => panic!(),
+            }
         } else {
             unreachable!()
         }
@@ -173,6 +189,27 @@ impl<B: Backend> Smp<B> {
 
     pub fn is_threaded(&self) -> bool {
         self.thread.is_some()
+    }
+
+    fn serialize_save_state(thread: &Option<Thread>, ser: &mut SaveStateSerializer) {
+        // TODO: do not unwrap
+        if let Some(thread) = thread {
+            thread.send.send(ThreadCommand::GetSaveState).unwrap();
+            match thread.recv.recv().unwrap() {
+                MainCommand::SaveState(new_spc) => {
+                    new_spc.serialize(ser);
+                }
+                _ => panic!(),
+            }
+        }
+    }
+
+    fn deserialize_save_state(thread: &mut Option<Thread>, deser: &mut SaveStateDeserializer) {
+        if let Some(thread) = thread {
+            let mut spc = Spc700::default();
+            spc.deserialize(deser);
+            let _ = thread.send.send(ThreadCommand::SaveState(Box::new(spc)));
+        }
     }
 }
 
