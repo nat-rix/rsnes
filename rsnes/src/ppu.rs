@@ -560,6 +560,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 self.latch();
                 None
             }
+            0x38 => {
+                // RDOAM - Read OAM
+                Some(self.oam.read())
+            }
             0x39 | 0x3a => {
                 // VMDATALREAD / VMDATAHREAD
                 let is_second = id == 0x3a;

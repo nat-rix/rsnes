@@ -34,6 +34,20 @@ impl Object {
         self.x = ((self.x as u16 & 0xff) | (0u16.wrapping_sub((val & 1).into()) & 0xff00)) as i16;
         self.is_large = val & 2 > 0;
     }
+
+    pub fn read_low(&self, addr: u16) -> u8 {
+        match addr & 3 {
+            0 => (self.x & 0xff) as u8,
+            1 => self.y,
+            2 => self.tile_nr,
+            3 => self.attrs,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn read_high(&self) -> u8 {
+        ((self.x >= 0x100) as u8) | ((self.is_large as u8) << 1)
+    }
 }
 
 #[derive(Debug, Clone, InSaveState)]
@@ -93,6 +107,20 @@ impl Oam {
                 self.stashed_write,
                 value,
             );
+        }
+    }
+
+    pub fn read(&mut self) -> u8 {
+        let addr = self.addr_inc;
+        self.addr_inc = self.addr_inc.wrapping_add(1);
+        if addr > 0x1ff {
+            let i = usize::from((addr & 31) << 2);
+            self.objs[i].read_high()
+                | (self.objs[i | 1].read_high() << 2)
+                | (self.objs[i | 1].read_high() << 4)
+                | (self.objs[i | 1].read_high() << 6)
+        } else {
+            self.objs[usize::from(addr >> 2)].read_low(addr)
         }
     }
 }
