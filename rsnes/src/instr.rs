@@ -2901,8 +2901,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xfc => {
                 // JSR - Jump to Subroutine
-                self.push(start_addr.addr.wrapping_add(2));
                 let addr = self.load_indexed_indirect();
+                self.push(start_addr.addr.wrapping_add(2));
                 self.cpu.regs.pc = addr;
             }
             0xfd => {

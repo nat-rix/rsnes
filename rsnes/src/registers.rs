@@ -67,7 +67,7 @@ impl MathRegisters {
 }
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
-    pub fn read_internal_register(&self, id: u16) -> Option<u8> {
+    pub fn read_internal_register(&mut self, id: u16) -> Option<u8> {
         match id {
             0x4016 => {
                 // JOYSER0 - NES-style Joypad access
@@ -88,6 +88,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0x4211 => {
                 // TIMEUP - The IRQ flag
+                self.shall_irq = false;
                 Some(self.irq_bit.take() | (self.open_bus & 0x7f))
             }
             0x4212 => {

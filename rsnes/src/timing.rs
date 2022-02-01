@@ -4,8 +4,10 @@
 //!
 //! - <https://wiki.superfamicom.org/timing>
 
-use crate::device::{Addr24, Device};
-use core::mem::replace;
+use crate::{
+    cpu::Status,
+    device::{Addr24, Device},
+};
 
 pub type Cycles = u32;
 
@@ -119,23 +121,22 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         let needs_refresh = self.cpu_ahead_cycles <= 0;
         self.cpu_ahead_cycles -= i32::from(N);
         if needs_refresh {
+            // > WAI/HALT stops the CPU until an exception (usually an IRQ or NMI) request occurs
+            // > in case of IRQs this works even if IRQs are disabled (via I=1).
+            // source: FullSNES
+            if self.cpu.wait_mode {
+                self.cpu.wait_mode = !self.shall_nmi && !self.shall_irq;
+                self.cpu_ahead_cycles += 1;
+                return;
+            }
             self.memory_cycles = 0;
             let cycles = (if self.shall_nmi {
-                if replace(&mut self.cpu.wait_mode, false) {
-                    return;
-                }
                 self.shall_nmi = false;
                 self.nmi()
-            } else if self.shall_irq {
-                if replace(&mut self.cpu.wait_mode, false) {
-                    return;
-                }
+            } else if self.shall_irq && !self.cpu.regs.status.has(Status::IRQ_DISABLE) {
                 self.shall_irq = false;
                 self.irq()
             } else {
-                if self.cpu.wait_mode {
-                    return;
-                }
                 // > Internal operation CPU cycles always take 6 master cycles
                 // source: <https://wiki.superfamicom.org/memory-mapping>
                 self.dispatch_instruction() * 6
