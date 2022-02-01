@@ -227,20 +227,36 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         self.cpu.get_data_addr(addr.wrapping_add(y))
     }
 
+    pub fn interrupt_instruction<
+        const NATIVE_VECTOR: u16,
+        const EMULATION_VECTOR: u16,
+        const BREAK_FLAG: bool,
+    >(
+        &mut self,
+        cycles: &mut Cycles,
+    ) {
+        let _ = self.load::<u8>();
+        let (pushed_status, vector) = if !self.cpu.regs.is_emulation {
+            *cycles += 1;
+            self.push(self.cpu.regs.pc.bank);
+            (0, NATIVE_VECTOR)
+        } else if BREAK_FLAG {
+            (Status::BREAK.0, EMULATION_VECTOR)
+        } else {
+            (0, EMULATION_VECTOR)
+        };
+        self.push(self.cpu.regs.pc.addr);
+        self.push(self.cpu.regs.status.0 | pushed_status);
+        self.cpu.regs.status = (self.cpu.regs.status | Status::IRQ_DISABLE) & !Status::DECIMAL;
+        self.cpu.regs.pc = Addr24::new(0, self.read(Addr24::new(0, vector)));
+    }
+
     pub fn dispatch_instruction_with(&mut self, start_addr: Addr24, op: u8) -> Cycles {
         let mut cycles = CYCLES[op as usize];
         match op {
             0x00 => {
                 // BRK - Break
-                self.push(self.cpu.regs.pc.bank);
-                self.push(self.cpu.regs.pc.addr.wrapping_add(1));
-                self.push(self.cpu.regs.status.0);
-                self.cpu.regs.status =
-                    (self.cpu.regs.status | Status::IRQ_DISABLE) & !Status::DECIMAL;
-                if !self.cpu.regs.is_emulation {
-                    cycles += 1
-                }
-                self.cpu.regs.pc = Addr24::new(0, self.read(Addr24::new(0, 0xffe6)));
+                self.interrupt_instruction::<0xffe6, 0xfffe, true>(&mut cycles)
             }
             0x01 => {
                 // ORA - Or A with DP Indexed Indirect, X
@@ -257,11 +273,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0x02 => {
                 // COP - Co-Processor Enable
-                #[allow(unused_assignments)]
-                if !self.cpu.regs.is_emulation {
-                    cycles += 1
-                }
-                todo!("COP instruction")
+                self.interrupt_instruction::<0xffe4, 0xfff4, false>(&mut cycles)
             }
             0x03 => {
                 // ORA - Or A with Stack Relative
