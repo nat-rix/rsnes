@@ -98,6 +98,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.new_frame = true;
                 self.nmi_vblank_bit.set(false);
                 self.ppu.field ^= true;
+                self.ppu.end_vblank();
                 self.smp.refresh();
             } else if self.smp.is_threaded() {
                 // if the S-SMP is threaded, refresh it every scanline

@@ -118,7 +118,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // DMA Registers
                 self.dma.read(id)
             }
-            0x4200..=0x420f => None,
+            0x4000..=0x4015 | 0x4200..=0x420f => None,
             _ => todo!("internal register 0x{:04x} read", id),
         }
     }

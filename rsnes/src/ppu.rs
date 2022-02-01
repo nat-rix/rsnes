@@ -8,6 +8,7 @@ pub const VRAM_SIZE: usize = 0x8000;
 pub const SCREEN_WIDTH: u32 = 256;
 pub const MAX_SCREEN_HEIGHT: u32 = 224;
 pub const MAX_SCREEN_HEIGHT_OVERSCAN: u32 = 239;
+pub const CHIP_5C77_VERSION: u8 = 1;
 pub const CHIP_5C78_VERSION: u8 = 3;
 
 // TODO: Check the exact value of this.
@@ -477,6 +478,7 @@ pub struct Ppu<FB: crate::backend::FrameBuffer> {
     tile_adr: [u16; 2],
     counter_latch: [(u16, bool); 2],
     counter_latch_occured: bool,
+    overflow_flags: u8,
     open_bus1: u8,
     open_bus2: u8,
     is_pal: bool,
@@ -527,6 +529,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             tile_adr: [0; 2],
             counter_latch: Default::default(),
             counter_latch_occured: false,
+            overflow_flags: 0,
             open_bus1: 0,
             open_bus2: 0,
             is_pal,
@@ -536,6 +539,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     /// Read from a PPU register (memory map 0x2134..=0x213f)
     pub fn read_register(&mut self, id: u8) -> Option<u8> {
         match id {
+            0x3e => {
+                // STAT77
+                self.open_bus1 = self.overflow_flags | (self.open_bus1 & 0x10) | CHIP_5C77_VERSION;
+                Some(self.open_bus1)
+            }
             0x3f => {
                 // STAT78
                 // TODO: support interlace
@@ -835,6 +843,12 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         self.counter_latch_occured = true;
     }
 
+    pub fn end_vblank(&mut self) {
+        if !self.force_blank {
+            self.overflow_flags = 0;
+        }
+    }
+
     fn get_vram_word(&self, index: u16) -> u16 {
         self.vram[usize::from(self.remap_mode.remap(index) & 0x7fff)]
     }
@@ -1018,7 +1032,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         .into()
     }
 
-    fn get_sprite_buffers(&self, y: u16) -> [u16; 0x100] {
+    fn get_sprite_buffers(&mut self, y: u16) -> [u16; 0x100] {
         let mut buffer = [0; 0x100];
         let offset = if self.oam.priority {
             ((self.oam.addr_inc & 0xff) as u8) >> 1
@@ -1035,6 +1049,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             {
                 sprites_per_line += 1;
                 if sprites_per_line > 32 {
+                    self.overflow_flags |= 0x40;
                     break;
                 }
                 let sx3 = obj.x >> 3;
@@ -1051,6 +1066,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 {
                     tiles += 1;
                     if tiles > 34 {
+                        self.overflow_flags |= 0x80;
                         break 'sprite_loop;
                     }
                     let fx = if obj.attrs & 0x40 > 0 {
