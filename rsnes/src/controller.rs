@@ -103,7 +103,6 @@ impl StandardController {
 #[derive(Debug, Clone, InSaveState)]
 pub struct ControllerPort {
     pub controller: Controller,
-    pio: bool,
     strobe: bool,
     data1: u16,
     data2: u16,
@@ -113,7 +112,6 @@ impl ControllerPort {
     pub const fn new(controller: Controller) -> Self {
         Self {
             controller,
-            pio: false,
             strobe: false,
             data1: 0,
             data2: 0,
@@ -138,6 +136,7 @@ impl ControllerPort {
 pub struct ControllerPorts {
     pub port1: ControllerPort,
     pub port2: ControllerPort,
+    pio: u8,
     pub(crate) auto_joypad_timer: u16,
 }
 
@@ -146,6 +145,7 @@ impl ControllerPorts {
         Self {
             port1: ControllerPort::new(Controller::Standard(StandardController::new())),
             port2: ControllerPort::new(Controller::None),
+            pio: 0,
             auto_joypad_timer: 0,
         }
     }
@@ -153,9 +153,11 @@ impl ControllerPorts {
     /// Write to the programmable I/O-port.
     /// Returns if EXTLATCH shall be triggered.
     pub fn set_pio(&mut self, val: u8) -> bool {
-        self.port1.pio = val & 0x40 > 0;
-        let pio2 = val & 0x80 > 0;
-        replace(&mut self.port2.pio, pio2) && !pio2
+        (replace(&mut self.pio, val) & !val) & 0x80 > 0
+    }
+
+    pub const fn get_pio(&self) -> u8 {
+        self.pio
     }
 
     pub fn set_strobe(&mut self, bit: bool) {
