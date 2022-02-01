@@ -102,6 +102,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                         | (self.open_bus & 0x3e),
                 )
             }
+            0x4213 => {
+                // RDIO - Road Programmable IO Line
+                Some(self.controllers.get_pio())
+            }
             0x4214..=0x4217 => {
                 // Math result registers
                 Some(self.math_registers.get_result()[usize::from(id & 3)])
