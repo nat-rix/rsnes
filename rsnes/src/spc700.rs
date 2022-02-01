@@ -80,22 +80,22 @@ const DSP_COUNTER_XORS: [u16; 32] = [
 #[rustfmt::skip]
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
-       2, 0, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 0,  // 0^
-       2, 0, 4, 5, 4, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
-       2, 0, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
-       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
-       2, 0, 4, 5, 3, 4, 0, 0,   2, 0, 0, 4, 5, 4, 6, 6,  // 4^
-       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
-       2, 0, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
-       2, 0, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
-       2, 0, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
-       2, 0, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
-       3, 0, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
-       2, 0, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2, 0, 4,  // b^
-       3, 0, 4, 5, 4, 5, 4, 7,   2, 5, 0, 4, 5, 2, 4, 9,  // c^
-       2, 0, 4, 5, 5, 6, 6, 7,   4, 5, 5, 5, 2, 2, 6, 0,  // d^
-       2, 0, 4, 5, 3, 4, 3, 6,   2, 4, 5, 3, 4, 3, 4, 0,  // e^
-       2, 0, 4, 5, 4, 5, 5, 6,   3, 4, 5, 4, 2, 2, 4, 0,  // f^
+       2, 8, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 8,  // 0^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 8, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
+       2, 8, 4, 5, 3, 4, 0, 0,   2, 6, 0, 4, 5, 4, 6, 6,  // 4^
+       2, 8, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
+       2, 8, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
+       2, 8, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
+       2, 8, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
+       3, 8, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2, 0, 4,  // b^
+       3, 8, 4, 5, 4, 5, 4, 7,   2, 5, 6, 4, 5, 2, 4, 9,  // c^
+       2, 8, 4, 5, 5, 6, 6, 7,   4, 5, 5, 5, 2, 2, 6, 0,  // d^
+       2, 8, 4, 5, 3, 4, 3, 6,   2, 4, 5, 3, 4, 3, 4, 2,  // e^
+       2, 8, 4, 5, 4, 5, 5, 6,   3, 4, 5, 4, 2, 2, 4, 2,  // f^
 ];
 
 const F0_RESET: u8 = 0x80;
@@ -908,6 +908,7 @@ pub struct Spc700 {
     counters: [Cell<u8>; 3],
     dispatch_counter: u16,
     cycles_ahead: Cycles,
+    halt: bool,
 }
 
 impl Default for Spc700 {
@@ -936,6 +937,7 @@ impl Default for Spc700 {
             counters: [Cell::new(0), Cell::new(0), Cell::new(0)],
             dispatch_counter: 0,
             cycles_ahead: 2,
+            halt: false,
         }
     }
 }
@@ -953,6 +955,7 @@ impl Spc700 {
         // always result in 0xffc0, because mem[0xf0] = 0x80
         self.pc = 0xffc0;
         self.status = 0;
+        self.halt = false;
         // TODO: reset dsp
     }
 
@@ -1088,6 +1091,12 @@ impl Spc700 {
         let mut cycles = CYCLES[op as usize];
         match op {
             0x00 => (), // NOP
+            0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xa1 | 0xb1
+            | 0xc1 | 0xd1 | 0xe1 | 0xf1 => {
+                // TCALL n
+                self.push16(self.pc);
+                self.pc = self.read16(0xffde ^ (u16::from(op & 0xf) << 1));
+            }
             0x02 | 0x22 | 0x42 | 0x62 | 0x82 | 0xa2 | 0xc2 | 0xe2 => {
                 // SET1 - (imm) |= 1 << ?
                 let addr = self.load();
@@ -1179,6 +1188,13 @@ impl Spc700 {
                 let val = self.read(addr);
                 self.update_nz8(self.a.wrapping_add(!val).wrapping_add(1));
                 self.write(addr, val | self.a)
+            }
+            0x0f => {
+                // BRK - Push PC and Status and go to interrupt vector 0xffde
+                let new_pc = self.read16(0xffde);
+                self.push16(self.pc);
+                self.pc = new_pc;
+                self.status = (self.status | flags::BREAK) & !flags::INTERRUPT_ENABLE
             }
             0x10 => {
                 // BPL/JNS - Branch if SIGN not set
@@ -1337,6 +1353,13 @@ impl Spc700 {
                 self.a &= self.read(addr);
                 self.update_nz8(self.a);
             }
+            0x37 => {
+                // AND - A &= ((imm)[16-bit] + Y)
+                let addr = self.load();
+                let addr = self.read16_small(addr);
+                self.a &= self.read(addr.wrapping_add(self.y.into()));
+                self.update_nz8(self.a);
+            }
             0x38 => {
                 // AND - (imm) &= imm
                 let imm = self.load();
@@ -1398,6 +1421,14 @@ impl Spc700 {
                 // EOR - A := A ^ imm
                 self.a ^= self.load();
                 self.update_nz8(self.a)
+            }
+            0x49 => {
+                // EOR - (imm) ^= (imm)
+                let (src, dst) = (self.load(), self.load());
+                let dst = self.get_small(dst);
+                let val = self.read_small(src) ^ self.read(dst);
+                self.write(dst, val);
+                self.update_nz8(val)
             }
             0x4b => {
                 // LSR - (imm) >>= 1
@@ -1925,6 +1956,13 @@ impl Spc700 {
                 let addr = self.load16();
                 self.write(addr, self.x)
             }
+            0xca => {
+                // MOV1 - (imm[13-bit])[bit] = C
+                let addr = self.load16();
+                let (shift, addr) = (addr >> 13, addr & 0x1fff);
+                let val = self.read(addr) & !(1 << shift);
+                self.write(addr, val | ((self.status & flags::CARRY) << shift));
+            }
             0xcb => {
                 // MOV - (imm) := Y
                 let addr = self.load();
@@ -2149,6 +2187,10 @@ impl Spc700 {
                 let rel = self.load();
                 self.branch_rel(rel, self.y > 0, &mut cycles)
             }
+            0xef | 0xff => {
+                // SLEEP / STOP - Halt the processor
+                self.halt = true
+            }
             _ => todo!("not yet implemented SPC700 instruction 0x{:02x}", op),
         }
         cycles
@@ -2239,10 +2281,10 @@ impl Spc700 {
     }
 
     pub fn run_cycle(&mut self) -> Option<StereoSample> {
-        if self.cycles_ahead == 0 {
-            self.cycles_ahead = self.dispatch_instruction().max(1);
+        if self.cycles_ahead == 0 && !self.halt {
+            self.cycles_ahead = self.dispatch_instruction();
         }
-        self.cycles_ahead -= 1;
+        self.cycles_ahead = self.cycles_ahead.saturating_sub(1);
         self.dsp.run_one_step(&mut self.mem);
         let mut output = None;
         if self.dispatch_counter & 0xf == 0 {

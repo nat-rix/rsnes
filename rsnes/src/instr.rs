@@ -22,7 +22,7 @@ static CYCLES: [Cycles; 256] = [
        2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
        2, 5, 5, 0, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
        2, 0, 3, 4, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
-       2, 5, 0, 0, 5, 4, 6, 6,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
+       2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
 ];
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
@@ -2820,6 +2820,30 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xf1 => {
                 // SBC - Subtract DP Indirect Indexed, Y with carry
                 let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.sub_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.sub_carry16(op1);
+                    cycles += 1;
+                }
+            }
+            0xf2 => {
+                // SBC - Subtract DP Indirect with carry
+                let addr = self.load_dp_indirect(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.sub_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.sub_carry16(op1);
+                    cycles += 1;
+                }
+            }
+            0xf3 => {
+                // SBC - Subtract SR Indirect Indexed, Y with carry
+                let addr = self.load_sr_indirect_indexed_y();
                 if self.cpu.is_reg8() {
                     let op1 = self.read::<u8>(addr);
                     self.sub_carry8(op1);

@@ -202,6 +202,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // DMA Registers
                 self.dma.write(id, val)
             }
+            0x420e..=0x420f => (),
             _ => todo!("internal register 0x{:04x} written", id),
         }
     }
