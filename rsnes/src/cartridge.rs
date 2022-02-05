@@ -7,8 +7,12 @@
 
 use std::convert::TryInto;
 
-use crate::device::{Addr24, Data};
-use crate::sa1::Sa1;
+use crate::{
+    device::{Addr24, Data},
+    enhancement::{Dsp, DspVersion},
+    sa1::Sa1,
+    timing::Cycles,
+};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
 
@@ -63,15 +67,6 @@ impl RomType {
             _ => return None,
         })
     }
-
-    pub fn to_mapping(&self) -> MemoryMapping {
-        match self {
-            Self::LoRom => MemoryMapping::LoRom,
-            Self::HiRom => MemoryMapping::HiRom,
-            Self::LoRomSA1 => MemoryMapping::LoRomSa1 { sa1: Sa1::new() },
-            rom_type => todo!("ROM type {:?} not supported yet", rom_type),
-        }
-    }
 }
 
 impl save_state::InSaveState for RomType {
@@ -89,50 +84,6 @@ impl save_state::InSaveState for RomType {
 impl Default for RomType {
     fn default() -> Self {
         Self::from_byte(0).unwrap()
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone)]
-pub enum MemoryMapping {
-    LoRom,
-    HiRom,
-    LoRomSa1 { sa1: Sa1 },
-}
-
-impl save_state::InSaveState for MemoryMapping {
-    fn serialize(&self, state: &mut SaveStateSerializer) {
-        let v: u8 = match self {
-            Self::LoRom => 0,
-            Self::HiRom => 1,
-            Self::LoRomSa1 { .. } => 2,
-        };
-        v.serialize(state);
-        match self {
-            Self::LoRom | Self::HiRom => (),
-            Self::LoRomSa1 { sa1 } => sa1.serialize(state),
-        }
-    }
-
-    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        let mut i: u8 = 0;
-        i.deserialize(state);
-        *self = match i {
-            0 => Self::LoRom,
-            1 => Self::HiRom,
-            2 => {
-                let mut sa1 = Sa1::default();
-                sa1.deserialize(state);
-                Self::LoRomSa1 { sa1 }
-            }
-            _ => panic!("unknown enum discriminant {}", i),
-        }
-    }
-}
-
-impl Default for MemoryMapping {
-    fn default() -> Self {
-        Self::LoRom
     }
 }
 
@@ -292,6 +243,7 @@ impl Header {
         let (coprocessor, chips) = split_byte(bytes[22]);
         let rom_size = 0x400u32.wrapping_shl(bytes[23].into());
         let ram_size = 0x400u32.wrapping_shl(bytes[24].into());
+        let ram_size = if ram_size == 0x400 { 0 } else { ram_size };
         let country = bytes[25];
         if country <= 20 {
             score += KNOWN_COUNTRY
@@ -334,7 +286,7 @@ impl Header {
             },
         ) {
             (0..=2, 0, _) => None,
-            (3.., 0, _) => Some(Coprocessor::Dsp),
+            (3..=5, 0, _) => Some(Coprocessor::Dsp),
             (_, 1, _) => Some(Coprocessor::Gsu),
             (_, 2, _) => Some(Coprocessor::Obc1),
             (_, 3, _) => Some(Coprocessor::Sa1),
@@ -365,8 +317,30 @@ impl Header {
         ))
     }
 
-    pub const fn has_ram(&self) -> bool {
-        self.chips != 3 && self.chips != 6 && !(self.chips == 0 && self.coprocessor.is_none())
+    pub fn find_dsp_version(&self, rom_size: u32, ram_size: u32) -> Option<DspVersion> {
+        let ver = match self.rom_type {
+            RomType::LoRom => match (rom_size >> 20, ram_size >> 10) {
+                (1, 0) => {
+                    if self.name == "TOP GEAR 3000" {
+                        DspVersion::Dsp4
+                    } else {
+                        DspVersion::Dsp1
+                    }
+                }
+                (1, 32) => DspVersion::Dsp2,
+                (1, 8) => DspVersion::Dsp3,
+                (2, 8) => DspVersion::Dsp1,
+                _ => DspVersion::Dsp1B,
+            },
+            RomType::HiRom => match (rom_size >> 20, ram_size >> 10) {
+                (4, 0) => DspVersion::Dsp1,
+                (4, 2) => DspVersion::Dsp1B, // TODO: Some games may use DSP1 (?)
+                (2, 2 | 8) => DspVersion::Dsp1B,
+                _ => DspVersion::Dsp1B, // TODO: is this appropriate?
+            },
+            _ => return None,
+        };
+        Some(ver)
     }
 }
 
@@ -377,11 +351,180 @@ pub enum CountryFrameRate {
     Pal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, InSaveState)]
+pub struct Area {
+    start: Addr24,
+    end: Addr24,
+}
+
+impl Area {
+    pub const fn new(start: Addr24, end: Addr24) -> Self {
+        Self { start, end }
+    }
+
+    pub fn find(&self, addr: Addr24) -> bool {
+        (self.start.bank..=self.end.bank).contains(&addr.bank)
+            && (self.start.addr..=self.end.addr).contains(&addr.addr)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(usize)]
+enum ReadFunction {
+    Rom = 0,
+    Sram = 1,
+    DspDr = 2,
+    DspSr = 3,
+}
+
+type ReadFunPointer = fn(&mut Cartridge, u32) -> u8;
+
+impl ReadFunction {
+    pub fn get(&self) -> ReadFunPointer {
+        const FUNS: [ReadFunPointer; 4] = [
+            Cartridge::read_rom,
+            Cartridge::read_sram,
+            Cartridge::read_dsp_data,
+            Cartridge::read_dsp_status,
+        ];
+        FUNS[*self as usize]
+    }
+}
+
+impl save_state::InSaveState for ReadFunction {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        (*self as u8).serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = match i {
+            0 => Self::Rom,
+            1 => Self::Sram,
+            2 => Self::DspDr,
+            3 => Self::DspSr,
+            _ => panic!("unknown enum discriminant {}", i),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(usize)]
+enum WriteFunction {
+    Ignore = 0,
+    Sram = 1,
+    DspDr = 2,
+}
+
+type WriteFunPointer = fn(&mut Cartridge, u32, u8);
+
+impl WriteFunction {
+    pub fn get(&self) -> WriteFunPointer {
+        const FUNS: [WriteFunPointer; 3] = [
+            Cartridge::ignore_write,
+            Cartridge::write_sram,
+            Cartridge::write_dsp_data,
+        ];
+        FUNS[*self as usize]
+    }
+}
+
+impl save_state::InSaveState for WriteFunction {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        (*self as u8).serialize(state)
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: u8 = 0;
+        i.deserialize(state);
+        *self = match i {
+            0 => Self::Ignore,
+            1 => Self::Sram,
+            2 => Self::DspDr,
+            _ => panic!("unknown enum discriminant {}", i),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, InSaveState)]
+struct MapFunction {
+    bank_mask: u8,
+    bank_lshift: u8,
+    addr_mask: u16,
+}
+
+impl MapFunction {
+    pub fn run(&self, addr: Addr24) -> u32 {
+        (u32::from(addr.bank & self.bank_mask) << self.bank_lshift)
+            | u32::from(addr.addr & self.addr_mask)
+    }
+}
+
+#[derive(Clone, InSaveState)]
+pub struct MappingEntry {
+    area: Area,
+    map: MapFunction,
+    read: ReadFunction,
+    write: WriteFunction,
+}
+
+impl std::fmt::Debug for MappingEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Area as std::fmt::Debug>::fmt(&self.area, f)
+    }
+}
+
+impl Default for MappingEntry {
+    fn default() -> Self {
+        Self {
+            area: Area::new(Addr24::new(0, 0), Addr24::new(0, 0)),
+            map: Default::default(),
+            read: ReadFunction::Rom,
+            write: WriteFunction::Ignore,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, InSaveState)]
+pub struct MemoryMapping {
+    areas: Vec<MappingEntry>,
+}
+
+macro_rules! map {
+    ($slf:ident @ $sb:literal:$sa:literal .. $eb:literal:$ea:literal => $r:ident | $w:ident [$bmask:literal << $bls:literal : $amask:literal]) => {
+        $slf.areas.push(MappingEntry {
+            area: Area::new(Addr24::new($sb, $sa), Addr24::new($eb, $ea)),
+            map: MapFunction {
+                bank_mask: $bmask,
+                bank_lshift: $bls,
+                addr_mask: $amask,
+            },
+            read: ReadFunction::$r,
+            write: WriteFunction::$w,
+        })
+    };
+}
+
+impl MemoryMapping {
+    pub fn find(&self, addr: Addr24) -> Option<(u32, &MappingEntry)> {
+        self.areas.iter().find_map(|entry| {
+            if entry.area.find(addr) {
+                Some((entry.map.run(addr), entry))
+            } else {
+                None
+            }
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, InSaveState)]
 pub struct Cartridge {
     header: Header,
     rom: Vec<u8>,
     ram: Vec<u8>,
+    dsp: Option<Dsp>,
+    sa1: Option<Sa1>,
     mapping: MemoryMapping,
 }
 
@@ -421,14 +564,115 @@ impl Cartridge {
             eprintln!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
         }
 
-        let ram_size = if header.has_ram() { header.ram_size } else { 0 };
+        let ram_size = header.ram_size;
 
-        Ok(Self {
+        let dsp = if let Some(Coprocessor::Dsp) = header.coprocessor {
+            let ver = header
+                .find_dsp_version(rom.len() as u32, ram_size)
+                .unwrap_or_else(|| panic!("could not select a NEC-DSP version for this game"));
+            Some(Dsp::new(ver))
+        } else {
+            None
+        };
+
+        let sa1 = if let Some(Coprocessor::Sa1) = header.coprocessor {
+            Some(Sa1::new())
+        } else {
+            None
+        };
+
+        let mut slf = Self {
             rom,
             ram: vec![0xff; ram_size as usize],
-            mapping: header.rom_type.to_mapping(),
+            mapping: MemoryMapping::default(),
+            dsp,
+            sa1,
             header,
-        })
+        };
+
+        slf.setup_memory_mappings();
+
+        Ok(slf)
+    }
+
+    fn setup_memory_mappings(&mut self) {
+        let map = &mut self.mapping;
+        match self.header.rom_type {
+            RomType::LoRom | RomType::LoRomSA1 => {
+                map!(map @ 0x00:0x8000 .. 0x7d:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
+                map!(map @ 0x80:0x8000 .. 0xff:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
+                if self.ram.len() == 0 {
+                    map!(map @ 0x40:0x0000 .. 0x7d:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
+                    map!(map @ 0xc0:0x0000 .. 0xff:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
+                } else {
+                    map!(map @ 0x70:0x0000 .. 0x7d:0x7fff => Sram | Sram [0xf<<15:0xffff]);
+                    map!(map @ 0xf0:0x0000 .. 0xff:0x7fff => Sram | Sram [0xf<<15:0xffff]);
+                }
+                if let Some(dsp) = &self.dsp {
+                    match (dsp.version(), self.rom.len() >> 20, self.ram.len() >> 10) {
+                        (DspVersion::Dsp1 | DspVersion::Dsp1B | DspVersion::Dsp4, _, 0) => {
+                            map!(map @ 0x30:0x8000 .. 0x3f:0xbfff => DspDr | DspDr [0xf<<14:0x3fff]);
+                            map!(map @ 0x30:0xc000 .. 0x3f:0xffff => DspSr | Ignore [0xf<<14:0x3fff]);
+                        }
+                        (DspVersion::Dsp2 | DspVersion::Dsp3, 1, 8 | 32) => {
+                            map!(map @ 0x20:0x8000 .. 0x3f:0xbfff => DspDr | DspDr [0x1f<<14:0x3fff]);
+                            map!(map @ 0x20:0xc000 .. 0x3f:0xffff => DspSr | Ignore [0x1f<<14:0x3fff]);
+                        }
+                        (DspVersion::Dsp1 | DspVersion::Dsp1B, 2, 8) => {
+                            map!(map @ 0x60:0x0000 .. 0x6f:0x3fff => DspDr | DspDr [0xf<<14:0x3fff]);
+                            map!(map @ 0x60:0x4000 .. 0x6f:0x7fff => DspSr | Ignore [0xf<<14:0x3fff]);
+                        }
+                        _ => todo!("Could not guess any NEC-DSP memory mapping"),
+                    }
+                }
+            }
+            RomType::HiRom => {
+                map!(map @ 0x00:0x8000 .. 0x3f:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
+                map!(map @ 0x40:0x0000 .. 0x7d:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
+                map!(map @ 0x80:0x8000 .. 0xbf:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
+                map!(map @ 0xc0:0x0000 .. 0xff:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
+                if self.ram.len() > 0 {
+                    map!(map @ 0x20:0x6000 .. 0x3f:0x7fff => Sram | Sram [0x3f<<13:0x1fff]);
+                    map!(map @ 0xa0:0x6000 .. 0xbf:0x7fff => Sram | Sram [0x3f<<13:0x1fff]);
+                }
+                if let Some(dsp) = &self.dsp {
+                    match dsp.version() {
+                        DspVersion::Dsp1 => {
+                            map!(map @ 0x00:0x6000 .. 0x1f:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0x00:0x7000 .. 0x1f:0x7fff => DspSr | Ignore [0<<0:0]);
+                            map!(map @ 0x80:0x6000 .. 0x9f:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0x80:0x7000 .. 0x9f:0x7fff => DspSr | Ignore [0<<0:0]);
+                        }
+                        DspVersion::Dsp1B => {
+                            map!(map @ 0x00:0x6000 .. 0x0f:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0x00:0x7000 .. 0x0f:0x7fff => DspSr | Ignore [0<<0:0]);
+                            map!(map @ 0x20:0x6000 .. 0x2f:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0x20:0x7000 .. 0x2f:0x7fff => DspSr | Ignore [0<<0:0]);
+                            map!(map @ 0x80:0x6000 .. 0x8f:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0x80:0x7000 .. 0x8f:0x7fff => DspSr | Ignore [0<<0:0]);
+                            map!(map @ 0xa0:0x6000 .. 0xaf:0x6fff => DspDr | DspDr [0<<0:0]);
+                            map!(map @ 0xa0:0x7000 .. 0xaf:0x7fff => DspSr | Ignore [0<<0:0]);
+                        }
+                        ver => todo!("No HiRom memory mapping for {:?}", ver),
+                    }
+                }
+            }
+            ty => todo!("unsupported rom type {:?}", ty),
+        }
+    }
+
+    pub fn read_byte(&mut self, addr: Addr24) -> Option<u8> {
+        if let Some((index, MappingEntry { read, .. })) = self.mapping.find(addr) {
+            Some(read.get()(self, index))
+        } else {
+            None
+        }
+    }
+
+    pub fn write_byte(&mut self, addr: Addr24, val: u8) {
+        if let Some((index, MappingEntry { write, .. })) = self.mapping.find(addr) {
+            write.get()(self, index, val)
+        }
     }
 
     pub const fn get_country_frame_rate(&self) -> CountryFrameRate {
@@ -448,115 +692,86 @@ impl Cartridge {
         &self.header
     }
 
+    fn get_sram_addr(&self, addr: u32) -> usize {
+        addr as usize & (self.ram.len() - 1)
+    }
+
+    fn get_rom_addr(&self, addr: u32) -> usize {
+        addr as usize & (self.rom.len() - 1)
+    }
+
+    fn read_sram(&mut self, addr: u32) -> u8 {
+        self.ram[self.get_sram_addr(addr)]
+    }
+
+    fn write_sram(&mut self, addr: u32, val: u8) {
+        let addr = self.get_sram_addr(addr);
+        self.ram[addr] = val
+    }
+
+    fn read_rom(&mut self, addr: u32) -> u8 {
+        self.rom[self.get_rom_addr(addr)]
+    }
+
+    fn read_dsp_data(&mut self, _: u32) -> u8 {
+        let dsp = self.dsp.as_mut().unwrap();
+        dsp.refresh();
+        dsp.read_dr()
+    }
+
+    fn write_dsp_data(&mut self, _: u32, val: u8) {
+        let dsp = self.dsp.as_mut().unwrap();
+        dsp.refresh();
+        dsp.write_dr(val)
+    }
+
+    fn read_dsp_status(&mut self, _: u32) -> u8 {
+        let dsp = self.dsp.as_mut().unwrap();
+        dsp.refresh();
+        dsp.read_sr()
+    }
+
+    fn ignore_write(&mut self, _addr: u32, _val: u8) {}
+
     /// Read from the cartridge
-    pub fn read<D: Data>(&self, mut addr: Addr24) -> Option<D> {
-        let sram = self.ram.len() > 0;
-        if !sram {
-            addr.bank &= 0x7f
+    pub fn read<D: Data>(&mut self, mut addr: Addr24) -> Option<D> {
+        let mut arr: D::Arr = Default::default();
+        let mut open_bus = None;
+        for v in arr.as_mut() {
+            *v = self.read_byte(addr).or(open_bus)?;
+            open_bus = Some(*v);
+            addr.addr = addr.addr.wrapping_add(1);
         }
-        let ram_mask = self.ram.len().wrapping_sub(1);
-        let rom_mask = self.rom.len() - 1;
-        match &self.mapping {
-            MemoryMapping::LoRom => match (addr.bank, addr.addr) {
-                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) if sram => Some(D::parse(
-                    &self.ram,
-                    (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & ram_mask,
-                )),
-                (0x00..=0x7d | 0x80.., _) | (_, 0x8000..) => Some(D::parse(
-                    &self.rom,
-                    (((addr.bank as usize & 0x7f) << 15) | (addr.addr & 0x7fff) as usize)
-                        & rom_mask,
-                )),
-                _ => None,
-            },
-            MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
-                (0..=0x3f, 0x6000..=0x7fff) if sram => Some(D::parse(
-                    &self.ram,
-                    (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize)
-                        & ram_mask,
-                )),
-                (0x40.., _) | (_, 0x8000..) => Some(D::parse(
-                    &self.rom,
-                    (((addr.bank as usize & 0x3f) << 16) | addr.addr as usize) & rom_mask,
-                )),
-                _ => None,
-            },
-            MemoryMapping::LoRomSa1 { sa1 } => {
-                // LoRomSa1
-                match (addr.bank, addr.addr) {
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x2200..=0x23ff)) => {
-                        todo!("sa1 i/o-ports read access at {}", addr)
-                    }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x3000..=0x37ff)) => {
-                        Some(D::parse(sa1.iram_ref(), (addr.addr & 0x7ff) as usize))
-                    }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x6000..=0x7fff)) => {
-                        todo!("sa1 8kb bw-ram read access at {}", addr)
-                    }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x8000..=0xffff)) => {
-                        Some(D::parse(&self.rom, sa1.lorom_addr(addr) as usize))
-                    }
-                    (0x40..=0x4f, _) => todo!("sa1 256kb blocks read access at {}", addr),
-                    (0xc0..=0xff, _) => Some(D::parse(&self.rom, sa1.hirom_addr(addr) as usize)),
-                    _ => None,
-                }
-            }
-        }
+        Some(D::from_bytes(&arr))
     }
 
     /// Write to the cartridge
     pub fn write<D: Data>(&mut self, mut addr: Addr24, value: D) {
-        let sram = self.ram.len() > 0;
-        if !sram {
-            addr.bank &= 0x7f
+        for &v in value.to_bytes().as_ref().iter() {
+            self.write_byte(addr, v);
+            addr.addr = addr.addr.wrapping_add(1);
         }
-        let ram_mask = self.ram.len().wrapping_sub(1);
-        match &mut self.mapping {
-            MemoryMapping::LoRom => match (addr.bank, addr.addr) {
-                ((0x70..=0x7d) | (0xf0..), 0..=0x7fff) if sram => value.write_to(
-                    &mut self.ram,
-                    (((addr.bank as usize & 0xf) << 15) | addr.addr as usize) & ram_mask,
-                ),
-                _ => (),
-            },
-            MemoryMapping::HiRom => match (addr.bank & 0x7f, addr.addr) {
-                (0..=0x3f, 0x6000..=0x7fff) if sram => value.write_to(
-                    &mut self.ram,
-                    (((addr.bank as usize & 0x3f) << 13) | (addr.addr & 0x1fff) as usize)
-                        & ram_mask,
-                ),
-                _ => (),
-            },
-            MemoryMapping::LoRomSa1 { sa1 } => {
-                // LoRomSa1
-                match (addr.bank, addr.addr) {
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x2200..=0x23ff)) => {
-                        for (i, b) in value.to_bytes().as_ref().iter().cloned().enumerate() {
-                            match addr.addr.wrapping_add(i as u16) {
-                                0x2200 => {
-                                    // TODO: fully implement this:
-                                    //   - interrupt flag 0x80 missing
-                                    //   - ready flag 0x40 missing
-                                    //   - NMI flag 0x10 missing
-                                    sa1.set_input(b & 15);
-                                    if b & 0x20 > 0 {
-                                        sa1.reset();
-                                    }
-                                }
-                                _ => todo!("sa1 i/o-ports write access at {}", addr),
-                            }
-                        }
-                    }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x3000..=0x37ff)) => {
-                        value.write_to(sa1.iram_mut(), (addr.addr & 0x7ff) as usize)
-                    }
-                    ((0x00..=0x3f) | (0x80..=0xbf), (0x6000..=0x7fff)) => {
-                        todo!("sa1 8kb bw-ram write access at {}", addr)
-                    }
-                    (0x40..=0x4f, _) => todo!("sa1 256kb blocks write access at {}", addr),
-                    _ => (),
-                }
-            }
+    }
+
+    pub fn set_region(&mut self, pal: bool) {
+        if let Some(dsp) = &mut self.dsp {
+            dsp.set_timing_proportion(if pal {
+                crate::timing::NECDSP_CPU_TIMING_PROPORTION_PAL
+            } else {
+                crate::timing::NECDSP_CPU_TIMING_PROPORTION_NTSC
+            })
+        }
+    }
+
+    pub fn tick(&mut self, n: Cycles) {
+        if let Some(dsp) = &mut self.dsp {
+            dsp.tick(n)
+        }
+    }
+
+    pub fn refresh_coprocessors(&mut self) {
+        if let Some(dsp) = &mut self.dsp {
+            dsp.refresh()
         }
     }
 }

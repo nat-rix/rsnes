@@ -163,20 +163,26 @@ impl<T1: InSaveState, T2: InSaveState> InSaveState for (T1, T2) {
     }
 }
 
-impl InSaveState for Vec<u8> {
+impl<T: InSaveState + Default> InSaveState for Vec<T> {
     fn serialize(&self, state: &mut SaveStateSerializer) {
         self.len().serialize(state);
-        state.data.extend_from_slice(self)
+        for i in self {
+            i.serialize(state)
+        }
     }
 
     fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        let mut n: usize = 0;
-        n.deserialize(state);
-        if state.data.as_slice().len() >= n {
-            *self = state.data.as_slice()[..n].to_vec();
-            state.consume(n);
+        let mut len: usize = 0;
+        len.deserialize(state);
+        if self.capacity() < len {
+            *self = Vec::with_capacity(len);
         } else {
-            panic!("not enough data to deserialize")
+            self.clear();
+        }
+        for _ in 0..len {
+            let mut val = T::default();
+            val.deserialize(state);
+            self.push(val)
         }
     }
 }

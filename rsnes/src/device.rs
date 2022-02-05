@@ -146,7 +146,7 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub ppu: Ppu<FB>,
     pub(crate) dma: Dma,
     pub controllers: ControllerPorts,
-    cartridge: Option<Cartridge>,
+    pub(crate) cartridge: Option<Cartridge>,
     /// <https://wiki.superfamicom.org/open-bus>
     pub(crate) open_bus: u8,
     ram: [u8; RAM_SIZE],
@@ -197,7 +197,8 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         }
     }
 
-    pub fn load_cartridge(&mut self, cartridge: Cartridge) {
+    pub fn load_cartridge(&mut self, mut cartridge: Cartridge) {
+        cartridge.set_region(self.is_pal);
         self.cartridge = Some(cartridge);
         self.cpu = Cpu::new();
         self.reset_program_counter();
@@ -366,9 +367,9 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         }
     }
 
-    fn read_cartridge<D: Data>(&self, addr: Addr24) -> D {
+    fn read_cartridge<D: Data>(&mut self, addr: Addr24) -> D {
         self.cartridge
-            .as_ref()
+            .as_mut()
             .unwrap()
             .read(addr)
             .unwrap_or_else(|| D::from_open_bus(self.open_bus))

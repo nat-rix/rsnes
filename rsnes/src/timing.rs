@@ -18,9 +18,13 @@ pub type Cycles = u32;
 pub(crate) const APU_CPU_TIMING_PROPORTION_NTSC: (Cycles, Cycles) = (118125, 5632);
 pub(crate) const APU_CPU_TIMING_PROPORTION_PAL: (Cycles, Cycles) = (665, 32);
 
+pub(crate) const NECDSP_CPU_TIMING_PROPORTION_NTSC: (Cycles, Cycles) = (118125, 45056);
+pub(crate) const NECDSP_CPU_TIMING_PROPORTION_PAL: (Cycles, Cycles) = (40591, 15625);
+
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn run_cycle<const N: u16>(&mut self) {
         self.smp.tick(N);
+        self.cartridge.as_mut().unwrap().tick(N.into());
         let vend = self.vend();
         if self.is_auto_joypad() && self.new_scanline && self.ppu.scanline_nr == vend + 2 {
             self.controllers.auto_joypad_timer = 4224;
@@ -100,6 +104,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.ppu.field ^= true;
                 self.ppu.end_vblank();
                 self.smp.refresh();
+                self.cartridge.as_mut().unwrap().refresh_coprocessors();
             } else if self.smp.is_threaded() {
                 // if the S-SMP is threaded, refresh it every scanline
                 self.smp.refresh();
