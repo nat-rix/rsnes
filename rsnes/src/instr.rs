@@ -10,9 +10,9 @@ static CYCLES: [Cycles; 256] = [
        7, 6, 7, 4, 5, 3, 5, 6,   3, 2, 2, 4, 6, 4, 6, 5,  // 0^
        2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
        6, 6, 8, 4, 3, 3, 5, 6,   4, 2, 2, 5, 4, 4, 6, 5,  // 2^
-       2, 5, 5, 7, 4, 4, 0, 0,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
+       2, 5, 5, 7, 4, 4, 0, 6,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
        6, 6, 2, 4, 1, 3, 5, 6,   3, 2, 2, 3, 3, 4, 6, 5,  // 4^
-       2, 5, 5, 7, 1, 4, 0, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
+       2, 5, 5, 7, 1, 4, 6, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
        6, 0, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
        2, 5, 5, 7, 4, 4, 6, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
@@ -21,7 +21,7 @@ static CYCLES: [Cycles; 256] = [
        2, 5, 5, 7, 4, 4, 4, 6,   2, 4, 2, 2, 4, 4, 4, 5,  // b^
        2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
        2, 5, 5, 0, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
-       2, 0, 3, 4, 3, 3, 5, 0,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
+       2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
        2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
 ];
 
@@ -885,6 +885,19 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x37 => {
+                // AND - And A with DP Indirect Long Indexed, Y
+                let addr = self.load_indirect_long_indexed_y(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr) & self.cpu.regs.a8();
+                    self.cpu.regs.set_a8(val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    self.cpu.regs.a &= self.read::<u16>(addr);
+                    self.cpu.update_nz16(self.cpu.regs.a);
+                    cycles += 1
+                }
+            }
             0x38 => {
                 // SEC - Set Carry Flag
                 self.cpu.regs.status |= Status::CARRY
@@ -1206,6 +1219,24 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.cpu.regs.a ^= self.read::<u16>(addr);
                     self.cpu.update_nz16(self.cpu.regs.a);
                     cycles += 1
+                }
+            }
+            0x56 => {
+                // LSR - SHR on DP Indexed, X
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let val = self.read::<u8>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz8(val);
+                } else {
+                    let val = self.read::<u16>(addr);
+                    self.cpu.regs.status.set_if(Status::CARRY, val & 1 > 0);
+                    let val = val >> 1;
+                    self.write(addr, val);
+                    self.cpu.update_nz16(val);
+                    cycles += 2
                 }
             }
             0x57 => {
@@ -2729,6 +2760,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     self.write::<u16>(addr, val);
                     self.cpu.update_nz16(val);
                     cycles += 2
+                }
+            }
+            0xe7 => {
+                // SBC - Subtract DP Indirect Long with carry
+                let addr = self.load_dp_indirect_long(&mut cycles);
+                if self.cpu.is_reg8() {
+                    let op1 = self.read::<u8>(addr);
+                    self.sub_carry8(op1);
+                } else {
+                    let op1 = self.read::<u16>(addr);
+                    self.sub_carry16(op1);
+                    cycles += 1;
                 }
             }
             0xe8 => {

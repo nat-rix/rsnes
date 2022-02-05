@@ -310,8 +310,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                     self.increment_wram_addr();
                     res
                 }
-                0x84..=0xff => self.open_bus,
-                _ => todo!("unimplemented address bus B read at 0x21{:02x}", addr),
+                0x00..=0x33 | 0x81..=0xff => self.open_bus,
             }
         }
         D::from_bytes(&data)
@@ -398,8 +397,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
                 0x83 => self
                     .wram_addr
                     .set((self.wram_addr.get() & 0xffff) | (u32::from(*d & 1) << 16)),
-                0x34 | 0x84..=0xff => (),
-                _ => todo!("unimplemented address bus B write at 0x21{:02x}", addr),
+                0x34..=0x3f | 0x84..=0xff => (),
             }
         }
     }

@@ -81,16 +81,16 @@ const DSP_COUNTER_XORS: [u16; 32] = [
 static CYCLES: [Cycles; 256] = [
     /* ^0 ^1 ^2 ^3 ^4 ^5 ^6 ^7 | ^8 ^9 ^a ^b ^c ^d ^e ^f */
        2, 8, 4, 5, 3, 4, 3, 6,   2, 6, 5, 4, 5, 4, 6, 8,  // 0^
-       2, 8, 4, 5, 4, 5, 5, 6,   5, 5, 6, 0, 2, 2, 0, 6,  // 1^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 5, 6, 5, 2, 2, 4, 6,  // 1^
        2, 8, 4, 5, 3, 4, 3, 0,   2, 6, 5, 4, 0, 4, 5, 2,  // 2^
        2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 6, 0, 2, 2, 3, 8,  // 3^
        2, 8, 4, 5, 3, 4, 0, 0,   2, 6, 0, 4, 5, 4, 6, 6,  // 4^
-       2, 8, 4, 5, 4, 5, 5, 0,   5, 0, 4, 5, 2, 2, 4, 3,  // 5^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 5, 4, 5, 2, 2, 4, 3,  // 5^
        2, 8, 4, 5, 3, 4, 3, 2,   2, 6, 0, 4, 0, 4, 5, 5,  // 6^
-       2, 8, 4, 5, 4, 5, 5, 0,   5, 0, 5, 0, 2, 2, 3, 0,  // 7^
+       2, 8, 4, 5, 4, 5, 5, 6,   5, 5, 5, 0, 2, 2, 3, 0,  // 7^
        2, 8, 4, 5, 3, 4, 0, 6,   2, 6, 5, 4, 5, 2, 4, 5,  // 8^
        2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2,12, 5,  // 9^
-       3, 8, 4, 5, 3, 4, 0, 0,   2, 0, 4, 4, 5, 2, 4, 4,  // a^
+       3, 8, 4, 5, 3, 4, 0, 0,   2, 6, 4, 4, 5, 2, 4, 4,  // a^
        2, 8, 4, 5, 4, 5, 5, 6,   5, 0, 5, 5, 2, 2, 0, 4,  // b^
        3, 8, 4, 5, 4, 5, 4, 7,   2, 5, 6, 4, 5, 2, 4, 9,  // c^
        2, 8, 4, 5, 5, 6, 6, 7,   4, 5, 5, 5, 2, 2, 6, 0,  // d^
@@ -1248,6 +1248,16 @@ impl Spc700 {
                 self.write16(addr, val);
                 self.update_nz16(val)
             }
+            0x1b => {
+                // ASL - (imm + X) <<= 1
+                let addr = self.load().wrapping_add(self.x);
+                let addr = self.get_small(addr);
+                let val = self.read(addr);
+                self.set_status(val >= 0x80, flags::CARRY);
+                let val = val << 1;
+                self.write(addr, val);
+                self.update_nz8(val)
+            }
             0x1c => {
                 // ASL - A <<= 1
                 self.set_status(self.a >= 0x80, flags::CARRY);
@@ -1258,6 +1268,12 @@ impl Spc700 {
                 // DEC - X
                 self.x = self.x.wrapping_sub(1);
                 self.update_nz8(self.x);
+            }
+            0x1e => {
+                // CMP - X - (imm)
+                let addr = self.load16();
+                let val = self.read(addr);
+                self.compare(self.x, val)
             }
             0x1f => {
                 // JMP - PC := (X)
@@ -1489,6 +1505,13 @@ impl Spc700 {
                 self.a ^= self.read(addr);
                 self.update_nz8(self.a)
             }
+            0x57 => {
+                // EOR - A := A ^ ((imm)[16-bit]+Y)
+                let addr = self.load();
+                let addr = self.read16_small(addr).wrapping_add(self.y.into());
+                self.a ^= self.read(addr);
+                self.update_nz8(self.a)
+            }
             0x58 => {
                 // EOR - (imm) ^= imm
                 let val = self.load();
@@ -1497,6 +1520,13 @@ impl Spc700 {
                 let val = self.read(addr) ^ val;
                 self.write(addr, val);
                 self.update_nz8(val);
+            }
+            0x59 => {
+                // EOR - (X) ^= (Y)
+                let addr = self.get_small(self.x);
+                let res = self.read(addr) ^ self.read_small(self.y);
+                self.write(addr, res);
+                self.update_nz8(res)
             }
             0x5a => {
                 // CMPW - YA - (imm)[16-bit]
@@ -1620,11 +1650,23 @@ impl Spc700 {
                 let val = self.read(addr);
                 self.compare(self.a, val)
             }
+            0x77 => {
+                // CMP - A - ((imm)[16-bit] + Y)
+                let addr = self.load();
+                let addr = self.read16_small(addr).wrapping_add(self.y.into());
+                let val = self.read(addr);
+                self.compare(self.a, val)
+            }
             0x78 => {
                 // CMP - (imm) - imm
                 let (b, a) = (self.load(), self.load());
                 let a = self.read_small(a);
                 self.compare(a, b)
+            }
+            0x79 => {
+                // CMP - (X) - (Y)
+                let (x, y) = (self.read_small(self.x), self.read_small(self.y));
+                self.compare(x, y)
             }
             0x7a => {
                 // ADDW - YA += (imm)[16-bit]
@@ -1821,6 +1863,14 @@ impl Spc700 {
                 // SBC - A -= imm + CARRY
                 let val = self.load();
                 self.a = self.adc(self.a, !val);
+            }
+            0xa9 => {
+                // SBC - (imm) -= (imm) + CARRY
+                let (src, dst) = (self.load(), self.load());
+                let dst = self.get_small(dst);
+                let res = self.adc(self.read(dst), self.read_small(src));
+                self.write(dst, res);
+                self.update_nz8(res)
             }
             0xaa => {
                 // MOV1 - Set CARRY on (imm2) >> imm1
