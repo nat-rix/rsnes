@@ -554,7 +554,8 @@ impl Cartridge {
         }
         let (header, _score) = header.ok_or(ReadRomError::NoSuitableHeader)?;
 
-        let mut rom = vec![0u8; usize::max(header.rom_size as usize, bytes.len())];
+        let mut rom =
+            vec![0u8; usize::max(header.rom_size as usize, bytes.len().next_power_of_two())];
         for chunk in rom.chunks_mut(bytes.len()) {
             chunk.copy_from_slice(&bytes[..chunk.len()])
         }
