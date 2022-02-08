@@ -1492,7 +1492,7 @@ impl Spc700 {
                 // AND1 - AND CARRY on (imm2) >> imm1
                 let addr = self.load16();
                 let val = self.read(addr & 0x1fff);
-                self.status &= (val >> (addr >> 13)) & flags::CARRY
+                self.status &= 0xfe | ((val >> (addr >> 13)) & flags::CARRY)
             }
             0x4b => {
                 // LSR - (imm) >>= 1
@@ -1657,8 +1657,8 @@ impl Spc700 {
             0x6a => {
                 // AND1 - AND CARRY on !(imm2) >> imm1
                 let addr = self.load16();
-                let val = !self.read(addr & 0x1fff);
-                self.status &= (val >> (addr >> 13)) & flags::CARRY
+                let val = self.read(addr & 0x1fff);
+                self.status &= !((val >> (addr >> 13)) & flags::CARRY)
             }
             0x6b => {
                 // ROR - (imm) >>= 1
