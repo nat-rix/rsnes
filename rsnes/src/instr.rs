@@ -139,7 +139,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
 
     /// DP Indexed Indirect, X
     pub fn load_dp_indexed_indirect_x(&mut self, cycles: &mut Cycles) -> Addr24 {
-        let val = self.load::<u16>();
+        let val = self.load::<u8>();
         if self.cpu.regs.dp & 0xff > 0 {
             *cycles += 1
         }
@@ -152,7 +152,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             } else {
                 self.cpu.regs.x
             })
-            .wrapping_add(val);
+            .wrapping_add(val.into());
         let addr = self.read(Addr24::new(0, addr));
         self.cpu.get_data_addr(addr)
     }
