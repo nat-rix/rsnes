@@ -218,22 +218,18 @@ impl Header {
         assert_eq!(full_bytes.len(), 80);
 
         let bytes = &full_bytes[16..];
-        let mut name = String::with_capacity(21);
         let mut score = 0;
-        let mut len = 21;
-        for c in &bytes[..21] {
-            if matches!(c, 0x20..=0x7e) {
-                name.push(*c as char);
-                score += VALID_CHAR
-            }
-            if c == &b' ' {
-                len -= 1
-            } else {
-                len = 21
-            }
+        let mut name = bytes[..21]
+            .iter()
+            .filter(|c| (b' '..=b'~').contains(c))
+            .skip_while(|&&c| c == b' ')
+            .map(|&c| if c == b'\\' { '¥' } else { c.into() })
+            .collect::<String>()
+            .to_string();
+        while name.ends_with(' ') {
+            name.truncate(name.len() - 1)
         }
-        // trim away trailing whitespace
-        name.truncate(len);
+        score += name.len() as u16 * VALID_CHAR;
         let (speed, rom_type) = split_byte(bytes[21]);
         if speed & !1 == 1 {
             score += VALID_SPEED_INDICATION
