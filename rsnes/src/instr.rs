@@ -19,11 +19,28 @@ static CYCLES: [Cycles; 256] = [
        2, 6, 5, 7, 4, 4, 4, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
        2, 6, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
        2, 5, 5, 7, 4, 4, 4, 6,   2, 4, 2, 2, 4, 4, 4, 5,  // b^
-       2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
-       2, 5, 5, 0, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
+       2, 6, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
+       2, 5, 5, 7, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
        2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
        2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
 ];
+
+macro_rules! compare_memory {
+    (CMP: $($t:tt)*) => {compare_memory!([a, a8, is_reg8]: $($t)*)};
+    (CPX: $($t:tt)*) => {compare_memory!([x, x8, is_idx8]: $($t)*)};
+    (CPY: $($t:tt)*) => {compare_memory!([y, y8, is_idx8]: $($t)*)};
+    ([$r:ident, $r8:ident, $is8:ident]: $self:ident, $addr:expr, $cycles:expr) => {{
+        // this will also work with decimal mode (TODO: check this fact)
+        if $self.cpu.$is8() {
+            let val = $self.read::<u8>($addr);
+            $self.compare8($self.cpu.regs.$r8() as u8, val);
+        } else {
+            let val = $self.read::<u16>($addr);
+            $self.compare16($self.cpu.regs.$r, val);
+            *$cycles += 1
+        }
+    }};
+}
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     fn load_indexed_v<const BC: bool>(&mut self, cycles: &mut Cycles, val: u16) -> Addr24 {
@@ -2249,7 +2266,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xc0 => {
                 // CPY - Compare Y with immediate value
-                // this will also work with decimal mode (TODO: check this fact)
                 if self.cpu.is_idx8() {
                     let val = self.load::<u8>();
                     self.compare8(self.cpu.regs.y8(), val);
@@ -2259,6 +2275,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0xc1 => {
+                // CMP - Compare A with DP Indexed Indirect, X
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                compare_memory!(CMP: self, addr, &mut cycles)
+            }
             0xc2 => {
                 // REP - Reset specified bits in the Status Register
                 let mask = Status(!self.load::<u8>());
@@ -2267,42 +2288,18 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xc3 => {
                 // CMP - Compare A with Stack Relative
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_stack_relative();
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
-            }
-            0xc5 => {
-                // CMP - Compare A with Absolute Indexed, Y
-                // this will also work with decimal mode (TODO: check this fact)
-                let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xc4 => {
                 // CPY - Compare Y with direct page
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_idx8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.y8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.y, val);
-                    cycles += 1
-                }
+                compare_memory!(CPY: self, addr, &mut cycles)
+            }
+            0xc5 => {
+                // CMP - Compare A with Absolute Indexed, Y
+                let addr = self.load_direct(&mut cycles);
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xc6 => {
                 // DEC - Decrement DP
@@ -2320,16 +2317,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xc7 => {
                 // CMP - Compare A with DP Indirect Long
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_dp_indirect_long(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xc8 => {
                 // INY - Increment Y
@@ -2344,7 +2333,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xc9 => {
                 // CMP - Compare A with immediate value
-                // this will also work with decimal mode (TODO: check this fact)
                 if self.cpu.is_reg8() {
                     let val = self.load::<u8>();
                     self.compare8(self.cpu.regs.a8(), val);
@@ -2371,31 +2359,15 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xcc => {
                 // CPY - Compare Y with absolute value
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_idx8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.y8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.y, val);
-                    cycles += 1
-                }
+                compare_memory!(CPY: self, addr, &mut cycles)
             }
             0xcd => {
                 // CMP - Compare A with absolute value
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load::<u16>();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xce => {
                 // DEC - Decrement absolute
@@ -2416,14 +2388,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // CMP - Compare A with Absolute Long
                 // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load::<Addr24>();
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd0 => {
                 // BNE - Branch if Zero Flag Clear
@@ -2433,27 +2398,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // CMP - Compare A with DP Indirect Indexed, Y
                 // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd2 => {
                 // CMP - Compare A with DP Indirect
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_dp_indirect(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
+            }
+            0xd3 => {
+                // CMP - Compare A with SR Indirect Indexed, Y
+                let addr = self.load_sr_indirect_indexed_y();
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd4 => {
                 // PEI - Push Direct Page
@@ -2463,16 +2418,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xd5 => {
                 // CMP - Compare A with DP Indexed, X
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_dp_indexed_x(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd6 => {
                 // DEC - Decrement DP Indexed, X
@@ -2490,16 +2437,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xd7 => {
                 // CMP - Compare A with DP Indirect Long Indexed, Y
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_indirect_long_indexed_y(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd8 => {
                 // CLD - Clear Decimal Flag
@@ -2507,16 +2446,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xd9 => {
                 // CMP - Compare A with Absolute Indexed, Y
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xda => {
                 // PHX - Push X
@@ -2535,16 +2466,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xdd => {
                 // CMP - Compare A with Absolute Indexed, X
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_indexed_x::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xde => {
                 // DEC - Decrement Absolute Indexed, X
@@ -2562,20 +2485,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xdf => {
                 // CMP - Compare A with Absolute Long Indexed, X
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_long_indexed_x();
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.a8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.a, val);
-                    cycles += 1
-                }
+                compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xe0 => {
                 // CPX - Compare X with immediate value
-                // this will also work with decimal mode (TODO: check this fact)
                 if self.cpu.is_idx8() {
                     let val = self.load::<u8>();
                     self.compare8(self.cpu.regs.x8(), val);
@@ -2605,16 +2519,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xe4 => {
                 // CPX - Compare X with Direct Page
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_idx8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.x8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.x, val);
-                    cycles += 1
-                }
+                compare_memory!(CPX: self, addr, &mut cycles)
             }
             0xe5 => {
                 // SBC - Subtract Direct Page with carry
@@ -2684,17 +2590,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xec => {
                 // CPX - Compare X with absolute value
-                // this will also work with decimal mode (TODO: check this fact)
                 let addr = self.load();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_idx8() {
-                    let val = self.read::<u8>(addr);
-                    self.compare8(self.cpu.regs.x8(), val);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    self.compare16(self.cpu.regs.x, val);
-                    cycles += 1
-                }
+                compare_memory!(CPX: self, addr, &mut cycles)
             }
             0xed => {
                 // SBC - Subtract absolute with carry
