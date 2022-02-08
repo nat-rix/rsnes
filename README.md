@@ -9,12 +9,13 @@ A [SNES](https://en.wikipedia.org/wiki/Super_Nintendo_Entertainment_System) emul
 
 ## Implementation Status
 
-Some games are already playable, but many graphics and sounds are faulty.
+Many games are already playable, but many graphics and sounds are faulty.
 Comparatively functioning games are e.g. Donkey Kong Country, Wolfenstein 3D,
-F-Zero and Super Mario World.
+F-Zero, Super Mario World, Super Mario Kart, The Legend of Zelda,
+Super Street Fighter II.
 
-- 65816 instruction implementation coverage: ≈91.0%
-- SPC instruction implementation coverage: ≈81.6%
+- 65816 instruction implementation coverage: ≈97.7%
+- SPC instruction implementation coverage: ≈93.0%
 
 ## Usage
 
@@ -69,23 +70,23 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] configurable UI
   - [ ] configurable key bindings
 - [ ] emulator running also on [WASM](https://webassembly.org/)
-- [ ] [DSP](https://en.wikipedia.org/wiki/NEC_%C2%B5PD7720#%C2%B5PD77C25) coprocessor support
-  - [ ] DSP-1, DSP-1A, DSP-1B
-  - [ ] DSP-2, DSP-3, DSP-4 (low priority)
+- [x] [DSP](https://en.wikipedia.org/wiki/NEC_%C2%B5PD7720#%C2%B5PD77C25) coprocessor support
+  - [x] DSP-1, DSP-1A, DSP-1B
+  - [x] DSP-2, DSP-3, DSP-4 (low priority)
   - [ ] ST010, ST011 (very low priority)
 - [ ] [GSU](https://en.wikipedia.org/wiki/Super_FX) coprocessor support (also known as Super FX)
   - [ ] GSU1
   - [ ] GSU2
 - [ ] Complete the 65816 instruction set
 - [ ] Complete the SPC700 instruction set
-- [ ] Complete the DSP-1 instruction set
+- [x] Complete the DSP-1 instruction set
 - [ ] Complete the GSU instruction set
 - [ ] Multitap (MP5) controller support
 - [ ] [SNES Mouse](https://en.wikipedia.org/wiki/Super_NES_Mouse) support
 - [ ] [SNES Super Scope](https://en.wikipedia.org/wiki/Super_Scope) support
 - [x] Save States
 - [ ] Capcom CX4 coprocessor support (this processor is only used in Mega Man X2 and Mega Man X3)
-- [ ] SPC7110 data compression chip
+- [ ] SPC7110 data decompression chip
 
 ## Contributing
 
