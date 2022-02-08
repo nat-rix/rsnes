@@ -2970,13 +2970,12 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             }
             0xfb => {
                 // XCE - Swap Carry and Emulation Flags
-                self.cpu.regs.status.set_if(
-                    Status::CARRY,
-                    core::mem::replace(
-                        &mut self.cpu.regs.is_emulation,
-                        self.cpu.regs.status.has(Status::CARRY),
-                    ),
-                );
+                let carry = self.cpu.regs.status.has(Status::CARRY);
+                self.cpu
+                    .regs
+                    .status
+                    .set_if(Status::CARRY, self.cpu.regs.is_emulation);
+                self.cpu.set_emulation(carry);
             }
             0xfc => {
                 // JSR - Jump to Subroutine

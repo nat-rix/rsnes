@@ -217,11 +217,20 @@ impl Cpu {
         }
     }
 
-    pub fn update_status(&mut self) {
-        if self.regs.is_emulation {
-            self.regs.status |= Status::INDEX_REGISTER_SIZE | Status::ACCUMULATION;
-            self.regs.sp = (self.regs.sp & 0xff) | 0x100;
+    pub fn set_emulation(&mut self, enabled: bool) {
+        if !self.regs.is_emulation && enabled {
+            self.update_emulation()
         }
+        self.regs.is_emulation = enabled
+    }
+
+    pub fn update_emulation(&mut self) {
+        self.regs.status |= Status::INDEX_REGISTER_SIZE | Status::ACCUMULATION;
+        self.regs.sp = (self.regs.sp & 0xff) | 0x100;
+        self.update_status();
+    }
+
+    pub fn update_status(&mut self) {
         if self.is_idx8() {
             self.regs.x &= 0xff;
             self.regs.y &= 0xff;
