@@ -15,7 +15,7 @@ F-Zero, Super Mario World, Super Mario Kart, The Legend of Zelda,
 Super Street Fighter II.
 
 - 65816 instruction implementation coverage: ≈97.7%
-- SPC instruction implementation coverage: ≈93.0%
+- SPC instruction implementation coverage: 100%
 
 ## Usage
 
@@ -78,7 +78,7 @@ This is a set of features to be implemented in the future (sorted by priority)
   - [ ] GSU1
   - [ ] GSU2
 - [ ] Complete the 65816 instruction set
-- [ ] Complete the SPC700 instruction set
+- [x] Complete the SPC700 instruction set
 - [x] Complete the DSP-1 instruction set
 - [ ] Complete the GSU instruction set
 - [ ] Multitap (MP5) controller support
