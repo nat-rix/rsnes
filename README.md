@@ -14,9 +14,6 @@ Comparatively functioning games are e.g. Donkey Kong Country, Wolfenstein 3D,
 F-Zero, Super Mario World, Super Mario Kart, The Legend of Zelda,
 Super Street Fighter II.
 
-- 65816 instruction implementation coverage: ≈97.7%
-- SPC instruction implementation coverage: 100%
-
 ## Usage
 
 This keyboard keys will drive the controller
@@ -58,6 +55,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [x] Color math
 - [x] S-DSP echo effect support
 - [x] S-DSP noise effect support
+- [ ] PPU Mosaic effect
 - [ ] Save game to files
 - [ ] SA-1 support
 - [ ] Real gamepad input support for `rsnes-emulator` (see [winit#944](https://github.com/rust-windowing/winit/issues/944), maybe use unstable fork or branch?)
@@ -77,7 +75,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 - [ ] [GSU](https://en.wikipedia.org/wiki/Super_FX) coprocessor support (also known as Super FX)
   - [ ] GSU1
   - [ ] GSU2
-- [ ] Complete the 65816 instruction set
+- [x] Complete the 65816 instruction set
 - [x] Complete the SPC700 instruction set
 - [x] Complete the DSP-1 instruction set
 - [ ] Complete the GSU instruction set

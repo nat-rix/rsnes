@@ -2717,7 +2717,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 let addr = self.load_long_indexed_x();
                 self.sub_carry_memory(addr, &mut cycles)
             }
-            opcode => todo!("not yet implemented CPU instruction 0x{:02x}", opcode),
         };
         cycles
     }
