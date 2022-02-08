@@ -10,7 +10,7 @@ static CYCLES: [Cycles; 256] = [
        7, 6, 7, 4, 5, 3, 5, 6,   3, 2, 2, 4, 6, 4, 6, 5,  // 0^
        2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 2, 2, 6, 4, 7, 5,  // 1^
        6, 6, 8, 4, 3, 3, 5, 6,   4, 2, 2, 5, 4, 4, 6, 5,  // 2^
-       2, 5, 5, 7, 4, 4, 0, 6,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
+       2, 5, 5, 7, 4, 4, 6, 6,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
        6, 6, 2, 4, 1, 3, 5, 6,   3, 2, 2, 3, 3, 4, 6, 5,  // 4^
        2, 5, 5, 7, 1, 4, 6, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
        6, 0, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
@@ -703,20 +703,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x26 => {
                 // ROL - Rotate Direct Page left
                 let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
-                    self.cpu.update_nz8(res);
-                    self.write(addr, res);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u16 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x8000 > 0);
-                    self.cpu.update_nz16(res);
-                    self.write(addr, res);
-                    cycles += 2
-                }
+                self.rotate_left(addr, &mut cycles)
             }
             0x27 => {
                 // AND - And A with DP Indirect Long
@@ -796,20 +783,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // ROL - Rotate Absolute left
                 let addr = self.load::<u16>();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
-                    self.cpu.update_nz8(res);
-                    self.write(addr, res);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u16 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x8000 > 0);
-                    self.cpu.update_nz16(res);
-                    self.write(addr, res);
-                    cycles += 2
-                }
+                self.rotate_left(addr, &mut cycles)
             }
             0x2f => {
                 // AND - And A with Absolute Long
@@ -885,6 +859,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x36 => {
+                // ROL - Rotate Absolute Indexed, X left
+                let addr = self.load_dp_indexed_x(&mut cycles);
+                self.rotate_left(addr, &mut cycles)
+            }
             0x37 => {
                 // AND - And A with DP Indirect Long Indexed, Y
                 let addr = self.load_indirect_long_indexed_y(&mut cycles);
@@ -902,22 +881,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // SEC - Set Carry Flag
                 self.cpu.regs.status |= Status::CARRY
             }
-            0x3a => {
-                // DEC/DEA - Decrement A
-                if self.cpu.is_reg8() {
-                    let a = self.cpu.regs.a8().wrapping_sub(1);
-                    self.cpu.regs.set_a8(a);
-                    self.cpu.update_nz8(a)
-                } else {
-                    self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
-                    self.cpu.update_nz16(self.cpu.regs.a)
-                }
-            }
-            0x3c => {
-                // BIT - Test Bit from Absolute Indexed, X
-                let addr = self.load_indexed_x::<true>(&mut cycles);
-                self.test_bit(addr, &mut cycles)
-            }
             0x39 => {
                 // AND - And A with Absolute Indexed, Y
                 let addr = self.load_indexed_y::<true>(&mut cycles);
@@ -931,10 +894,26 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0x3a => {
+                // DEC/DEA - Decrement A
+                if self.cpu.is_reg8() {
+                    let a = self.cpu.regs.a8().wrapping_sub(1);
+                    self.cpu.regs.set_a8(a);
+                    self.cpu.update_nz8(a)
+                } else {
+                    self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
+                    self.cpu.update_nz16(self.cpu.regs.a)
+                }
+            }
             0x3b => {
                 // TSC - Transfer SP to A
                 self.cpu.regs.a = self.cpu.regs.sp;
                 self.cpu.update_nz16(self.cpu.regs.a);
+            }
+            0x3c => {
+                // BIT - Test Bit from Absolute Indexed, X
+                let addr = self.load_indexed_x::<true>(&mut cycles);
+                self.test_bit(addr, &mut cycles)
             }
             0x3d => {
                 // AND - And A with Absolute Indexed, X
@@ -952,20 +931,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x3e => {
                 // ROL - Rotate Absolute Indexed, X left
                 let addr = self.load_indexed_x::<false>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let val = self.read::<u8>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
-                    self.cpu.update_nz8(res);
-                    self.write(addr, res);
-                } else {
-                    let val = self.read::<u16>(addr);
-                    let res = self.cpu.regs.status.has(Status::CARRY) as u16 | (val << 1);
-                    self.cpu.regs.status.set_if(Status::CARRY, val & 0x8000 > 0);
-                    self.cpu.update_nz16(res);
-                    self.write(addr, res);
-                    cycles += 2
-                }
+                self.rotate_left(addr, &mut cycles)
             }
             0x3f => {
                 // AND - And A with Absolute Long Indexed, X
@@ -3047,6 +3013,23 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         self.cpu.regs.a = self.cpu.regs.a.wrapping_sub(1);
         if self.cpu.regs.a != u16::MAX {
             self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_sub(3);
+        }
+    }
+
+    fn rotate_left(&mut self, addr: Addr24, cycles: &mut Cycles) {
+        if self.cpu.is_reg8() {
+            let val = self.read::<u8>(addr);
+            let res = self.cpu.regs.status.has(Status::CARRY) as u8 | (val << 1);
+            self.cpu.regs.status.set_if(Status::CARRY, val & 0x80 > 0);
+            self.cpu.update_nz8(res);
+            self.write(addr, res);
+        } else {
+            let val = self.read::<u16>(addr);
+            let res = self.cpu.regs.status.has(Status::CARRY) as u16 | (val << 1);
+            self.cpu.regs.status.set_if(Status::CARRY, val & 0x8000 > 0);
+            self.cpu.update_nz16(res);
+            self.write(addr, res);
+            *cycles += 2
         }
     }
 
