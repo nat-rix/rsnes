@@ -20,8 +20,8 @@ static CYCLES: [Cycles; 256] = [
        2, 6, 2, 4, 3, 3, 3, 6,   2, 2, 2, 4, 4, 4, 4, 5,  // a^
        2, 5, 5, 7, 4, 4, 4, 6,   2, 4, 2, 2, 4, 4, 4, 5,  // b^
        2, 6, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // c^
-       2, 5, 5, 7, 6, 4, 6, 6,   2, 4, 3, 0, 6, 4, 7, 5,  // d^
-       2, 0, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
+       2, 5, 5, 7, 6, 4, 6, 6,   2, 4, 3, 3, 6, 4, 7, 5,  // d^
+       2, 6, 3, 4, 3, 3, 5, 6,   2, 2, 2, 3, 4, 4, 6, 5,  // e^
        2, 5, 5, 7, 5, 4, 6, 6,   2, 4, 4, 2, 8, 4, 7, 5,  // f^
 ];
 
@@ -2458,6 +2458,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0xdb => {
+                // STP - Stop Processor
+                self.cpu.active = false
+            }
             0xdc => {
                 // JMP/JML - Jump absolute indirect long
                 let addr = self.load();
@@ -2499,6 +2503,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                     cycles += 1
                 }
             }
+            0xe1 => {
+                // SBC - Subtract DP Indexed Indirect, X with carry
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                self.sub_carry_memory(addr, &mut cycles)
+            }
             0xe2 => {
                 // SEP - Set specified bits in the Status Register
                 let mask = Status(self.load::<u8>());
@@ -2508,14 +2517,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xe3 => {
                 // SBC - Subtract Stack Relative with carry
                 let addr = self.load_stack_relative();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xe4 => {
                 // CPX - Compare X with Direct Page
@@ -2525,14 +2527,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xe5 => {
                 // SBC - Subtract Direct Page with carry
                 let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xe6 => {
                 // INC - Increment direct page
@@ -2551,14 +2546,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xe7 => {
                 // SBC - Subtract DP Indirect Long with carry
                 let addr = self.load_dp_indirect_long(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xe8 => {
                 // INX - Increment X
@@ -2598,14 +2586,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // SBC - Subtract absolute with carry
                 let addr = self.load::<u16>();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xee => {
                 // INC - Increment absolute
@@ -2625,14 +2606,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xef => {
                 // SBC - Subtract Absolute Long with carry
                 let addr = self.load::<Addr24>();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf0 => {
                 // BEQ - Branch if ZERO is set
@@ -2641,38 +2615,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xf1 => {
                 // SBC - Subtract DP Indirect Indexed, Y with carry
                 let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf2 => {
                 // SBC - Subtract DP Indirect with carry
                 let addr = self.load_dp_indirect(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf3 => {
                 // SBC - Subtract SR Indirect Indexed, Y with carry
                 let addr = self.load_sr_indirect_indexed_y();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf4 => {
                 // PEA - Push absolute value
@@ -2682,14 +2635,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xf5 => {
                 // SBC - Subtract DP Indexed, X with carry
                 let addr = self.load_dp_indexed_x(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf6 => {
                 // INC - Increment DP Indexed, X
@@ -2708,14 +2654,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xf7 => {
                 // SBC - Subtract DP Indirect Long Indexed, Y with carry
                 let addr = self.load_indirect_long_indexed_y(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xf8 => {
                 // SED - Set Decimal flag
@@ -2724,14 +2663,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xf9 => {
                 // SBC - Subtract Absolute Indexed, Y with carry
                 let addr = self.load_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xfa => {
                 // PLX - Pull X
@@ -2764,14 +2696,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xfd => {
                 // SBC - Subtract Absolute Indexed, X with carry
                 let addr = self.load_indexed_x::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             0xfe => {
                 // INC - Increment Absolute Indexed, X
@@ -2790,14 +2715,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0xff => {
                 // SBC - Subtract Absolute Long Indexed, X with carry
                 let addr = self.load_long_indexed_x();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.sub_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.sub_carry16(op1);
-                    cycles += 1;
-                }
+                self.sub_carry_memory(addr, &mut cycles)
             }
             opcode => todo!("not yet implemented CPU instruction 0x{:02x}", opcode),
         };
@@ -2852,6 +2770,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         } else {
             let op1 = self.read::<u16>(addr);
             self.add_carry16(op1);
+            *cycles += 1;
+        }
+    }
+
+    fn sub_carry_memory(&mut self, addr: Addr24, cycles: &mut Cycles) {
+        if self.cpu.is_reg8() {
+            let op1 = self.read::<u8>(addr);
+            self.sub_carry8(op1);
+        } else {
+            let op1 = self.read::<u16>(addr);
+            self.sub_carry16(op1);
             *cycles += 1;
         }
     }

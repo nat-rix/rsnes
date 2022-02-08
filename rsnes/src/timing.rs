@@ -34,7 +34,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         // > The CPU is paused for 40 cycles beginning about 536 cycles
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
-        if !(536..536 + 40).contains(&self.ppu.scanline_cycle) {
+        if !(536..536 + 40).contains(&self.ppu.scanline_cycle) && self.cpu.active {
             if self.dma.hdma_ahead_cycles > 0 {
                 self.dma.hdma_ahead_cycles -= i32::from(N);
             } else if self.dma.is_dma_running() {
