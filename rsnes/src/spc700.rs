@@ -972,9 +972,7 @@ impl Spc700 {
             0xf3 => self.dsp.read(self.mem[0xf2]),
             0xf4..=0xf7 => self.input[usize::from(addr - 0xf4)],
             0xfd..=0xff => self.counters[usize::from(addr - 0xfd)].take(),
-            0xf1 | 0xf8..=0xff => {
-                todo!("reading SPC register 0x{:02x}", addr)
-            }
+            0xf0..=0xf1 | 0xfa..=0xfc => 0,
             0xffc0..=0xffff if self.is_rom_mapped() => ROM[(addr & 0x3f) as usize],
             addr => self.mem[addr as usize],
         }
@@ -982,6 +980,7 @@ impl Spc700 {
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
+            0xf0 => todo!("undocumented SPC register TEST(f0) written"),
             0xf1 => {
                 if val & 0x10 > 0 {
                     self.input[0..2].fill(0)
@@ -1001,9 +1000,6 @@ impl Spc700 {
             0xf3 => self.dsp.write(self.mem[0xf2], val),
             0xf4..=0xf7 => self.output[(addr - 0xf4) as usize] = val,
             0xfa..=0xfc => self.timer_max[usize::from(addr & 3) ^ 2] = val,
-            0xf8..=0xff => {
-                todo!("writing 0x{:02x} to SPC register 0x{:02x}", val, addr)
-            }
             addr => self.mem[addr as usize] = val,
         }
     }
