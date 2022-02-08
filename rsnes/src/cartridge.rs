@@ -518,6 +518,39 @@ impl MemoryMapping {
     }
 }
 
+fn copy_rom(dst: &mut [u8], src: &[u8]) {
+    if dst.len() <= src.len() {
+        dst.copy_from_slice(&src[..dst.len()])
+    } else if src.len().is_power_of_two() {
+        for chunk in dst.chunks_mut(src.len()) {
+            chunk.copy_from_slice(&src[..chunk.len()])
+        }
+    } else {
+        let left_part = src.len().next_power_of_two() >> 1;
+        dst[..left_part].copy_from_slice(&src[..left_part]);
+        let dst_rest = dst.len() - left_part;
+        let src_rest = src.len() - left_part;
+        let right_part = src_rest.next_power_of_two();
+        let count = dst_rest / right_part;
+        let mut n = left_part;
+        for i in 0..count {
+            copy_rom(&mut dst[n..n + right_part], &src[left_part..]);
+            n += right_part;
+        }
+    }
+}
+
+fn create_rom(content: &[u8], size: u32) -> Vec<u8> {
+    let size = size as usize;
+    let mut rom = if content.len() > size {
+        vec![0; content.len().next_power_of_two()]
+    } else {
+        vec![0; size]
+    };
+    copy_rom(&mut rom, content);
+    rom
+}
+
 #[derive(Debug, Default, Clone, InSaveState)]
 pub struct Cartridge {
     header: Header,
@@ -554,13 +587,11 @@ impl Cartridge {
         }
         let (header, _score) = header.ok_or(ReadRomError::NoSuitableHeader)?;
 
-        let mut rom =
-            vec![0u8; usize::max(header.rom_size as usize, bytes.len().next_power_of_two())];
-        for chunk in rom.chunks_mut(bytes.len()) {
-            chunk.copy_from_slice(&bytes[..chunk.len()])
-        }
+        let rom = create_rom(bytes, header.rom_size);
 
-        let checksum = rom.iter().fold(0u16, |b, i| b.wrapping_add((*i).into()));
+        use core::num::Wrapping;
+        let Wrapping(checksum): Wrapping<u16> =
+            rom.iter().copied().map(Into::into).map(Wrapping).sum();
         if checksum != header.checksum {
             eprintln!("warning: checksum did not match! Checksum in ROM is {:04x}; Calculated checksum is {:04x}", header.checksum, checksum);
         }
