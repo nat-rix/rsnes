@@ -1464,8 +1464,7 @@ impl Spc700 {
             }
             0x46 => {
                 // EOR - A ^= (X)
-                let addr = self.load();
-                self.a ^= self.read_small(addr);
+                self.a ^= self.read_small(self.x);
                 self.update_nz8(self.a)
             }
             0x47 => {
@@ -1972,7 +1971,7 @@ impl Spc700 {
                 // SBC - (imm) -= (imm) + CARRY
                 let (src, dst) = (self.load(), self.load());
                 let dst = self.get_small(dst);
-                let res = self.adc(self.read(dst), self.read_small(src));
+                let res = self.adc(self.read(dst), !self.read_small(src));
                 self.write(dst, res);
                 self.update_nz8(res)
             }
