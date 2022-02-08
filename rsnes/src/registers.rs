@@ -133,7 +133,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // JOYSER0 - NES-style Joypad access
                 self.controllers.set_strobe(val & 1 > 0)
             }
-            0x4017 => (),
             0x4200 => {
                 // NMITIMEN - Interrupt Enable Flags
                 // TODO: implement expected behavior
@@ -199,12 +198,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // MEMSEL - ROM access speed
                 self.cpu.access_speed = val & 1 > 0
             }
-            0x4210..=0x421f => (),
             0x4300..=0x43ff => {
                 // DMA Registers
                 self.dma.write(id, val)
             }
-            0x420e..=0x420f => (),
+            0x4000..=0x4015 | 0x4017..=0x41ff | 0x420e..=0x42ff => (),
             _ => todo!("internal register 0x{:04x} written", id),
         }
     }
