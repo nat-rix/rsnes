@@ -13,7 +13,7 @@ static CYCLES: [Cycles; 256] = [
        2, 5, 5, 7, 4, 4, 6, 6,   2, 4, 2, 2, 4, 4, 7, 5,  // 3^
        6, 6, 2, 4, 1, 3, 5, 6,   3, 2, 2, 3, 3, 4, 6, 5,  // 4^
        2, 5, 5, 7, 1, 4, 6, 6,   2, 4, 3, 2, 4, 4, 7, 5,  // 5^
-       6, 0, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
+       6, 6, 6, 4, 3, 3, 5, 6,   4, 2, 2, 6, 5, 4, 6, 5,  // 6^
        2, 5, 5, 7, 4, 4, 6, 6,   2, 4, 4, 2, 6, 4, 7, 5,  // 7^
        2, 6, 4, 4, 3, 3, 3, 6,   2, 2, 2, 3, 4, 4, 4, 5,  // 8^
        2, 6, 5, 7, 4, 4, 4, 6,   2, 5, 2, 2, 4, 5, 5, 5,  // 9^
@@ -860,7 +860,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 }
             }
             0x36 => {
-                // ROL - Rotate Absolute Indexed, X left
+                // ROL - Rotate DP Indexed, X left
                 let addr = self.load_dp_indexed_x(&mut cycles);
                 self.rotate_left(addr, &mut cycles)
             }
@@ -1301,6 +1301,11 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // RTS - Return from subroutine
                 self.cpu.regs.pc.addr = 1u16.wrapping_add(self.pull());
             }
+            0x61 => {
+                // ADC - DP Indexed Indirect, X Add with Carry
+                let addr = self.load_dp_indexed_indirect_x(&mut cycles);
+                self.add_carry_memory(addr, &mut cycles)
+            }
             0x62 => {
                 // PER - Push PC + imm
                 let val = self.load::<u16>();
@@ -1310,14 +1315,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x63 => {
                 // ADC - Stack Relative Add with Carry
                 let addr = self.load_stack_relative();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x64 => {
                 // STZ - Store Zero to memory
@@ -1327,14 +1325,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x65 => {
                 // ADC - DP Add with Carry
                 let addr = self.load_direct(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x66 => {
                 // ROR - Rotate Direct Page right
@@ -1357,14 +1348,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x67 => {
                 // ADC - Add DP Indirect Long with Carry
                 let addr = self.load_dp_indirect_long(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x68 => {
                 // PLA - Pull A
@@ -1423,14 +1407,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // ADC - Add absolute with Carry
                 let addr = self.load();
                 let addr = self.cpu.get_data_addr(addr);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x6e => {
                 // ROR - Rotate Absolute right
@@ -1454,14 +1431,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x6f => {
                 // ADC - Add with Carry Absolute Long
                 let addr = self.load::<Addr24>();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x70 => {
                 // BVS - Branch if Overflow is set
@@ -1470,38 +1440,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x71 => {
                 // ADC - Add with Carry DP Indirect Indexed, Y
                 let addr = self.load_indirect_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x72 => {
                 // ADC - DP Indirect Add with Carry
                 let addr = self.load_dp_indirect(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x73 => {
                 // ADC - SR Indirect Indexed, Y Add with Carry
                 let addr = self.load_sr_indirect_indexed_y();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x74 => {
                 // STZ - Store Zero to DP X indexed memory
@@ -1511,14 +1460,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x75 => {
                 // ADC - Add with Carry DP Indexed, X
                 let addr = self.load_dp_indexed_x(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x76 => {
                 // ROR - Rotate DP Indexed, X right
@@ -1541,14 +1483,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x77 => {
                 // ADC - Add with Carry DP Indirect Long Indexed, Y
                 let addr = self.load_indirect_long_indexed_y(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x78 => {
                 // SEI - Set the Interrupt Disable flag
@@ -1557,14 +1492,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x79 => {
                 // ADC - Add with Carry Absolute Indexed, Y
                 let addr = self.load_indexed_y::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x7a => {
                 // PLY - Pull Y
@@ -1591,14 +1519,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x7d => {
                 // ADC - Add with Carry
                 let addr = self.load_indexed_x::<true>(&mut cycles);
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x7e => {
                 // ROR - Rotate Absolute Indexed, X right
@@ -1621,14 +1542,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x7f => {
                 // ADC - Add Absolute Long Indexed, X with Carry
                 let addr = self.load_long_indexed_x();
-                if self.cpu.is_reg8() {
-                    let op1 = self.read::<u8>(addr);
-                    self.add_carry8(op1);
-                } else {
-                    let op1 = self.read::<u16>(addr);
-                    self.add_carry16(op1);
-                    cycles += 1;
-                }
+                self.add_carry_memory(addr, &mut cycles)
             }
             0x80 => {
                 // BRA - Branch always
@@ -3030,6 +2944,17 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.cpu.update_nz16(res);
             self.write(addr, res);
             *cycles += 2
+        }
+    }
+
+    fn add_carry_memory(&mut self, addr: Addr24, cycles: &mut Cycles) {
+        if self.cpu.is_reg8() {
+            let op1 = self.read::<u8>(addr);
+            self.add_carry8(op1);
+        } else {
+            let op1 = self.read::<u16>(addr);
+            self.add_carry16(op1);
+            *cycles += 1;
         }
     }
 
