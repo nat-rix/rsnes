@@ -1053,7 +1053,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 }
             }
             0x48 => {
-                // PHK - Push A
+                // PHA - Push A
                 if self.cpu.is_reg8() {
                     self.push(self.cpu.regs.a8())
                 } else {
@@ -2411,7 +2411,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 compare_memory!(CMP: self, addr, &mut cycles)
             }
             0xd4 => {
-                // PEI - Push Direct Page
+                // PEI - Push 16-bit value from DP
                 let addr = self.load_direct(&mut cycles);
                 let val = self.read::<u16>(addr);
                 self.push(val);

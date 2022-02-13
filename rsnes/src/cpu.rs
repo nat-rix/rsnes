@@ -88,7 +88,7 @@ impl Status {
     pub const DECIMAL: Self = Self(0b0000_1000);
     /// IRQ-Disable Flag
     ///  - `0`: Enabled
-    ///  - `0`: Disabled
+    ///  - `1`: Disabled
     pub const IRQ_DISABLE: Self = Self(0b0000_0100);
     /// Zero Flag
     ///

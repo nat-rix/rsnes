@@ -3,7 +3,7 @@ use save_state_macro::*;
 
 pub mod flags {
     pub const MODE: u8 = 0b111;
-    pub const FIEXD: u8 = 0x08;
+    pub const FIXED: u8 = 0x08;
     pub const DECREMENT: u8 = 0x10;
     pub const INDIRECT: u8 = 0x40;
     pub const PPU_TO_CPU: u8 = 0x80;
@@ -225,7 +225,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0b101 => &[0, 1, 0, 1],
             0b1000..=u8::MAX => unreachable!(),
         };
-        let delta = if channel.control & flags::FIEXD == 0 {
+        let delta = if channel.control & flags::FIXED == 0 {
             if channel.control & flags::DECREMENT > 0 {
                 u16::MAX
             } else {
