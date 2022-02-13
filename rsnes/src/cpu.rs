@@ -188,12 +188,12 @@ impl Cpu {
 
     /// Indicate if the A register is in 8-bit mode
     pub const fn is_reg8(&self) -> bool {
-        self.regs.status.has(Status::ACCUMULATION)
+        self.regs.status.has(Status::ACCUMULATION) || self.regs.is_emulation
     }
 
     /// Indicate if the X and Y registers are in 8-bit mode
     pub const fn is_idx8(&self) -> bool {
-        self.regs.status.has(Status::INDEX_REGISTER_SIZE)
+        self.regs.status.has(Status::INDEX_REGISTER_SIZE) || self.regs.is_emulation
     }
 
     /// Build an [`Addr24`] from an 16-bit address with the data bank register
