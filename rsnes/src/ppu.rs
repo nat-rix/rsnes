@@ -498,7 +498,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             vram_data_buffer: 0,
             brightness: 0x0f,
             obj_size: ObjectSize::O8S16,
-            remap_mode: RemapMode::NoRemap,
+            remap_mode: Default::default(),
             vram_increment_amount: 1,
             increment_first: true,
             overscan: false,
@@ -681,7 +681,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                     1 => 32,
                     _ => 128,
                 };
-                self.remap_mode = RemapMode::from_bits(val >> 2);
+                self.remap_mode = RemapMode::new(val >> 2);
             }
             0x16 | 0x17 => {
                 // VMADDL / VMADDH
@@ -1390,52 +1390,25 @@ impl save_state::InSaveState for ObjectSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemapMode {
-    NoRemap,
-    First,
-    Second,
-    Third,
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, InSaveState)]
+pub struct RemapMode {
+    mask: u16,
+    shift: u8,
 }
 
 impl RemapMode {
-    pub const fn from_bits(bits: u8) -> Self {
-        match bits & 0b11 {
-            0b00 => Self::NoRemap,
-            0b01 => Self::First,
-            0b10 => Self::Second,
-            0b11 => Self::Third,
-            _ => unreachable!(),
-        }
-    }
-
-    pub const fn to_bits(self) -> u8 {
-        match self {
-            Self::NoRemap => 0b00,
-            Self::First => 0b01,
-            Self::Second => 0b10,
-            Self::Third => 0b11,
-        }
+    pub fn new(val: u8) -> Self {
+        core::num::NonZeroU8::new(val & 3)
+            .map(|v| Self {
+                mask: (1 << (val + 7)) - 1,
+                shift: val | 4,
+            })
+            .unwrap_or_default()
     }
 
     pub const fn remap(&self, addr: u16) -> u16 {
-        match self {
-            Self::NoRemap => addr,
-            Self::First => (addr & 0xff00) | ((addr & 0x1f) << 3) | ((addr >> 5) & 0b111),
-            Self::Second => (addr & 0xfe00) | ((addr & 0x3f) << 3) | ((addr >> 6) & 0b111),
-            Self::Third => (addr & 0xfc00) | ((addr & 0x7f) << 3) | ((addr >> 7) & 0b111),
-        }
-    }
-}
-
-impl save_state::InSaveState for RemapMode {
-    fn serialize(&self, state: &mut SaveStateSerializer) {
-        self.to_bits().serialize(state)
-    }
-
-    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        let mut n: u8 = 0;
-        n.deserialize(state);
-        *self = Self::from_bits(n)
+        let addr_part = addr & !self.mask;
+        let rest_part = addr & self.mask;
+        (((rest_part >> self.shift) | (rest_part << 3)) & self.mask) | addr_part
     }
 }
