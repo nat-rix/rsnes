@@ -532,7 +532,7 @@ fn main() {
                                 queue.write_buffer(
                                     &screen_size_buffer,
                                     12,
-                                    &u32::from(snes.vend() - 1).to_ne_bytes(),
+                                    &u32::from(snes.ppu.vend() - 1).to_ne_bytes(),
                                 );
                             }
                         }

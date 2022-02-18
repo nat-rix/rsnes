@@ -48,6 +48,27 @@ impl Object {
     pub fn read_high(&self) -> u8 {
         ((self.x >= 0x100) as u8) | ((self.is_large as u8) << 1)
     }
+
+    pub const fn get_palette_nr(&self) -> u8 {
+        (self.attrs >> 1) & 7
+    }
+
+    pub const fn get_priority(&self) -> u8 {
+        (self.attrs >> 4) & 3
+    }
+
+    pub const fn is_xflip(&self) -> bool {
+        self.attrs & 0x40 > 0
+    }
+
+    pub const fn is_yflip(&self) -> bool {
+        self.attrs & 0x80 > 0
+    }
+
+    pub fn get_tile_addr(&self, base: u16, tilex: u8, tiley: u8) -> u16 {
+        let tile_nr = self.tile_nr.wrapping_add(tilex).wrapping_add(tiley << 4);
+        base.wrapping_add(u16::from(tile_nr) << 4)
+    }
 }
 
 #[derive(Debug, Clone, InSaveState)]
@@ -161,14 +182,17 @@ impl CgRam {
         u16::from_le_bytes([self.data[addr], self.data[addr | 1]])
     }
 
-    pub fn read(&mut self, open_bus: &mut u8) -> u8 {
-        let bit = 0x80 & *open_bus;
-        *open_bus = self.data[usize::from(self.addr & 0x1ff)];
+    pub fn read(&mut self, open_bus: u8) -> u8 {
+        let mut val = self.data[usize::from(self.addr & 0x1ff)];
         if self.addr & 1 == 1 {
-            *open_bus &= 0x7f;
-            *open_bus |= bit;
+            val &= 0x7f;
+            val |= 0x80 & open_bus;
         }
         self.addr = self.addr.wrapping_add(1);
-        *open_bus
+        val
+    }
+
+    pub const fn main_screen_backdrop(&self) -> u16 {
+        u16::from_le_bytes([self.data[0], self.data[1]])
     }
 }

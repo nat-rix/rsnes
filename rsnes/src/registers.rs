@@ -94,9 +94,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x4212 => {
                 // HVBJOY - PPU status
                 // TODO: better timing and auto joypad timing
-                let in_hblank = self.ppu.scanline_cycle >= 1096 || self.ppu.scanline_cycle <= 2;
+                let in_hblank = self.ppu.is_in_hblank_reg4212();
                 Some(
-                    (((self.ppu.scanline_nr >= self.vend()) as u8) << 7)
+                    ((self.ppu.is_in_vblank() as u8) << 7)
                         | ((in_hblank as u8) << 6)
                         | (self.controllers.auto_joypad_timer > 0) as u8
                         | (self.open_bus & 0x3e),

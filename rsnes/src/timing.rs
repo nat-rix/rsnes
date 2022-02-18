@@ -25,8 +25,8 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     pub fn run_cycle<const N: u16>(&mut self) {
         self.smp.tick(N);
         self.cartridge.as_mut().unwrap().tick(N.into());
-        let vend = self.vend();
-        if self.is_auto_joypad() && self.new_scanline && self.ppu.scanline_nr == vend + 2 {
+        let vend = self.ppu.vend();
+        if self.is_auto_joypad() && self.new_scanline && self.ppu.get_pos().y == vend + 2 {
             self.controllers.auto_joypad_timer = 4224;
             self.controllers.auto_joypad()
         }
@@ -34,7 +34,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         // > The CPU is paused for 40 cycles beginning about 536 cycles
         // > after the start of each scanline
         // source: <https://wiki.superfamicom.org/timing>
-        if !(536..536 + 40).contains(&self.ppu.scanline_cycle) && self.cpu.active {
+        if self.ppu.is_cpu_active() && self.cpu.active {
             if self.dma.hdma_ahead_cycles > 0 {
                 self.dma.hdma_ahead_cycles -= i32::from(N);
             } else if self.dma.is_dma_running() {
@@ -50,58 +50,57 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
         if self.new_frame {
             self.dma.hdma_ahead_cycles = self.reset_hdma();
         }
-        if self.do_hdma && self.ppu.scanline_nr < vend && self.ppu.scanline_cycle >= 1024 {
+        if self.do_hdma && !self.ppu.is_in_vblank() && self.ppu.get_pos().x >= 1024 {
             self.do_hdma = false;
             self.dma.hdma_ahead_cycles = self.do_hdma();
         }
-        if self.new_scanline && self.ppu.scanline_nr == vend {
+        let vblanked = self.new_scanline && self.ppu.get_pos().y == vend;
+        if vblanked {
             self.ppu.vblank();
         }
-        if !self.scanline_drawn
-            && self.ppu.scanline_nr + 1 < vend
-            && self.ppu.scanline_cycle + crate::ppu::RAY_AHEAD_CYCLES >= self.get_line_length()
+        if self.ppu.get_pos().x + crate::ppu::RAY_AHEAD_CYCLES >= self.ppu.get_scanline_cycles()
+            && self.ppu.get_pos().y + 1 < vend
+            && !self.scanline_drawn
         {
             self.scanline_drawn = true;
-            self.ppu.draw_line(self.ppu.scanline_nr + 1)
+            self.ppu.draw_scanline();
         }
         let h_irq_enabled = self.cpu.nmitimen & 0x10 > 0;
         let v_irq_enabled = self.cpu.nmitimen & 0x20 > 0;
         self.shall_irq = self.shall_irq
             || ((h_irq_enabled || v_irq_enabled)
                 && (!h_irq_enabled
-                    || ((self.ppu.scanline_cycle as i16 - N as i16) >> 2
-                        < self.irq_time_h as i16
-                        && self.ppu.scanline_cycle >> 2 >= self.irq_time_h))
-                && (!v_irq_enabled || self.ppu.scanline_nr == self.irq_time_v)
+                    || ((self.ppu.get_pos().x as i16 - N as i16) >> 2 < self.irq_time_h as i16
+                        && self.ppu.get_pos().x >> 2 >= self.irq_time_h))
+                && (!v_irq_enabled || self.ppu.get_pos().y == self.irq_time_v)
                 && (h_irq_enabled || !v_irq_enabled || self.new_scanline));
-        let do_nmi = self.new_scanline && self.ppu.scanline_nr == vend;
-        self.nmi_vblank_bit.set(self.nmi_vblank_bit.get() || do_nmi);
-        self.shall_nmi = self.cpu.nmitimen & 0x80 > 0 && (self.shall_nmi || do_nmi);
+        self.nmi_vblank_bit
+            .set(self.nmi_vblank_bit.get() || vblanked);
+        self.shall_nmi = self.cpu.nmitimen & 0x80 > 0 && (self.shall_nmi || vblanked);
         self.update_counters::<N>();
     }
 
     pub fn update_counters<const N: u16>(&mut self) {
-        self.ppu.scanline_cycle += N;
+        self.ppu.mut_pos().x += N;
         self.math_registers.tick(N);
         self.new_scanline = false;
         self.new_frame = false;
-        let line_length = self.get_line_length();
+        let line_length = self.ppu.get_scanline_cycles();
         // Test if one scanline completed
         // TODO: Take notice of the interlace mode
-        if self.ppu.scanline_cycle >= line_length {
-            self.ppu.scanline_cycle -= line_length;
-            self.ppu.scanline_nr += 1;
+        if self.ppu.get_pos().x >= line_length {
+            self.ppu.mut_pos().x -= line_length;
+            self.ppu.mut_pos().y += 1;
             self.do_hdma = true;
             self.new_scanline = true;
             self.scanline_drawn = false;
-            let scanline_count = self.scanline_count();
+            let scanline_count = self.ppu.get_scanline_count();
             // Test if one frame completed
             // TODO: Take notice of the interlace mode
-            if self.ppu.scanline_nr >= scanline_count {
-                self.ppu.scanline_nr -= scanline_count;
+            if self.ppu.get_pos().y >= scanline_count {
+                self.ppu.mut_pos().y -= scanline_count;
                 self.new_frame = true;
                 self.nmi_vblank_bit.set(false);
-                self.ppu.field ^= true;
                 self.ppu.end_vblank();
                 self.smp.refresh();
                 self.cartridge.as_mut().unwrap().refresh_coprocessors();
@@ -109,17 +108,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 // if the S-SMP is threaded, refresh it every scanline
                 self.smp.refresh();
             }
-        }
-    }
-
-    pub fn get_line_length(&self) -> u16 {
-        if !self.is_pal && !self.ppu.interlace && self.ppu.field && self.ppu.scanline_nr == 240 {
-            1360
-        } else if self.is_pal && self.ppu.interlace && self.ppu.field && self.ppu.scanline_nr == 311
-        {
-            1368
-        } else {
-            1364
         }
     }
 
@@ -148,22 +136,6 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.dispatch_instruction() * 6
             }) + self.memory_cycles;
             self.cpu_ahead_cycles += cycles as i32;
-        }
-    }
-
-    pub fn vend(&self) -> u16 {
-        (if self.ppu.overscan {
-            crate::ppu::MAX_SCREEN_HEIGHT_OVERSCAN
-        } else {
-            crate::ppu::MAX_SCREEN_HEIGHT
-        } + 1) as _
-    }
-
-    pub fn scanline_count(&self) -> u16 {
-        if self.is_pal {
-            312
-        } else {
-            262
         }
     }
 

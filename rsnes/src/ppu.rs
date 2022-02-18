@@ -1,6 +1,5 @@
-use crate::oam::{CgRam, Oam};
+use crate::oam::{CgRam, Oam, Object};
 use core::mem::{replace, take};
-use core::ops::{Add, Sub};
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
 use save_state_macro::*;
 
@@ -17,357 +16,245 @@ pub const CHIP_5C78_VERSION: u8 = 3;
 // there is garbage for about 16-24 pixels.
 pub const RAY_AHEAD_CYCLES: u16 = 20 * 4;
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-pub enum BgModeNum {
-    Mode0 = 0,
-    Mode1 = 1,
-    Mode2 = 2,
-    Mode3 = 3,
-    Mode4 = 4,
-    Mode5 = 5,
-    Mode6 = 6,
-    Mode7 = 7,
+static OBJ_SIZES: [[[u8; 2]; 2]; 8] = [
+    [[8, 8], [16, 16]],
+    [[8, 8], [32, 32]],
+    [[8, 8], [64, 64]],
+    [[16, 16], [32, 32]],
+    [[16, 16], [64, 64]],
+    [[32, 32], [64, 64]],
+    [[16, 32], [32, 64]],
+    [[16, 32], [32, 32]],
+];
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, InSaveState)]
+pub struct RayPos {
+    pub x: u16,
+    pub y: u16,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct BgMode {
-    num: BgModeNum,
-    // only relevant to mode 1
-    bg3_priority: bool,
-    // only relevant to mode 7
-    extbg: bool,
+impl RayPos {
+    pub fn get<const N: u8>(&self) -> u16 {
+        if N == 0 {
+            self.x
+        } else {
+            self.y
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DrawLayer {
-    Bg(u8, u8, bool),
-    Sprite(u8),
+#[derive(Debug, Default, Clone, Copy, InSaveState)]
+pub struct LatchedState {
+    pos: RayPos,
+    flip: [bool; 2],
+    latched: bool,
 }
 
-impl BgMode {
+impl LatchedState {
+    pub fn get<const N: u8>(&mut self, open_bus: u8) -> u8 {
+        let c = self.pos.get::<N>();
+        self.flip[N as usize] ^= true;
+        if self.flip[N as usize] {
+            (c & 0xff) as u8
+        } else {
+            ((c >> 8) & 1) as u8 | (open_bus & 0xfe)
+        }
+    }
+
+    pub fn reset_flipflops(&mut self) -> bool {
+        self.flip = [false; 2];
+        take(&mut self.latched)
+    }
+}
+
+#[derive(Debug, Clone, InSaveState)]
+pub struct Vram {
+    vram: [u16; VRAM_SIZE],
+    unmapped_addr: u16,
+    mapped_addr: u16,
+    increment_first: bool,
+    remap_mode: RemapMode,
+    steps: u16,
+    buffered: u16,
+}
+
+impl Vram {
     pub fn new() -> Self {
         Self {
-            num: BgModeNum::Mode0,
-            bg3_priority: false,
-            extbg: false,
+            vram: [0; VRAM_SIZE],
+            unmapped_addr: 0,
+            mapped_addr: 0,
+            increment_first: false,
+            remap_mode: RemapMode::default(),
+            steps: 1,
+            buffered: 0,
         }
     }
 
-    pub fn set_bits(&mut self, bits: u8) {
-        self.num = match bits & 7 {
-            0 => BgModeNum::Mode0,
-            1 => BgModeNum::Mode1,
-            2 => BgModeNum::Mode2,
-            3 => BgModeNum::Mode3,
-            4 => BgModeNum::Mode4,
-            5 => BgModeNum::Mode5,
-            6 => BgModeNum::Mode6,
-            7 => BgModeNum::Mode7,
-            _ => unreachable!(),
-        };
-        self.bg3_priority = bits & 8 > 0;
+    pub fn step(&mut self) {
+        self.unmapped_addr = self.unmapped_addr.wrapping_add(self.steps);
+        self.update_mapped();
     }
 
-    fn get_layers(&self) -> &'static [DrawLayer] {
-        use BgModeNum::*;
-        const fn s(prio: u8) -> DrawLayer {
-            DrawLayer::Sprite(prio)
-        }
-        const fn b(bg: u8, depth: u8, prio: u8) -> DrawLayer {
-            DrawLayer::Bg(bg - 1, depth, prio == 1)
-        }
-        static MODE0: [DrawLayer; 12] = [
-            s(3),
-            b(1, 1, 1),
-            b(2, 1, 1),
-            s(2),
-            b(1, 1, 0),
-            b(2, 1, 0),
-            s(1),
-            b(3, 1, 1),
-            b(4, 1, 1),
-            s(0),
-            b(3, 1, 0),
-            b(4, 1, 0),
-        ];
-        static MODE1: [DrawLayer; 10] = [
-            s(3),
-            b(1, 2, 1),
-            b(2, 2, 1),
-            s(2),
-            b(1, 2, 0),
-            b(2, 2, 0),
-            s(1),
-            b(3, 1, 1),
-            s(0),
-            b(3, 1, 0),
-        ];
-        static MODE1_BG3: [DrawLayer; 10] = [
-            b(3, 1, 1),
-            s(3),
-            b(1, 2, 1),
-            b(2, 2, 1),
-            s(2),
-            b(1, 2, 0),
-            b(2, 2, 0),
-            s(1),
-            s(0),
-            b(3, 1, 0),
-        ];
-        static MODE2: [DrawLayer; 8] = [
-            s(3),
-            b(1, 2, 1),
-            s(2),
-            b(2, 2, 1),
-            s(1),
-            b(1, 2, 0),
-            s(0),
-            b(2, 2, 0),
-        ];
-        static MODE3: [DrawLayer; 8] = [
-            s(3),
-            b(1, 3, 1),
-            s(2),
-            b(2, 2, 1),
-            s(1),
-            b(1, 3, 0),
-            s(0),
-            b(2, 2, 0),
-        ];
-        static MODE4: [DrawLayer; 8] = [
-            s(3),
-            b(1, 3, 1),
-            s(2),
-            b(2, 1, 1),
-            s(1),
-            b(1, 3, 0),
-            s(0),
-            b(2, 1, 0),
-        ];
-        static MODE5: [DrawLayer; 8] = [
-            s(3),
-            b(1, 2, 1),
-            s(2),
-            b(2, 1, 1),
-            s(1),
-            b(1, 2, 0),
-            s(0),
-            b(2, 1, 0),
-        ];
-        static MODE6: [DrawLayer; 6] = [s(3), b(1, 2, 1), s(2), s(1), b(1, 2, 0), s(0)];
-        static MODE7: [DrawLayer; 5] = [s(3), s(2), s(1), b(1, 3, 0), s(0)];
-        static MODE7_EXTBG: [DrawLayer; 7] = [
-            s(3),
-            s(2),
-            b(2, 0xff, 1),
-            s(1),
-            b(1, 3, 0),
-            s(0),
-            b(2, 0xff, 0),
-        ];
-        match self.num {
-            Mode0 => &MODE0,
-            Mode1 => {
-                if self.bg3_priority {
-                    &MODE1_BG3
-                } else {
-                    &MODE1
-                }
-            }
-            Mode2 => &MODE2,
-            Mode3 => &MODE3,
-            Mode4 => &MODE4,
-            Mode5 => &MODE5,
-            Mode6 => &MODE6,
-            Mode7 => {
-                if self.extbg {
-                    &MODE7_EXTBG
-                } else {
-                    &MODE7
-                }
-            }
-        }
+    pub fn update_mapped(&mut self) {
+        self.mapped_addr = self.remap_mode.remap(self.unmapped_addr);
+    }
+
+    pub fn prefetch(&mut self) {
+        self.buffered = self.read(self.mapped_addr)
+    }
+
+    pub fn get_mut(&mut self) -> &mut u16 {
+        &mut self.vram[usize::from(self.mapped_addr) & (VRAM_SIZE - 1)]
+    }
+
+    pub fn read(&self, addr: u16) -> u16 {
+        self.vram[usize::from(addr) & (VRAM_SIZE - 1)]
     }
 }
 
-impl save_state::InSaveState for BgMode {
-    fn serialize(&self, state: &mut SaveStateSerializer) {
-        ((self.num as u8) | ((self.bg3_priority as u8) << 3) | ((self.extbg as u8) << 4))
-            .serialize(state)
-    }
-
-    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        let mut n: u8 = 0;
-        n.deserialize(state);
-        self.set_bits(n);
-        self.extbg = n & 16 > 0;
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Color<T: std::fmt::Debug + Clone + Copy = u8> {
-    pub r: T,
-    pub g: T,
-    pub b: T,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, InSaveState)]
+pub struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 impl Color {
-    pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
-
-    pub const fn with_brightness(self, brightness: u8) -> Self {
-        let b = brightness & 0xff;
-        const fn comp(v: u8, b: u8) -> u8 {
-            ((v as u16 * b as u16 + 1) >> 4) as _
-        }
-        Self {
-            r: comp(self.r, b),
-            g: comp(self.g, b),
-            b: comp(self.b, b),
-        }
-    }
-
-    pub fn saturating_add(self, other: Self) -> Self {
-        Self {
-            r: self.r.saturating_add(other.r),
-            g: self.g.saturating_add(other.g),
-            b: self.b.saturating_add(other.b),
-        }
-    }
-
-    pub fn saturating_sub(self, other: Self) -> Self {
-        Self {
-            r: self.r.saturating_sub(other.r),
-            g: self.g.saturating_sub(other.g),
-            b: self.b.saturating_sub(other.b),
-        }
-    }
-}
-
-impl<T: std::fmt::Debug + Clone + Copy> Color<T> {
-    pub fn new(r: T, g: T, b: T) -> Self {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 
-    pub fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Color<U>
-    where
-        U: std::fmt::Debug + Clone + Copy,
-    {
-        Color {
+    pub fn to_rgba8(self, brightness: u8) -> [u8; 4] {
+        let Color { r, g, b } =
+            self.map(|c| (((c as u16 * (brightness + 1) as u16) >> 1) & 0xff) as u8);
+        [r, g, b, 255]
+    }
+
+    pub fn map<F: FnMut(u8) -> u8>(self, mut f: F) -> Self {
+        Self {
             r: f(self.r),
             g: f(self.g),
             b: f(self.b),
         }
     }
+
+    pub fn half(self) -> Self {
+        self.map(|c| c >> 1)
+    }
 }
 
-impl<T: std::fmt::Debug + Clone + Copy + Into<i16>> Add for Color<T> {
-    type Output = Color<i16>;
-
-    fn add(self, other: Self) -> Color<i16> {
-        Color {
-            r: self.r.into() + other.r.into(),
-            g: self.g.into() + other.g.into(),
-            b: self.b.into() + other.b.into(),
+impl core::ops::Add for Color {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            r: self.r.wrapping_add(rhs.r),
+            g: self.g.wrapping_add(rhs.g),
+            b: self.b.wrapping_add(rhs.b),
         }
     }
 }
 
-impl<T: std::fmt::Debug + Clone + Copy + Into<i16>> Sub for Color<T> {
-    type Output = Color<i16>;
-
-    fn sub(self, other: Self) -> Color<i16> {
-        Color {
-            r: self.r.into() - other.r.into(),
-            g: self.g.into() - other.g.into(),
-            b: self.b.into() - other.b.into(),
+impl core::ops::Sub for Color {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            r: self.r.saturating_sub(rhs.r),
+            g: self.g.saturating_sub(rhs.g),
+            b: self.b.saturating_sub(rhs.b),
         }
     }
 }
 
-impl<T: std::fmt::Debug + Clone + Copy + save_state::InSaveState> save_state::InSaveState
-    for Color<T>
-{
-    fn serialize(&self, state: &mut SaveStateSerializer) {
-        self.r.serialize(state);
-        self.g.serialize(state);
-        self.b.serialize(state);
-    }
-
-    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        self.r.deserialize(state);
-        self.g.deserialize(state);
-        self.b.deserialize(state);
+impl From<u16> for Color {
+    fn from(n: u16) -> Self {
+        Self {
+            r: (n & 0x1f) as u8,
+            g: ((n >> 5) & 0x1f) as u8,
+            b: ((n >> 10) & 0x1f) as u8,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, InSaveState)]
-pub struct Background {
-    tilemap_addr: u8,
-    base_addr: u8,
-    x_mirror: bool,
-    y_mirror: bool,
-    // otherwise it is 8x8
-    is_16x16_tiles: bool,
-    scroll_prev: u8,
-    scroll_prev_h: u8,
-    scroll: [u16; 2],
-    layer: Layer,
+pub struct ColorMath {
+    window: Window,
+    backdrop: bool,
+    half_color: bool,
+    subtract_color: bool,
+    add_subscreen: bool,
+    behaviour: u8,
+    color: Color,
 }
 
-impl Background {
+impl ColorMath {
     pub const fn new() -> Self {
         Self {
-            tilemap_addr: 0,
-            base_addr: 0,
-            x_mirror: false,
-            y_mirror: false,
-            is_16x16_tiles: false,
-            scroll_prev: 0,
-            scroll_prev_h: 0,
-            scroll: [0; 2],
-            layer: Layer::new(),
+            window: Window::new(),
+            backdrop: false,
+            half_color: false,
+            subtract_color: false,
+            add_subscreen: false,
+            behaviour: 0,
+            color: Color::new(0, 0, 0),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, InSaveState)]
-pub struct Layer {
+pub struct Window {
     mask_logic: MaskLogic,
     windows: [bool; 2],
     window_inversion: [bool; 2],
-    color_math: bool,
-    // not on color_layer
-    main_screen: bool,
-    // not on color_layer
-    sub_screen: bool,
-    // not on color_layer
-    main_screen_masked: bool,
-    // not on color_layer
-    sub_screen_masked: bool,
 }
 
-impl Layer {
+impl Window {
     pub const fn new() -> Self {
         Self {
             mask_logic: MaskLogic::Or,
             windows: [false; 2],
             window_inversion: [false; 2],
-            color_math: false,
+        }
+    }
+
+    pub fn select(&mut self, val: u8) {
+        self.window_inversion[0] = val & 1 > 0;
+        self.windows[0] = val & 2 > 0;
+        self.window_inversion[1] = val & 4 > 0;
+        self.windows[1] = val & 8 > 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy, InSaveState)]
+pub struct Layer {
+    window: Window,
+    main_screen: bool,
+    sub_screen: bool,
+    window_area_main_screen: bool,
+    window_area_sub_screen: bool,
+    color_math: bool,
+}
+
+impl Layer {
+    pub const fn new() -> Self {
+        Self {
+            window: Window::new(),
             main_screen: false,
             sub_screen: false,
-            main_screen_masked: false,
-            sub_screen_masked: false,
+            window_area_main_screen: false,
+            window_area_sub_screen: false,
+            color_math: false,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum MaskLogic {
-    Or,
-    And,
-    Xor,
-    XNor,
+    Or = 0,
+    And = 1,
+    Xor = 2,
+    XNor = 3,
 }
 
 impl MaskLogic {
@@ -382,12 +269,7 @@ impl MaskLogic {
     }
 
     pub const fn to_byte(self) -> u8 {
-        match self {
-            Self::Or => 0,
-            Self::And => 1,
-            Self::Xor => 2,
-            Self::XNor => 3,
-        }
+        self as u8
     }
 }
 
@@ -403,486 +285,1066 @@ impl save_state::InSaveState for MaskLogic {
     }
 }
 
+const fn sign_extend<const B: u16>(n: u16) -> u16 {
+    if n & ((1 << B) >> 1) > 0 {
+        n | !((1 << B) - 1)
+    } else {
+        n & (((1 << B) >> 1) - 1)
+    }
+}
+
+/// Settings used to draw Mode 7's BG1.
 #[derive(Debug, Clone, InSaveState)]
-pub struct Mode7Settings {
+struct Mode7Settings {
     x_mirror: bool,
     y_mirror: bool,
-    fill_zeros: Option<bool>,
-    prev: u8,
-    offset: [i16; 2],
-    matrix: [u16; 4],
-    center: [i16; 2],
+    wrap: bool,
+    fill: bool,
+    prev_m7old: u8,
+    // 13-bit signed
+    offset: [u16; 2],
+    // 13-bit signed
+    center: [u16; 2],
+    // 16-bit signed
+    params: [u16; 4],
+
+    // temporary scanline number
+    tmpy: u8,
+    // 11-bit signed
+    tmp1: [u16; 2],
+
+    tmp2: [i32; 2],
+    tmp3: [i32; 2],
+    tmp4: [i32; 2],
 }
 
 impl Mode7Settings {
-    pub fn write_offset(&mut self, is_vertical: bool, val: u8) {
-        let i = is_vertical as usize;
-        let mut val = u16::from(replace(&mut self.prev, val)) | (u16::from(val) << 8);
-        if val & 0x1000 > 0 {
-            val |= 0xe000
+    pub fn new() -> Self {
+        Self {
+            x_mirror: false,
+            y_mirror: false,
+            wrap: true,
+            fill: false,
+            prev_m7old: 0,
+            offset: [0; 2],
+            center: [0; 2],
+            params: [0; 4],
+
+            tmpy: 0,
+            tmp1: [0; 2],
+            tmp2: [0; 2],
+            tmp3: [0; 2],
+            tmp4: [0; 2],
         }
-        self.offset[i] = val as i16
     }
 
-    pub fn set_matrix(&mut self, entry: u8, val: u8) {
-        self.matrix[usize::from(entry)] =
-            (u16::from(val) << 8) | u16::from(replace(&mut self.prev, val))
+    pub fn write_m7old(&mut self, val: u8) -> u16 {
+        u16::from(replace(&mut self.prev_m7old, val)) | (u16::from(val) << 8)
     }
 
-    pub fn set_center(&mut self, entry: u8, val: u8) {
-        let mut val = (u16::from(val) << 8) | u16::from(replace(&mut self.prev, val));
-        if val & 0x1000 > 0 {
-            val |= 0xe000
+    // called when offset[C] or center[C] updated
+    fn update_tmp1<const C: usize>(&mut self) {
+        let val = self.offset[C].wrapping_sub(self.center[C]);
+        self.tmp1[C] = if val & 0x2000 > 0 {
+            val | 0xfc00
+        } else {
+            val & 0x3ff
+        };
+        self.update_tmp2::<0>();
+        self.update_tmp2::<1>();
+    }
+
+    // called when tmp1[*] or params[C * 2] or params[C * 2 + 1] updated
+    fn update_tmp2<const C: usize>(&mut self) {
+        let a = self.params[C << 1] as i16 as i32 * (self.tmp1[0] as i16 as i32);
+        let b = self.params[(C << 1) | 1] as i16 as i32 * (self.tmp1[1] as i16 as i32);
+        let a = (a as u32 & !0x3f) as i32;
+        let b = (b as u32 & !0x3f) as i32;
+        self.tmp2[C] = a + b + (i32::from(self.center[C] as i16) << 8);
+        self.update_tmp4::<C>();
+    }
+
+    // called when params[C * 2 + 1] or tmpy updated
+    fn update_tmp3<const C: usize>(&mut self) {
+        let val = self.params[(C << 1) | 1] as i16 as i32 * i32::from(self.tmpy);
+        self.tmp3[C] = (val as u32 & !0x3f) as i32;
+        self.update_tmp4::<C>();
+    }
+
+    // called when tmp2[C] or tmp3[C] updated
+    fn update_tmp4<const C: usize>(&mut self) {
+        self.tmp4[C] = self.tmp2[C].wrapping_add(self.tmp3[C])
+    }
+
+    fn update_param(&mut self, id: u8, val: u16) {
+        self.params[usize::from(id)] = val;
+        if id < 2 {
+            self.update_tmp2::<0>();
+            if id == 1 {
+                self.update_tmp3::<0>();
+            }
+        } else {
+            self.update_tmp2::<1>();
+            if id == 3 {
+                self.update_tmp3::<1>();
+            }
         }
-        self.center[usize::from(entry)] = val as i16
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, InSaveState)]
+struct CachedTile {
+    tile: u64,
+    palette_nr: u8,
+    x: u8,
+    prio: bool,
+}
+
+#[derive(Debug, Clone, Copy, InSaveState)]
+pub struct Bg {
+    layer: Layer,
+    mosaic: bool,
+    mosaic_start: Option<u16>,
+    tile_size: [u8; 2],
+    map_base_addr: u16,
+    tile_base_addr: u16,
+    size: [u8; 2],
+    scroll: [u16; 2],
+    scroll_prev: [u8; 2],
+
+    cached_tile: Option<CachedTile>,
+}
+
+#[derive(Debug, Clone, Copy, Default, InSaveState)]
+pub struct ObjCacheEntry {
+    palette_addr: u8,
+    prio: u8,
+}
+
+impl ObjCacheEntry {
+    pub fn write(&mut self, val: Self) {
+        if val.prio > self.prio {
+            *self = val
+        }
+    }
+}
+
+impl Bg {
+    pub const fn new() -> Self {
+        Self {
+            layer: Layer::new(),
+            mosaic: false,
+            mosaic_start: None,
+            tile_size: [8, 8],
+            map_base_addr: 0,
+            tile_base_addr: 0,
+            size: [32, 32],
+            scroll: [0; 2],
+            scroll_prev: [0; 2],
+
+            cached_tile: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DrawLayer {
+    Bg { nr: u8, bits: u8, prio: bool },
+    Sprite { prio: u8 },
+}
+
+impl save_state::InSaveState for DrawLayer {
+    fn serialize(&self, state: &mut SaveStateSerializer) {
+        match self {
+            Self::Bg { nr, bits, prio } => {
+                true.serialize(state);
+                nr.serialize(state);
+                bits.serialize(state);
+                prio.serialize(state);
+            }
+            Self::Sprite { prio } => {
+                false.serialize(state);
+                prio.serialize(state);
+            }
+        }
+    }
+
+    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
+        let mut i: bool = false;
+        i.deserialize(state);
+        *self = if i {
+            let (mut nr, mut bits, mut prio) = (0, 0, false);
+            nr.deserialize(state);
+            bits.deserialize(state);
+            prio.deserialize(state);
+            Self::Bg { nr, bits, prio }
+        } else {
+            let mut prio = 0;
+            prio.deserialize(state);
+            Self::Sprite { prio }
+        }
+    }
+}
+
+#[derive(Debug, Clone, InSaveState)]
+struct Layers {
+    arr: [DrawLayer; 12],
+    size: u8,
+}
+
+impl Layers {
+    pub const fn from_bgmode(bg_mode: BgMode) -> Self {
+        macro_rules! to_list {
+            ($($x:expr),+ $(,)?) => {{
+                let mut arr = [DrawLayer::Sprite { prio: 0 }; 12];
+                let mut size = 0;
+                $({ let i = $x; arr[size as usize] = i ; size += 1; })+
+                Layers { arr, size }
+            }};
+        }
+        macro_rules! BG { (nr $i:literal, colors $b:expr $(, $p:ident)*) => {
+            DrawLayer::Bg {
+                nr: $i - 1,
+                bits: { let a: u16 = $b; a }.trailing_zeros() as u8,
+                prio: false $(|| { let $p = true; $p })*,
+            }
+        }; }
+        macro_rules! S {
+            ($p:literal) => {
+                DrawLayer::Sprite { prio: $p }
+            };
+        }
+        match (bg_mode.num, bg_mode.bg3_prio, bg_mode.extbg) {
+            (0, _, _) => to_list![
+                S!(3),
+                BG!(nr 1, colors 4, prio),
+                BG!(nr 2, colors 4, prio),
+                S!(2),
+                BG!(nr 1, colors 4),
+                BG!(nr 2, colors 4),
+                S!(1),
+                BG!(nr 1, colors 4),
+                BG!(nr 2, colors 4),
+                S!(0),
+                BG!(nr 1, colors 4),
+                BG!(nr 2, colors 4),
+            ],
+            (1, false, _) => to_list![
+                S!(3),
+                BG!(nr 1, colors 16, prio),
+                BG!(nr 2, colors 16, prio),
+                S!(2),
+                BG!(nr 1, colors 16),
+                BG!(nr 2, colors 16),
+                S!(1),
+                BG!(nr 3, colors 4, prio),
+                S!(0),
+                BG!(nr 3, colors 4),
+            ],
+            (1, true, _) => to_list![
+                BG!(nr 3, colors 4, prio),
+                S!(3),
+                BG!(nr 1, colors 16, prio),
+                BG!(nr 2, colors 16, prio),
+                S!(2),
+                BG!(nr 1, colors 16),
+                BG!(nr 2, colors 16),
+                S!(1),
+                S!(0),
+                BG!(nr 3, colors 4),
+            ],
+            (2..=5, _, _) => {
+                let (c1, c2) = match bg_mode.num {
+                    2 => (16, 16),
+                    3 => (256, 16),
+                    4 => (256, 4),
+                    _ => (16, 4),
+                };
+                to_list![
+                    S!(3),
+                    BG!(nr 1, colors c1, prio),
+                    S!(2),
+                    BG!(nr 2, colors c2, prio),
+                    S!(1),
+                    BG!(nr 1, colors c1),
+                    S!(0),
+                    BG!(nr 2, colors c2),
+                ]
+            }
+            (6, _, _) => to_list![
+                S!(3),
+                BG!(nr 1, colors 16, prio),
+                S!(2),
+                S!(1),
+                BG!(nr 1, colors 16),
+                S!(0),
+            ],
+            (7, _, false) => to_list![S!(3), S!(2), S!(1), BG!(nr 1, colors 256), S!(0),],
+            (7, _, true) => to_list![
+                S!(3),
+                S!(2),
+                BG!(nr 2, colors 128, prio),
+                S!(1),
+                BG!(nr 1, colors 256),
+                S!(0),
+                BG!(nr 2, colors 128),
+            ],
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, InSaveState)]
+pub struct BgMode {
+    num: u8,
+    bg3_prio: bool,
+    extbg: bool,
+}
+
+impl BgMode {
+    const fn new(num: u8, bg3_prio: bool, extbg: bool) -> Self {
+        Self {
+            num,
+            bg3_prio,
+            extbg,
+        }
     }
 }
 
 #[derive(Debug, Clone, InSaveState)]
 pub struct Ppu<FB: crate::backend::FrameBuffer> {
-    pub(crate) oam: Oam,
     #[except((|_v, _s| ()), (|_v, _s| ()))]
     pub frame_buffer: FB,
-    /// Some people refer to this as H-Pos
-    pub(crate) scanline_cycle: u16,
-    /// Some people refer to this as V-Pos
-    pub(crate) scanline_nr: u16,
-    pub(crate) field: bool,
+    oam: Oam,
     cgram: CgRam,
-    vram: [u16; VRAM_SIZE],
-    vram_addr_unmapped: u16,
-    vram_data_buffer: u16,
-    /// A value between 0 and 15 with 15 being maximum brightness
-    brightness: u8,
-    obj_size: ObjectSize,
-    remap_mode: RemapMode,
-    vram_increment_amount: u8,
-    increment_first: bool,
-    pub(crate) overscan: bool,
-    pub(crate) interlace: bool,
-    mosaic_bgs: u8,
-    mosaic_size: u8,
-    bgs: [Background; 4],
-    obj_layer: Layer,
-    color_layer: Layer,
-    mode7_settings: Mode7Settings,
-    direct_color_mode: bool,
-    add_subscreen: bool,
-    color_behaviour: u8,
-    subtract_color: bool,
-    half_color: bool,
-    fixed_color: Color<u8>,
+    vram: Vram,
+    bgs: [Bg; 4],
     bg_mode: BgMode,
-    window_positions: [[u8; 2]; 2],
-    force_blank: bool,
-    tile_adr: [u16; 2],
-    counter_latch: [(u16, bool); 2],
-    counter_latch_occured: bool,
+    bg3_prio: bool,
+    pos: RayPos,
+    latched: LatchedState,
+    brightness: u8,
+    draw_layers: Layers,
+    /// Object sizes in (x, y) = `[u8; 2]` for small sprites (=`obj_size[0]`) and large sprites
+    /// (=`obj_size[1]`) in pixels
+    obj_size: [[u8; 2]; 2],
+    /// Tile base address without and with gap
+    obj_tile_addr: [u16; 2],
+    obj_layer: Layer,
+    obj_cache: [ObjCacheEntry; 256],
     overflow_flags: u8,
-    open_bus1: u8,
-    open_bus2: u8,
+    color_math: ColorMath,
+    direct_color_mode: bool,
+    object_interlace: bool,
+    interlace_active: bool,
+    window_positions: [[u8; 2]; 2],
+    overscan: bool,
+    pseudo512: bool,
+    mosaic_size: u8,
+    mode7_settings: Mode7Settings,
+    field: bool,
+    force_blank: bool,
     is_pal: bool,
+    pub(crate) open_bus1: u8,
+    pub(crate) open_bus2: u8,
 }
 
 impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     pub fn new(frame_buffer: FB, is_pal: bool) -> Self {
+        let bg_mode = BgMode::new(0, false, false);
         Self {
-            oam: Oam::new(),
             frame_buffer,
-            scanline_cycle: 0,
-            scanline_nr: 0,
-            field: false,
+            oam: Oam::new(),
             cgram: CgRam::new(),
-            vram: [0; VRAM_SIZE],
-            vram_addr_unmapped: 0,
-            vram_data_buffer: 0,
-            brightness: 0x0f,
-            obj_size: ObjectSize::O8S16,
-            remap_mode: Default::default(),
-            vram_increment_amount: 1,
-            increment_first: true,
-            overscan: false,
-            interlace: false,
-            mosaic_bgs: 0,
-            mosaic_size: 0,
-            bgs: [Background::new(); 4],
+            vram: Vram::new(),
+            bgs: [Bg::new(); 4],
+            bg_mode,
+            bg3_prio: false,
+            pos: Default::default(),
+            latched: Default::default(),
+            brightness: 15,
+            draw_layers: Layers::from_bgmode(bg_mode),
+            obj_size: OBJ_SIZES[0],
+            obj_tile_addr: [0; 2],
             obj_layer: Layer::new(),
-            color_layer: Layer::new(),
-            mode7_settings: Mode7Settings {
-                x_mirror: false,
-                y_mirror: false,
-                fill_zeros: None,
-                prev: 0,
-                offset: [0; 2],
-                matrix: [0; 4],
-                center: [0; 2],
-            },
-            direct_color_mode: false,
-            add_subscreen: false,
-            color_behaviour: 0,
-            subtract_color: false,
-            half_color: false,
-            fixed_color: Color::BLACK,
-            bg_mode: BgMode::new(),
-            window_positions: [[0; 2]; 2],
-            force_blank: true,
-            tile_adr: [0; 2],
-            counter_latch: Default::default(),
-            counter_latch_occured: false,
+            obj_cache: [Default::default(); 256],
             overflow_flags: 0,
+            color_math: ColorMath::new(),
+            direct_color_mode: false,
+            object_interlace: false,
+            interlace_active: false,
+            window_positions: [[0; 2]; 2],
+            overscan: false,
+            pseudo512: false,
+            mosaic_size: 0,
+            mode7_settings: Mode7Settings::new(),
+            field: false,
+            force_blank: true,
+            is_pal,
             open_bus1: 0,
             open_bus2: 0,
-            is_pal,
         }
     }
 
-    /// Read from a PPU register (memory map 0x2134..=0x213f)
-    pub fn read_register(&mut self, id: u8) -> Option<u8> {
-        match id {
-            0x3e => {
-                // STAT77
-                self.open_bus1 = self.overflow_flags | (self.open_bus1 & 0x10) | CHIP_5C77_VERSION;
-                Some(self.open_bus1)
-            }
-            0x3f => {
-                // STAT78
-                // TODO: support interlace
-                let val = ((take(&mut self.counter_latch_occured) as u8) << 6)
-                    | (self.open_bus2 & 0x20)
-                    | CHIP_5C78_VERSION;
-                let val = if self.is_pal { 0x10 | val } else { val };
-                self.counter_latch.iter_mut().for_each(|(_, b)| *b = false);
-                self.open_bus2 = val;
-                Some(val)
-            }
+    /// 2134 - 213f
+    pub fn read_register(&mut self, addr: u8) -> Option<u8> {
+        assert!(addr >= 0x34 && addr <= 0x3f);
+        match addr {
             0x34..=0x36 => {
-                // MPYx
-                let res = (i32::from(self.mode7_settings.matrix[0] as i16)
-                    * (i32::from((self.mode7_settings.matrix[1] >> 8) as i8)))
-                    as u32;
-                self.open_bus1 = ((res >> ((id & 3) << 3)) & 0xff) as u8;
-                Some(self.open_bus1)
+                // MPYL/M/H
+                let x = self.mode7_settings.params[0] as i16 as i32;
+                let y = (self.mode7_settings.params[1] >> 8) as i8 as i32;
+                Some(((x * y) as u32).to_le_bytes()[usize::from(addr & 3)])
             }
             0x37 => {
                 // SLHV - Software Latch for H/V Counter
                 self.latch();
                 None
             }
-            0x38 => {
-                // RDOAM - Read OAM
-                Some(self.oam.read())
-            }
+            0x38 => Some(self.oam.read()), // RDOAM
             0x39 | 0x3a => {
-                // VMDATALREAD / VMDATAHREAD
-                let is_second = id == 0x3a;
-                self.open_bus1 = self.vram_data_buffer.to_le_bytes()[usize::from(is_second)];
-                if self.increment_first ^ is_second {
-                    self.vram_data_buffer = self.get_vram_word(self.vram_addr_unmapped);
-                    self.vram_addr_unmapped = self
-                        .vram_addr_unmapped
-                        .wrapping_add(self.vram_increment_amount.into());
+                // RDVRAML/H
+                let is_second = addr == 0x3a;
+                let val = self.vram.buffered.to_le_bytes()[usize::from(is_second)];
+                if self.vram.increment_first ^ is_second {
+                    self.vram.prefetch();
+                    self.vram.step();
                 }
-                Some(self.open_bus1)
+                Some(val)
             }
-            0x3b => {
-                // RDCGRAM
-                Some(self.cgram.read(&mut self.open_bus2))
+            0x3b => Some(self.cgram.read(self.open_bus2)), // RDCGRAM
+            0x3c => Some(self.latched.get::<0>(self.open_bus2)), // OPHCT
+            0x3d => Some(self.latched.get::<1>(self.open_bus2)), // OPHCT
+            0x3e => Some(self.overflow_flags | (self.open_bus1 & 0x10) | CHIP_5C77_VERSION), // STAT77
+            0x3f => {
+                // STAT78
+                self.latched.flip = [false; 2];
+                Some(
+                    ((take(&mut self.latched.latched) as u8) << 6)
+                        | (self.open_bus2 & 0x20)
+                        | CHIP_5C78_VERSION
+                        | ((self.is_pal as u8) << 4),
+                )
             }
-            0x3c | 0x3d => {
-                // OPHCT / OPVCT
-                let hv = (id & 1) as usize;
-                let (val, high) = &mut self.counter_latch[hv];
-                self.open_bus2 = if replace(high, !*high) {
-                    ((*val >> 8) & 1) as u8 | (self.open_bus2 & 0xfe)
-                } else {
-                    (*val & 0xff) as u8
-                };
-                Some(self.open_bus2)
-            }
-            _ => todo!("read from unknown PPU register 0x21{:02x}", id),
+            _ => todo!("r 21{:02x}", addr),
         }
     }
 
-    /// Write to a PPU register (memory map 0x2100..=0x2133)
-    pub fn write_register(&mut self, id: u8, val: u8) {
-        match id {
+    /// 2100 - 2133
+    pub fn write_register(&mut self, addr: u8, val: u8) {
+        assert!(addr <= 0x33);
+        match addr {
             0x00 => {
                 // INIDISP
-                if replace(&mut self.force_blank, val & 0x80 > 0) && !self.force_blank {
-                    self.oam.oam_reset()
-                };
-                self.brightness = val & 0b1111;
+                self.force_blank = val & 0x80 > 0;
+                self.brightness = val & 15;
             }
             0x01 => {
                 // OBSEL
-                // TODO: name select bits and name base select bits
-                self.obj_size = ObjectSize::from_upper_bits(val);
-                self.tile_adr[0] = u16::from(val & 7) << 13;
-                self.tile_adr[1] =
-                    (u16::from(((val >> 3) & 3) + 1) << 12).wrapping_add(self.tile_adr[0]);
+                self.obj_size = OBJ_SIZES[usize::from(val >> 5)];
+                let addr = u16::from(val & 7) << 13;
+                let gap = u16::from(val & 0x18) << 9;
+                self.obj_tile_addr = [addr, addr.wrapping_add(gap).wrapping_add(0x1000)];
             }
-            0x02 => {
-                // OAMADDL
-                self.oam.set_addr_low(val)
-            }
-            0x03 => {
-                // OAMADDH
-                self.oam.set_addr_high(val)
-            }
-            0x04 => {
-                // OAMDATA
-                self.oam.write(val)
-            }
+            0x02 => self.oam.set_addr_low(val),  // OAMADDL
+            0x03 => self.oam.set_addr_high(val), // OAMADDH
+            0x04 => self.oam.write(val),         // OAMDATA
             0x05 => {
                 // BGMODE
-                self.bg_mode.set_bits(val);
-                for (i, bg) in self.bgs.iter_mut().enumerate() {
-                    bg.is_16x16_tiles = val & (1 << (i | 4)) > 0;
+                self.bg_mode.num = val & 7;
+                self.bg_mode.bg3_prio = val & 8 > 0;
+                self.draw_layers = Layers::from_bgmode(self.bg_mode);
+                let val = val >> 4;
+                for i in 0u8..4 {
+                    let bg = &mut self.bgs[usize::from(i)];
+                    bg.tile_size = [8 << ((val >> i) & 1); 2];
+                    match self.bg_mode.num {
+                        5 => bg.tile_size[0] = 16,
+                        6 => bg.tile_size = [16, 8],
+                        7 => bg.tile_size = [8, 8],
+                        _ => (),
+                    }
                 }
             }
             0x06 => {
                 // MOSAIC
-                self.mosaic_size = val >> 4;
-                self.mosaic_bgs = val & 0xf;
+                self.mosaic_size = (val >> 4) + 1;
+                for i in 0u8..4 {
+                    self.bgs[usize::from(i)].mosaic = (val >> i) & 1 > 0;
+                }
             }
             0x07..=0x0a => {
                 // BGnSC
-                let bg = &mut self.bgs[usize::from((id + 1) & 3)];
-                bg.tilemap_addr = val & 0xfc;
-                bg.y_mirror = val & 2 > 0;
-                bg.x_mirror = val & 1 > 0;
+                let bg_nr = (addr + 1) & 3;
+                let bg = &mut self.bgs[usize::from(bg_nr)];
+                bg.map_base_addr = u16::from(val & 0xfc) << 8;
+                bg.size = [32 << (val & 1), 32 << ((val >> 1) & 1)];
             }
-            0x0b..=0x0c => {
-                // BGnmNBA
-                let val = val & 0x77;
-                let id = usize::from(!id & 2);
-                self.bgs[id].base_addr = val & 0xf;
-                self.bgs[id | 1].base_addr = val >> 4;
+            0x0b | 0x0c => {
+                // BGnnNBA
+                let bg_nr = usize::from(!addr & 2);
+                self.bgs[bg_nr].tile_base_addr = u16::from(val & 15) << 12;
+                self.bgs[bg_nr | 1].tile_base_addr = u16::from(val & 0xf0) << 8;
             }
             0x0d..=0x14 => {
                 // M7xOFS and BGnxOFS
-                if (0x0d..=0x0e).contains(&id) {
-                    self.mode7_settings.write_offset(id & 1 == 0, val)
+                if (0x0d..=0x0e).contains(&addr) {
+                    let val = sign_extend::<13>(self.mode7_settings.write_m7old(val));
+                    if addr == 0x0d {
+                        self.mode7_settings.offset[0] = val;
+                        self.mode7_settings.update_tmp1::<0>();
+                    } else {
+                        self.mode7_settings.offset[1] = val;
+                        self.mode7_settings.update_tmp1::<1>();
+                    }
                 }
-                let bg = &mut self.bgs[usize::from(((id - 5) >> 1) & 3)];
-                let old = replace(&mut bg.scroll_prev, val);
-                bg.scroll[usize::from(!id & 1)] = (u16::from(val) << 8)
-                    | u16::from(if id & 1 > 0 {
-                        (old & 0xf8) | replace(&mut bg.scroll_prev_h, val) & 7
+                let bg = &mut self.bgs[usize::from(((addr - 5) >> 1) & 3)];
+                let old = replace(&mut bg.scroll_prev[0], val);
+                bg.scroll[usize::from(!addr & 1)] = (u16::from(val) << 8)
+                    | u16::from(if addr & 1 > 0 {
+                        (old & 0xf8) | replace(&mut bg.scroll_prev[1], val) & 7
                     } else {
                         old
                     });
             }
             0x15 => {
-                // VMAIN - Video Port Control
-                self.increment_first = val & 0x80 == 0;
-                self.vram_increment_amount = match val & 0b11 {
+                // VMAIN
+                self.vram.increment_first = val & 0x80 == 0;
+                self.vram.remap_mode = RemapMode::new(val >> 2);
+                self.vram.steps = match val & 3 {
                     0 => 1,
                     1 => 32,
                     _ => 128,
                 };
-                self.remap_mode = RemapMode::new(val >> 2);
             }
             0x16 | 0x17 => {
-                // VMADDL / VMADDH
-                self.vram_addr_unmapped = if id == 0x16 {
-                    (self.vram_addr_unmapped & 0xff00) | u16::from(val)
-                } else {
-                    (self.vram_addr_unmapped & 0xff) | (u16::from(val) << 8)
-                };
-                self.vram_data_buffer = self.get_vram_word(self.vram_addr_unmapped);
+                // VMADDL
+                let mut bytes = self.vram.unmapped_addr.to_le_bytes();
+                bytes[usize::from(addr & 1)] = val;
+                self.vram.unmapped_addr = u16::from_le_bytes(bytes);
+                self.vram.update_mapped();
+                self.vram.prefetch();
             }
-            0x18 => {
-                // VMDATAL
-                let word = self.get_vram_word_mut(self.vram_addr_unmapped);
-                *word = (*word & 0xff00) | u16::from(val);
-                if self.increment_first {
-                    self.vram_addr_unmapped = self
-                        .vram_addr_unmapped
-                        .wrapping_add(self.vram_increment_amount.into());
-                }
-            }
-            0x19 => {
-                // VMDATAH
-                let word = self.get_vram_word_mut(self.vram_addr_unmapped);
-                *word = (*word & 0xff) | (u16::from(val) << 8);
-                if !self.increment_first {
-                    self.vram_addr_unmapped = self
-                        .vram_addr_unmapped
-                        .wrapping_add(self.vram_increment_amount.into());
+            0x18 | 0x19 => {
+                // VMDATAx
+                let word = self.vram.get_mut();
+                let mut bytes = word.to_le_bytes();
+                bytes[usize::from(addr & 1)] = val;
+                *word = u16::from_le_bytes(bytes);
+                if (addr & 1 > 0) ^ self.vram.increment_first {
+                    self.vram.step()
                 }
             }
             0x1a => {
                 // M7SEL
                 self.mode7_settings.x_mirror = val & 1 > 0;
                 self.mode7_settings.y_mirror = val & 2 > 0;
-                self.mode7_settings.fill_zeros = Some(val & 0x40 > 0).filter(|_| val & 0x80 > 0);
+                self.mode7_settings.wrap = val & 0x80 == 0;
+                self.mode7_settings.fill = val & 0x40 > 0;
             }
             0x1b..=0x1e => {
-                // M7x
-                self.mode7_settings.set_matrix((id + 1) & 3, val)
+                // M7A-M7D
+                let id = (addr + 1) & 3;
+                let val = self.mode7_settings.write_m7old(val);
+                self.mode7_settings.update_param(id, val);
             }
             0x1f | 0x20 => {
-                // M7X/M7Y
-                self.mode7_settings.set_center(!id & 1, val)
-            }
-            0x21 => {
-                // CGADD
-                self.cgram.set_addr(val)
-            }
-            0x22 => {
-                // CGADD
-                self.cgram.write(val)
-            }
-            0x23..=0x24 => {
-                // WnmSEL
-                let mut val = val;
-                for i in 0..2 {
-                    let bg = &mut self.bgs[usize::from(i + (!id & 2))];
-                    bg.layer.window_inversion[0] = val & 1 > 0;
-                    bg.layer.windows[0] = val & 2 > 0;
-                    bg.layer.window_inversion[1] = val & 4 > 0;
-                    bg.layer.windows[1] = val & 8 > 0;
-                    val >>= 4;
+                // M7X/Y
+                let val = sign_extend::<13>(self.mode7_settings.write_m7old(val));
+                if addr == 0x1f {
+                    self.mode7_settings.center[0] = val;
+                    self.mode7_settings.update_tmp1::<0>();
+                } else {
+                    self.mode7_settings.center[1] = val;
+                    self.mode7_settings.update_tmp1::<1>();
                 }
             }
-            0x25 => {
-                // WOBJSEL
-                let mut val = val;
-                for layer in [&mut self.obj_layer, &mut self.color_layer] {
-                    layer.window_inversion[0] = val & 1 > 0;
-                    layer.windows[0] = val & 2 > 0;
-                    layer.window_inversion[1] = val & 4 > 0;
-                    layer.windows[1] = val & 8 > 0;
-                    val >>= 4;
-                }
+            0x21 => self.cgram.set_addr(val), // CGADD
+            0x22 => self.cgram.write(val),    // CGDATA
+            0x23..=0x25 => {
+                // WnnSEL
+                let (w1, w2) = match addr {
+                    0x23 => {
+                        let [bg0, bg1, ..] = &mut self.bgs;
+                        (&mut bg0.layer.window, &mut bg1.layer.window)
+                    }
+                    0x24 => {
+                        let [.., bg2, bg3] = &mut self.bgs;
+                        (&mut bg2.layer.window, &mut bg3.layer.window)
+                    }
+                    0x25 => (&mut self.obj_layer.window, &mut self.color_math.window),
+                    _ => unreachable!(),
+                };
+                w1.select(val);
+                w2.select(val >> 4);
             }
             0x26..=0x29 => {
-                // WH0-3
-                self.window_positions[usize::from((!id & 2) >> 1)][usize::from(id & 1)] = val
+                // WHn
+                self.window_positions[usize::from((!addr & 2) >> 1)][usize::from(addr & 1)] = val
             }
             0x2a => {
                 // WBGLOG
+                let mut val = val;
                 for i in 0..4 {
-                    self.bgs[i].layer.mask_logic = MaskLogic::from_byte(val >> (i << 1));
+                    self.bgs[i].layer.window.mask_logic = MaskLogic::from_byte(val);
+                    val >>= 2;
                 }
             }
             0x2b => {
                 // WOBJLOG
-                self.obj_layer.mask_logic = MaskLogic::from_byte(val);
-                self.color_layer.mask_logic = MaskLogic::from_byte(val >> 2);
+                self.obj_layer.window.mask_logic = MaskLogic::from_byte(val);
+                self.color_math.window.mask_logic = MaskLogic::from_byte(val >> 2);
             }
-            0x2c..=0x2f => {
-                // TM/TS/TMW/TSW
-                let f: fn(&mut Layer, val: bool) = match id {
-                    0x2c => |layer, val| layer.main_screen = val,
-                    0x2d => |layer, val| layer.sub_screen = val,
-                    0x2e => |layer, val| layer.main_screen_masked = val,
-                    0x2f => |layer, val| layer.sub_screen_masked = val,
-                    _ => unreachable!(),
-                };
-                for (i, bg) in self.bgs.iter_mut().enumerate() {
-                    f(&mut bg.layer, val & (1 << i) > 0)
+            0x2c | 0x2d => {
+                // TM / TS
+                let mut val = val;
+                for layer in self.layers_mut() {
+                    if addr == 0x2c {
+                        layer.main_screen = val & 1 != 0
+                    } else {
+                        layer.sub_screen = val & 1 != 0
+                    }
+                    val >>= 1;
                 }
-                f(&mut self.obj_layer, val & 0x10 > 0)
+            }
+            0x2e | 0x2f => {
+                // TMW / TSW
+                let mut val = val;
+                for layer in self.layers_mut() {
+                    if addr == 0x2e {
+                        layer.window_area_main_screen = val & 1 > 0
+                    } else {
+                        layer.window_area_sub_screen = val & 1 > 0
+                    }
+                    val >>= 1;
+                }
             }
             0x30 => {
                 // CGWSEL
                 self.direct_color_mode = val & 1 > 0;
-                self.add_subscreen = val & 2 > 0;
-                self.color_behaviour = val >> 4;
+                self.color_math.add_subscreen = val & 2 > 0;
+                self.color_math.behaviour = val >> 4;
             }
             0x31 => {
                 // CGADSUB
-                self.bgs[0].layer.color_math = val & 1 > 0;
-                self.bgs[1].layer.color_math = val & 2 > 0;
-                self.bgs[2].layer.color_math = val & 4 > 0;
-                self.bgs[3].layer.color_math = val & 8 > 0;
-                self.obj_layer.color_math = val & 0x10 > 0;
-                self.color_layer.color_math = val & 0x20 > 0;
-                self.half_color = val & 0x40 > 0;
-                self.subtract_color = val & 0x80 > 0;
+                let mut val = val;
+                for i in 0..4 {
+                    self.bgs[i].layer.color_math = val & 1 > 0;
+                    val >>= 1;
+                }
+                self.obj_layer.color_math = val & 1 > 0;
+                self.color_math.backdrop = val & 2 > 0;
+                self.color_math.half_color = val & 4 > 0;
+                self.color_math.subtract_color = val & 8 > 0;
             }
             0x32 => {
                 // COLDATA
-                let color = val & 0x1f;
+                let component = val & 0x1f;
                 if val & 0x20 > 0 {
-                    self.fixed_color.r = color
+                    self.color_math.color.r = component
                 }
                 if val & 0x40 > 0 {
-                    self.fixed_color.g = color
+                    self.color_math.color.g = component
                 }
                 if val & 0x80 > 0 {
-                    self.fixed_color.b = color
+                    self.color_math.color.b = component
                 }
             }
             0x33 => {
                 // SETINI
-                if val & 1 > 0 {
-                    todo!("screen interlace mode")
-                }
-                if val & 2 > 0 {
-                    todo!("object interlace mode")
-                }
+                self.interlace_active = val & 1 > 0;
+                self.object_interlace = val & 2 > 0;
                 self.overscan = val & 4 > 0;
-                if val & 8 > 0 {
-                    todo!("pseudo-hires mode")
-                }
+                self.pseudo512 = val & 8 > 0;
                 self.bg_mode.extbg = val & 0x40 > 0;
+                self.draw_layers = Layers::from_bgmode(self.bg_mode);
                 if val & 0x80 > 0 {
-                    todo!("enable super imposing")
+                    todo!("what the hack is super imposing!?")
                 }
             }
-            _ => todo!("write to unknown PPU register 0x21{:02x}", id),
+            _ => unreachable!(),
         }
     }
 
-    pub fn latch(&mut self) {
-        self.counter_latch[0].0 = self.scanline_cycle >> 2;
-        self.counter_latch[1].0 = self.scanline_nr;
-        self.counter_latch_occured = true;
-    }
-
-    pub fn end_vblank(&mut self) {
-        if !self.force_blank {
-            self.overflow_flags = 0;
+    fn get_layer_from_draw_layer(&self, layer: &DrawLayer) -> &Layer {
+        match layer {
+            DrawLayer::Bg { nr, .. } => &self.bgs[usize::from(*nr)].layer,
+            DrawLayer::Sprite { .. } => &self.obj_layer,
         }
     }
 
-    fn get_vram_word(&self, index: u16) -> u16 {
-        self.vram[usize::from(self.remap_mode.remap(index) & 0x7fff)]
-    }
-
-    fn get_vram_word_mut(&mut self, index: u16) -> &mut u16 {
-        self.vram
-            .get_mut(usize::from(self.remap_mode.remap(index) & 0x7fff))
-            .unwrap()
-    }
-
-    pub fn vblank(&mut self) {
-        if !self.force_blank {
-            self.oam.oam_reset();
+    pub fn fetch_tile_by_nr(
+        &mut self,
+        y: u16,
+        tile_base: u16,
+        tile_nr: u16,
+        xflip: bool,
+        planes: u8,
+    ) -> u64 {
+        let addr = tile_base
+            .wrapping_add(tile_nr << (2 + planes.trailing_zeros()))
+            .wrapping_add(y & 7);
+        let mut tile = 0;
+        for i in 0..planes >> 1 {
+            let mut plane = self.vram.read(addr.wrapping_add(u16::from(i) << 3));
+            if xflip {
+                plane = u16::from_le_bytes(plane.to_le_bytes().map(u8::reverse_bits));
+            }
+            tile |= u64::from(plane) << (i << 4)
         }
+        tile
     }
 
-    fn get_layer_by_info(&self, layer_info: &DrawLayer) -> &Layer {
-        match layer_info {
-            DrawLayer::Bg(n, _, _) => &self.bgs[usize::from(*n)].layer,
-            DrawLayer::Sprite(_) => &self.obj_layer,
+    pub fn fetch_tile(
+        &mut self,
+        x: u16,
+        y: u16,
+        tile_base: u16,
+        tile_w: u8,
+        tile_h: u8,
+        char_nr: u16,
+        xflip: bool,
+        planes: u8,
+    ) -> u64 {
+        let [tile_x, tile_y] = [
+            (x & 0xff) as u8 & (tile_w - 1),
+            (y & 0xff) as u8 & (tile_h - 1),
+        ];
+        let tile_nr = char_nr
+            .wrapping_add(u16::from(tile_x >> 3))
+            .wrapping_add(u16::from(tile_y >> 3) << 4);
+        self.fetch_tile_by_nr(y, tile_base, tile_nr, xflip, planes)
+    }
+
+    fn decode_tile(tile: u64, x: u16) -> u8 {
+        let dx = ((x ^ 7) & 7) as u8;
+        let mut color = 0;
+        for (i, b) in ((tile >> dx) & 0x01_01_01_01_01_01_01_01)
+            .to_le_bytes()
+            .iter()
+            .enumerate()
+        {
+            color |= b << i
         }
+        color
     }
 
-    fn is_in_window(&self, x: u16, layer: &Layer) -> bool {
-        let window_n = |n: usize| -> bool {
-            (self.window_positions[n][0]..=self.window_positions[n][1])
-                .contains(&((x & 0xff) as u8))
-                ^ layer.window_inversion[n]
+    fn fetch_bg7_tile(&mut self, x: u8) -> Option<Color> {
+        let x = if self.mode7_settings.x_mirror { !x } else { x };
+
+        let v = [
+            (self.mode7_settings.tmp4[0], self.mode7_settings.params[0]),
+            (self.mode7_settings.tmp4[1], self.mode7_settings.params[2]),
+        ]
+        .map(|(c, p)| c.wrapping_add(p as i16 as i32 * i32::from(x)));
+
+        let v = v.map(|c| (((c as u32) >> 8) & 0xffff) as u16);
+        let tile_nr = if self.mode7_settings.wrap || !v.iter().any(|&c| c > 0x3ff) {
+            let tile_nrs = v.map(|c| (c >> 3) & 0x7f);
+            tile_nrs[0] + (tile_nrs[1] << 7)
+        } else if self.mode7_settings.fill {
+            0
+        } else {
+            return None;
         };
-        match layer.windows {
+        let char_nr = self.vram.read(tile_nr).to_le_bytes()[0];
+        let char_addr = u16::from(char_nr) << 6;
+        let pixel_addr = char_addr
+            .wrapping_add(v[0] & 7)
+            .wrapping_add((v[1] & 7) << 3);
+        let cgram_addr = self.vram.read(pixel_addr).to_le_bytes()[1];
+        if cgram_addr == 0 {
+            None
+        } else {
+            Some(self.cgram.read16(cgram_addr).into())
+        }
+    }
+
+    pub fn fetch_bg_tile(&mut self, x: u8, y: u16, nr: u8, bits: u8, prio: bool) -> Option<Color> {
+        if self.bg_mode.num == 7 && nr == 0 {
+            return self.fetch_bg7_tile(x);
+        }
+        let bg = &self.bgs[usize::from(nr)];
+        let x = (x as i16 + (((bg.scroll[0] << 6) as i16) >> 6)) as u16 & 0x3ff;
+        let y = (y as i16 + (((bg.scroll[1] << 6) as i16) >> 6)) as u16 & 0x3ff;
+        let (x, y) = if let Some(start) = bg.mosaic_start {
+            let sz = self.mosaic_size as u16;
+            let ys = y - start;
+            (x - (x % sz), (ys - (ys % sz)) + start)
+        } else {
+            (x, y)
+        };
+        let cache_x = (x >> 3) as u8;
+        let tile = if let Some(tile) = bg.cached_tile.filter(|t| t.x == cache_x) {
+            tile
+        } else {
+            let tile_x = (x >> bg.tile_size[0].trailing_zeros()) & 0x3f;
+            let tile_y = (y >> bg.tile_size[1].trailing_zeros()) & 0x3f;
+            let map_nr = match bg.size {
+                [64, 32] => (tile_x << 5) & 0x400,
+                [32, 64] => (tile_y << 5) & 0x400,
+                [64, 64] => ((tile_x << 5) | ((tile_y & 0x20) << 6)) & 0xc00,
+                _ => 0,
+            };
+            let map_addr = bg
+                .map_base_addr
+                .wrapping_add((tile_x & 0x1f) | ((tile_y & 0x1f) << 5))
+                .wrapping_add(map_nr);
+            let map_val = self.vram.read(map_addr);
+            let (char_nr, palette_nr, sel_prio, xflip, yflip) = (
+                map_val & 0x3ff,
+                ((map_val >> 10) & 7) as u8,
+                map_val & 0x2000 > 0,
+                map_val & 0x4000 > 0,
+                map_val & 0x8000 > 0,
+            );
+            if sel_prio ^ prio {
+                self.bgs[usize::from(nr)].cached_tile = None;
+                return None;
+            }
+            let x = if xflip { !x } else { x };
+            let y = if yflip { !y } else { y };
+            let (base, tw, th) = (bg.tile_base_addr, bg.tile_size[0], bg.tile_size[1]);
+            let tile = self.fetch_tile(x, y, base, tw, th, char_nr, xflip, bits);
+            let tile = CachedTile {
+                x: cache_x,
+                prio: sel_prio,
+                tile,
+                palette_nr,
+            };
+            self.bgs[usize::from(nr)].cached_tile = Some(tile);
+            tile
+        };
+        if tile.prio ^ prio {
+            return None;
+        }
+        let palette_idx = Self::decode_tile(tile.tile, x);
+        if palette_idx == 0 {
+            return None;
+        }
+        let cg_addr = if self.bg_mode.num == 0 {
+            (tile.palette_nr << 2) | palette_idx | (nr << 5) as u8
+        } else {
+            (tile.palette_nr << bits) | palette_idx
+        };
+        let color = self.cgram.read16(cg_addr);
+        Some(color.into())
+    }
+
+    pub fn fetch_screen(
+        &mut self,
+        x: u8,
+        y: u16,
+        mainscreen: bool,
+        subscreen: bool,
+    ) -> ([Color; 2], bool) {
+        let [mut main_found, mut sub_found] = [false; 2];
+        let [mut main, mut sub] = [Color::new(0, 0, 0), self.color_math.color];
+        let mut layer_color_math = None;
+        for draw_ly_idx in 0..self.draw_layers.size {
+            let draw_ly = &self.draw_layers.arr[usize::from(draw_ly_idx)];
+            let ly = self.get_layer_from_draw_layer(&draw_ly);
+            let in_window = self.is_in_window(x, &ly.window);
+            let [is_main, is_sub] = [
+                ly.main_screen
+                    && !main_found
+                    && mainscreen
+                    && (!ly.window_area_main_screen || !in_window),
+                ly.sub_screen
+                    && !sub_found
+                    && subscreen
+                    && (!ly.window_area_sub_screen || !in_window),
+            ];
+            if !is_main && !is_sub {
+                continue;
+            }
+            let layer_color_math_ = ly.color_math;
+            let mut obj_color_math = true;
+            if let Some(color) = match draw_ly {
+                &DrawLayer::Bg { nr, bits, prio } => self.fetch_bg_tile(x, y, nr, bits, prio),
+                &DrawLayer::Sprite { prio } => {
+                    let entry = self.obj_cache[usize::from(x)];
+                    if prio == entry.prio && entry.palette_addr != 0 {
+                        obj_color_math = entry.palette_addr & 0x40 > 0;
+                        Some(self.cgram.read16(entry.palette_addr).into())
+                    } else {
+                        None
+                    }
+                }
+            } {
+                if is_main {
+                    main_found = true;
+                    main = color;
+                    layer_color_math = Some(layer_color_math_ && obj_color_math);
+                    if sub_found || !subscreen {
+                        break;
+                    }
+                }
+                if is_sub {
+                    sub_found = true;
+                    sub = color;
+                    if main_found || !mainscreen {
+                        break;
+                    }
+                }
+            }
+        }
+        if !main_found && mainscreen {
+            main = self.cgram.main_screen_backdrop().into()
+        }
+        (
+            [main, sub],
+            layer_color_math.unwrap_or_else(|| self.color_math.backdrop),
+        )
+    }
+
+    pub fn draw_pixel(&mut self, x: u8, y: u16) -> [u8; 4] {
+        let mut lazy_in_window = None;
+        let mut in_window = || {
+            if let Some(iw) = lazy_in_window {
+                iw
+            } else {
+                let val = self.is_in_window(x, &self.color_math.window);
+                lazy_in_window = Some(val);
+                val
+            }
+        };
+        let [main_enable, color_enable] = [
+            self.color_math.behaviour >> 2,
+            self.color_math.behaviour & 3,
+        ]
+        .map(|i| match i {
+            0 | 3 => i == 0,
+            _ => (i == 2) ^ in_window(),
+        });
+        let ([main, sub], color_math) = self.fetch_screen(
+            x,
+            y,
+            main_enable,
+            color_enable && self.color_math.add_subscreen,
+        );
+        let color = if color_math && color_enable {
+            let mut color = if self.color_math.subtract_color {
+                main - sub
+            } else {
+                main + sub
+            };
+            if self.color_math.half_color && main_enable {
+                color = color.half();
+            }
+            color.map(|c| c.clamp(0, 0x1f))
+        } else {
+            main
+        };
+        color.to_rgba8(self.brightness)
+    }
+
+    fn draw_obj_8x8_tile(&mut self, obj: &Object, row: u8, tile_x: u8, tile_y: u8, size: [u8; 2]) {
+        let base = self.obj_tile_addr[usize::from(obj.attrs & 1)];
+        let xflip = obj.is_xflip();
+
+        let palette_nr = obj.get_palette_nr();
+        let prio = obj.get_priority();
+        let tile_addr = obj.get_tile_addr(base, tile_x, tile_y);
+        let tile = self.fetch_tile_by_nr(row.into(), tile_addr, 0, false, 4);
+        for x in 0u8..8 {
+            let off = i16::from(x).wrapping_add(i16::from(tile_x) << 3);
+            let gx = (if xflip {
+                i16::from(size[0]) - off - 1
+            } else {
+                off
+            })
+            .wrapping_add(obj.x);
+            if (0..=255).contains(&gx) {
+                let palette_idx = Self::decode_tile(tile, x.into());
+                if palette_idx > 0 {
+                    self.obj_cache[gx as usize].write(ObjCacheEntry {
+                        palette_addr: 0x80 | (palette_nr << 4) | palette_idx,
+                        prio,
+                    });
+                };
+            }
+        }
+    }
+
+    fn refill_obj_cache(&mut self, y: u16) {
+        self.obj_cache.fill(ObjCacheEntry {
+            palette_addr: 0,
+            prio: 0,
+        });
+        let y = (y & 0xff) as u8;
+        let mut objs_in_line = 0;
+        let mut tiles_in_line = 0;
+        'obj_loop: for obj in self.oam.objs {
+            let size = self.obj_size[usize::from(obj.is_large)];
+            if (-i16::from(size[0]) >= obj.x && obj.x != -256)
+                || obj.x >= 256
+                || !((obj.y..obj.y.saturating_add(size[1])).contains(&y)
+                    || i16::from(y) < i16::from(obj.y) + i16::from(size[1]) - 256)
+            {
+                continue;
+            }
+            if objs_in_line >= 32 {
+                self.overflow_flags |= 0x40;
+                break 'obj_loop;
+            }
+            objs_in_line += 1;
+            let yp = y.wrapping_sub(obj.y);
+            let yp = if obj.is_yflip() { size[1] - yp - 1 } else { yp };
+            for tile_id in 0..size[0] >> 3 {
+                let left = obj.x + i16::from(tile_id << 3);
+                if left + 7 < 0 || left >= 256 {
+                    continue;
+                }
+                if tiles_in_line >= 34 {
+                    self.overflow_flags |= 0x80;
+                    break 'obj_loop;
+                }
+                tiles_in_line += 1;
+                self.draw_obj_8x8_tile(&obj, yp, tile_id, yp >> 3, size);
+            }
+        }
+        // TODO
+    }
+
+    pub fn draw_scanline(&mut self) {
+        let y = self.pos.y + 1;
+        let mut n = usize::from(self.pos.y) * 256;
+        for bg in &mut self.bgs {
+            bg.cached_tile = None;
+        }
+        for bg in &mut self.bgs {
+            if bg.mosaic && bg.mosaic_start.is_none() {
+                bg.mosaic_start = Some(y);
+            }
+        }
+        if self.force_blank {
+            self.frame_buffer.mut_pixels()[n..n + 256].fill([0; 4])
+        } else {
+            self.refill_obj_cache(y);
+            self.mode7_settings.tmpy = (y & 0xff) as u8;
+            if self.mode7_settings.y_mirror {
+                self.mode7_settings.tmpy ^= 0xff;
+            }
+            self.mode7_settings.update_tmp3::<0>();
+            self.mode7_settings.update_tmp3::<1>();
+            for x in 0u8..=255 {
+                self.frame_buffer.mut_pixels()[n] = self.draw_pixel(x, y);
+                n += 1;
+            }
+        }
+    }
+
+    pub fn is_in_window(&self, x: u8, window: &Window) -> bool {
+        let window_n = |n: usize| {
+            (self.window_positions[n][0]..=self.window_positions[n][1]).contains(&x)
+                ^ window.window_inversion[n]
+        };
+        match window.windows {
             [false, false] => false,
-            [false, true] => window_n(1),
             [true, false] => window_n(0),
-            [true, true] => match layer.mask_logic {
+            [false, true] => window_n(1),
+            [true, true] => match window.mask_logic {
                 MaskLogic::Or => window_n(0) || window_n(1),
                 MaskLogic::And => window_n(0) && window_n(1),
                 MaskLogic::Xor => window_n(0) ^ window_n(1),
@@ -891,502 +1353,88 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         }
     }
 
-    fn get_bg_color(&self, bg_nr: u8, bit_depth: u8, priority: bool, [x, y]: [u16; 2]) -> u32 {
-        let bg = &self.bgs[usize::from(bg_nr)];
-        let [x, y] = [(x + bg.scroll[0]) & 0x3ff, (y + bg.scroll[1]) & 0x3ff];
-        let is_y16 = bg.is_16x16_tiles;
-        let is_x16 = is_y16 || matches!(self.bg_mode.num, BgModeNum::Mode5 | BgModeNum::Mode6);
-        let xbits = if is_x16 { 4 } else { 3 };
-        let ybits = if is_y16 { 4 } else { 3 };
-        let mut tilemap_addr = (u16::from(bg.tilemap_addr) << 8)
-            .wrapping_add((((y >> ybits) & 0x1f) << 5) | ((x >> xbits) & 0x1f));
-        if bg.x_mirror && x & (0x20 << xbits) > 0 {
-            tilemap_addr = tilemap_addr.wrapping_add(0x400)
-        }
-        if bg.y_mirror && y & (0x20 << ybits) > 0 {
-            tilemap_addr = tilemap_addr.wrapping_add(0x400);
-            if bg.x_mirror {
-                tilemap_addr = tilemap_addr.wrapping_add(0x400);
-            }
-        }
-        let tile_info = self.vram[usize::from(tilemap_addr & 0x7fff)];
-        if priority ^ ((tile_info & 0x2000) > 0) {
-            return 0;
-        }
-        let palette = ((tile_info >> 10) & 7) as u8;
-        let palette = if let BgModeNum::Mode0 = self.bg_mode.num {
-            palette | (bg_nr << 3)
+    pub fn layers_mut(&mut self) -> impl Iterator<Item = &mut Layer> {
+        self.bgs
+            .iter_mut()
+            .map(|bg| &mut bg.layer)
+            .chain(core::iter::once(&mut self.obj_layer))
+    }
+
+    pub fn get_pos(&self) -> &RayPos {
+        &self.pos
+    }
+
+    pub fn mut_pos(&mut self) -> &mut RayPos {
+        &mut self.pos
+    }
+
+    pub fn latch(&mut self) {
+        self.latched.pos = self.pos;
+        self.latched.latched = true
+    }
+
+    pub fn is_interlaced(&self) -> bool {
+        self.interlace_active
+    }
+
+    pub fn is_overscan(&self) -> bool {
+        self.overscan
+    }
+
+    pub fn is_field(&self) -> bool {
+        self.field
+    }
+
+    pub fn get_scanline_cycles(&self) -> u16 {
+        if !self.is_pal && !self.is_interlaced() && self.field && self.pos.y == 240 {
+            1360
+        } else if self.is_pal && self.is_interlaced() && self.field && self.pos.y == 311 {
+            1368
         } else {
-            palette
-        };
-        let tx = if tile_info & 0x4000 > 0 { x } else { !x } & 7;
-        let ty = if tile_info & 0x8000 > 0 { !y } else { y } & 7;
-        let mut tile_nr = tile_info & 0x3ff;
-        if is_x16 && ((x & 8 > 0) ^ (tile_info & 0x4000 > 0)) {
-            tile_nr += 1;
+            1364
         }
-        if is_y16 && ((y & 8 > 0) ^ (tile_info & 0x8000 > 0)) {
-            tile_nr += 16;
-        }
-        let plane = self.vram[usize::from(
-            (u16::from(bg.base_addr) << 12)
-                .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
-                .wrapping_add(ty)
-                & 0x7fff,
-        )];
-        let mut pixel = ((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2);
-        let mut palette_dimensions = 2;
-        if bit_depth > 1 {
-            palette_dimensions = 4;
-            let plane = self.vram[usize::from(
-                (u16::from(bg.base_addr) << 12)
-                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
-                    .wrapping_add(ty)
-                    .wrapping_add(8)
-                    & 0x7fff,
-            )];
-            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 2;
-        }
-        if bit_depth > 2 {
-            palette_dimensions = 8;
-            let plane = self.vram[usize::from(
-                (u16::from(bg.base_addr) << 12)
-                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
-                    .wrapping_add(ty)
-                    .wrapping_add(16)
-                    & 0x7fff,
-            )];
-            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 4;
-            let plane = self.vram[usize::from(
-                (u16::from(bg.base_addr) << 12)
-                    .wrapping_add((tile_nr & 0x3ff) << (2 + bit_depth))
-                    .wrapping_add(ty)
-                    .wrapping_add(24)
-                    & 0x7fff,
-            )];
-            pixel |= (((plane >> tx) & 1) | ((plane >> (tx + 7)) & 2)) << 6;
-        }
-        if pixel == 0 {
-            0
+    }
+
+    pub fn get_scanline_count(&self) -> u16 {
+        if self.is_pal {
+            312
         } else {
-            u32::from(pixel).wrapping_add(u32::from(palette) << palette_dimensions)
+            262
         }
     }
 
-    fn pixel_to_color(&self, pixel: Option<u32>, bit_depth: u8) -> Color {
-        let val = pixel.unwrap_or(0);
-        if pixel.is_some() && self.direct_color_mode && bit_depth == 3 {
-            Color::new(
-                (((val & 0x7) << 2) | ((val & 0x100) >> 7)) as u8,
-                (((val & 0x38) >> 1) | ((val & 0x200) >> 8)) as u8,
-                (((val & 0xc0) >> 3) | ((val & 0x400) >> 8)) as u8,
-            )
+    pub fn is_in_hblank_reg4212(&self) -> bool {
+        !(3..=1095).contains(&self.pos.x)
+    }
+
+    pub fn is_in_vblank(&self) -> bool {
+        self.pos.y >= self.vend()
+    }
+
+    pub fn is_cpu_active(&self) -> bool {
+        !(536..536 + 40).contains(&self.pos.x)
+    }
+
+    pub fn end_vblank(&mut self) {
+        self.field ^= true;
+        self.bgs.iter_mut().for_each(|bg| bg.mosaic_start = None);
+        if !self.force_blank {
+            self.overflow_flags = 0;
+        }
+    }
+
+    pub fn vend(&self) -> u16 {
+        (if self.overscan {
+            MAX_SCREEN_HEIGHT_OVERSCAN
         } else {
-            let color = self.cgram.read16((val & 0xff) as u8);
-            Color::new(
-                (color & 0x1f) as u8,
-                ((color >> 5) & 0x1f) as u8,
-                ((color >> 10) & 0x1f) as u8,
-            )
+            MAX_SCREEN_HEIGHT
+        } + 1) as _
+    }
+
+    pub fn vblank(&mut self) {
+        if !self.force_blank {
+            self.oam.oam_reset();
         }
-    }
-
-    fn get_bg7_color(
-        &self,
-        bg_nr: u8,
-        bit_depth: u8,
-        priority: bool,
-        x: u16,
-        m7_precalc: &[i32; 2],
-    ) -> u32 {
-        let x = (x & 0xff) as u8;
-        let x = if self.mode7_settings.x_mirror { !x } else { x };
-
-        let pixel = [
-            (m7_precalc[0] + self.mode7_settings.matrix[0] as i16 as i32 * x as i32) >> 8,
-            (m7_precalc[1] + self.mode7_settings.matrix[2] as i16 as i32 * x as i32) >> 8,
-        ];
-        let palette_addr = ((((pixel[1] as u32) & 7) as u8) << 3) | (pixel[0] as u32 & 0x7) as u8;
-        let tile_addr =
-            ((pixel[0] >> 3) as u32 & 0x7f) as u16 | (((pixel[1] >> 3) as u32 & 0x7f) << 7) as u16;
-        let out_of_bounds = !(0..1024).contains(&pixel[0]) || !(0..1024).contains(&pixel[1]);
-        let tile = if let Some(true) = self.mode7_settings.fill_zeros.filter(|_| out_of_bounds) {
-            0
-        } else {
-            (self.vram[usize::from(tile_addr)] & 0xff) as u8
-        };
-        let pixel = if let Some(false) = self.mode7_settings.fill_zeros.filter(|_| out_of_bounds) {
-            0
-        } else {
-            (self.vram[usize::from((u16::from(tile) << 6) | u16::from(palette_addr))] >> 8) as u8
-        };
-        (if bg_nr == 1 {
-            if (pixel & 0x80 == 0) == priority {
-                0
-            } else {
-                pixel & 0x7f
-            }
-        } else {
-            pixel
-        })
-        .into()
-    }
-
-    fn get_sprite_buffers(&mut self, y: u16) -> [u16; 0x100] {
-        let mut buffer = [0; 0x100];
-        let offset = if self.oam.priority {
-            ((self.oam.addr_inc & 0xff) as u8) >> 1
-        } else {
-            0
-        };
-        let mut sprites_per_line = 0u8;
-        let mut tiles = 0u8;
-        'sprite_loop: for sprite_id in 0u8..128 {
-            let obj = &self.oam.objs[usize::from(sprite_id.wrapping_add(offset) & 0x7f)];
-            let sprite_size = self.obj_size.get_size(obj.is_large);
-            if ((y & 0xff) as u8).wrapping_sub(1).wrapping_sub(obj.y) < sprite_size[1]
-                && obj.x + i16::from(sprite_size[0]) > 0
-            {
-                sprites_per_line += 1;
-                if sprites_per_line > 32 {
-                    self.overflow_flags |= 0x40;
-                    break;
-                }
-                let sx3 = obj.x >> 3;
-                let ty = if obj.attrs & 0x80 > 0 {
-                    sprite_size[1]
-                        .wrapping_add(obj.y)
-                        .wrapping_sub((y & 0xff) as u8)
-                } else {
-                    ((y & 0xff) as u8).wrapping_sub(obj.y).wrapping_sub(1)
-                };
-                let name = self.tile_adr[usize::from(obj.attrs & 1)];
-                let tile = (obj.tile_nr & 0xf0).wrapping_add((ty & 0xf8) << 1);
-                for tx in 0.max(-sx3 - 1) as u8..(sprite_size[0] >> 3).min((32 - sx3.min(32)) as u8)
-                {
-                    tiles += 1;
-                    if tiles > 34 {
-                        self.overflow_flags |= 0x80;
-                        break 'sprite_loop;
-                    }
-                    let fx = if obj.attrs & 0x40 > 0 {
-                        sprite_size[0] - 1 - (tx << 3)
-                    } else {
-                        tx << 3
-                    };
-                    let tile = tile | ((obj.tile_nr & 0xf) + (fx >> 3));
-                    let name = name
-                        .wrapping_add(u16::from(tile) << 4)
-                        .wrapping_add(u16::from(ty & 7));
-                    let bytes = [
-                        self.vram[usize::from(name) & (VRAM_SIZE - 1)],
-                        self.vram[usize::from(name.wrapping_add(8)) & (VRAM_SIZE - 1)],
-                    ];
-                    for i in 0u8..8 {
-                        let px = if obj.attrs & 0x40 > 0 { i } else { 7 - i };
-                        let byte = ((bytes[0] >> px) & 1)
-                            | ((bytes[0] >> (8 + px)) & 1) << 1
-                            | ((bytes[1] >> px) & 1) << 2
-                            | ((bytes[1] >> (8 + px)) & 1) << 3;
-                        let tx = i16::from(tx << 3) + obj.x + i16::from(i);
-                        if byte > 0 && (0..=0xff).contains(&tx) && buffer[tx as usize] & 0xff == 0 {
-                            buffer[tx as usize] =
-                                u16::from(0x80 ^ ((obj.attrs & 0xe) << 3).wrapping_add(byte as u8))
-                                    | (u16::from(obj.attrs & 0x30) << 4);
-                        }
-                    }
-                }
-            }
-        }
-        buffer
-    }
-
-    fn get_sprite_color(&self, priority: u8, x: u16, sprite_buffer: &[u16; 0x100]) -> u8 {
-        let v = sprite_buffer[usize::from(x & 0xff)];
-        if priority == (v >> 8) as u8 {
-            (v & 0xff) as u8
-        } else {
-            0
-        }
-    }
-
-    fn fetch_pixel_on_screen_layer(
-        &mut self,
-        layer_info: &DrawLayer,
-        [x, y]: [u16; 2],
-        m7_precalc: &Option<[i32; 2]>,
-        sprite_buffer: &[u16; 0x100],
-        subscreen_needed: bool,
-    ) -> Option<(u32, u8, bool, [bool; 2])> {
-        let layer = self.get_layer_by_info(layer_info);
-        let is_in_screen =
-            |screen, screen_masked| screen && !(screen_masked && self.is_in_window(x, layer));
-        let in_main_screen = is_in_screen(layer.main_screen, layer.main_screen_masked);
-        let in_sub_screen = is_in_screen(layer.sub_screen, layer.sub_screen_masked);
-        if in_main_screen || (subscreen_needed && in_sub_screen) {
-            let (pixel, bit_depth) = match layer_info {
-                DrawLayer::Bg(bg_nr, bit_depth, priority) => (
-                    if let Some(m7_precalc) = m7_precalc {
-                        self.get_bg7_color(*bg_nr, *bit_depth, *priority, x, m7_precalc)
-                    } else {
-                        let bg = self.get_bg_color(*bg_nr, *bit_depth, *priority, [x, y]);
-                        bg
-                    },
-                    *bit_depth,
-                ),
-                DrawLayer::Sprite(priority) => {
-                    (self.get_sprite_color(*priority, x, sprite_buffer).into(), 0)
-                }
-            };
-            if pixel > 0 {
-                return Some((
-                    pixel,
-                    bit_depth,
-                    layer.color_math && (pixel >= 0xc0 || matches!(layer_info, DrawLayer::Bg(..))),
-                    [in_main_screen, subscreen_needed && in_sub_screen],
-                ));
-            }
-        }
-        None
-    }
-
-    fn fetch_pixel_layer(
-        &mut self,
-        [x, y]: [u16; 2],
-        m7_precalc: &Option<[i32; 2]>,
-        sprite_buffer: &[u16; 0x100],
-    ) -> Color<u8> {
-        let mut colors = [None; 2];
-        let prevent = self.color_behaviour & 3;
-        let color_math = prevent != 3
-            && (prevent == 0 || (self.is_in_window(x, &self.color_layer) ^ (prevent & 1 == 0)));
-        let mut main_layer_color_math = None;
-        for layer_info in self.bg_mode.get_layers() {
-            let res = self.fetch_pixel_on_screen_layer(
-                layer_info,
-                [x, y],
-                m7_precalc,
-                sprite_buffer,
-                color_math && self.add_subscreen && colors[1].is_none(),
-            );
-            if let Some((pixel, bit_depth, layer_color_math, is_screen)) = res {
-                let color = self.pixel_to_color(Some(pixel), bit_depth);
-                if is_screen[0] && colors[0].is_none() {
-                    colors[0] = Some(color);
-                    main_layer_color_math = Some(layer_color_math);
-                    if colors[1].is_some() || !color_math || !self.add_subscreen {
-                        break;
-                    }
-                }
-                if is_screen[1] {
-                    colors[1] = Some(color);
-                    if colors[0].is_some() {
-                        break;
-                    }
-                }
-            }
-        }
-        let color_math =
-            color_math & main_layer_color_math.unwrap_or_else(|| self.color_layer.color_math);
-        (match colors {
-            [Some(main), _] if !color_math => main,
-            [main, secondary] if color_math => {
-                let main = main.unwrap_or_else(|| self.pixel_to_color(None, 0));
-                let op = if self.subtract_color {
-                    Color::saturating_sub
-                } else {
-                    Color::saturating_add
-                };
-                let color: Color = if let (Some(secondary), true) = (secondary, self.add_subscreen)
-                {
-                    op(main, secondary)
-                } else {
-                    op(main, self.fixed_color)
-                };
-                (if self.half_color && (secondary.is_some() || !self.add_subscreen) {
-                    color.map(|c| c >> 1)
-                } else {
-                    color
-                })
-                .map(|c| c.clamp(0, 31))
-            }
-            _ => self.pixel_to_color(None, 0),
-        })
-        .map(|v| v << 3)
-    }
-
-    fn fetch_pixel(
-        &mut self,
-        [x, y]: [u16; 2],
-        m7_precalc: &Option<[i32; 2]>,
-        sprite_buffer: &[u16; 0x100],
-    ) -> Color {
-        if self.force_blank {
-            Color::BLACK
-        } else {
-            self.fetch_pixel_layer([x, y], m7_precalc, sprite_buffer)
-                .with_brightness(self.brightness)
-        }
-    }
-
-    pub fn draw_line(&mut self, y: u16) {
-        let m7_precalc = if let BgModeNum::Mode7 = self.bg_mode.num {
-            let y = (y & 0xff) as u8;
-            let y = if self.mode7_settings.y_mirror { !y } else { y };
-
-            let dif = [
-                self.mode7_settings.offset[0].wrapping_sub(self.mode7_settings.center[0]),
-                self.mode7_settings.offset[1].wrapping_sub(self.mode7_settings.center[1]),
-            ];
-            let clip = |x: u16| {
-                (if x & 0x2000 > 0 {
-                    x | 0xfc00
-                } else {
-                    x & 0x3ff
-                }) as i16
-            };
-            let dif = [clip(dif[0] as u16), clip(dif[1] as u16)];
-            let origin = |a, b, c| {
-                ((i32::from(a) * i32::from(dif[0])) & -64i32)
-                    + ((i32::from(b) * i32::from(dif[1])) & -64i32)
-                    + ((i32::from(b) * i32::from(y)) & -64i32)
-                    + (i32::from(c) << 8)
-            };
-            Some([
-                origin(
-                    self.mode7_settings.matrix[0] as i16,
-                    self.mode7_settings.matrix[1] as i16,
-                    self.mode7_settings.center[0],
-                ),
-                origin(
-                    self.mode7_settings.matrix[2] as i16,
-                    self.mode7_settings.matrix[3] as i16,
-                    self.mode7_settings.center[1],
-                ),
-            ])
-        } else {
-            None
-        };
-        let sprite_buffer = if self.force_blank {
-            [0; 0x100]
-        } else {
-            self.get_sprite_buffers(y)
-        };
-        let offset = u32::from(y - 1) * SCREEN_WIDTH;
-        for x in 0..SCREEN_WIDTH as u16 {
-            let Color { r, g, b } = self.fetch_pixel([x, y], &m7_precalc, &sprite_buffer);
-            self.frame_buffer.mut_pixels()[(offset + u32::from(x)) as usize] = [r, g, b, 0];
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjectSize {
-    /// Object 8x8 - Sprite 16x16
-    O8S16,
-    /// Object 8x8 - Sprite 32x32
-    O8S32,
-    /// Object 8x8 - Sprite 64x64
-    O8S64,
-    /// Object 16x16 - Sprite 32x32
-    O16S32,
-    /// Object 16x16 - Sprite 64x64
-    O16S64,
-    /// Object 32x32 - Sprite 64x64
-    O32S64,
-    /// Object 16x32 - Sprite 32x64
-    O16x32S32x64,
-    /// Object 16x32 - Sprite 32x32
-    O16x32S32,
-}
-
-impl ObjectSize {
-    pub const fn from_upper_bits(bits: u8) -> Self {
-        match bits >> 5 {
-            0b000 => Self::O8S16,
-            0b001 => Self::O8S32,
-            0b010 => Self::O8S64,
-            0b011 => Self::O16S32,
-            0b100 => Self::O16S64,
-            0b101 => Self::O32S64,
-            0b110 => Self::O16x32S32x64,
-            0b111 => Self::O16x32S32,
-            _ => unreachable!(),
-        }
-    }
-
-    pub const fn to_upper_bits(self) -> u8 {
-        let n: u8 = match self {
-            Self::O8S16 => 0b000,
-            Self::O8S32 => 0b001,
-            Self::O8S64 => 0b010,
-            Self::O16S32 => 0b011,
-            Self::O16S64 => 0b100,
-            Self::O32S64 => 0b101,
-            Self::O16x32S32x64 => 0b110,
-            Self::O16x32S32 => 0b111,
-        };
-        n << 5
-    }
-
-    pub const fn get_small_width(&self) -> u8 {
-        match self {
-            Self::O8S16 | Self::O8S32 | Self::O8S64 => 8,
-            Self::O16S32 | Self::O16S64 | Self::O16x32S32 | Self::O16x32S32x64 => 16,
-            Self::O32S64 => 32,
-        }
-    }
-
-    pub const fn get_small_height(&self) -> u8 {
-        match self {
-            Self::O8S16 | Self::O8S32 | Self::O8S64 => 8,
-            Self::O16S32 | Self::O16S64 => 16,
-            Self::O32S64 | Self::O16x32S32 | Self::O16x32S32x64 => 32,
-        }
-    }
-
-    pub const fn get_large_width(&self) -> u8 {
-        match self {
-            Self::O8S16 => 16,
-            Self::O8S32 | Self::O16S32 | Self::O16x32S32 | Self::O16x32S32x64 => 32,
-            Self::O8S64 | Self::O16S64 | Self::O32S64 => 64,
-        }
-    }
-
-    pub const fn get_large_height(&self) -> u8 {
-        match self {
-            Self::O8S16 => 16,
-            Self::O8S32 | Self::O16S32 | Self::O16x32S32 => 32,
-            Self::O8S64 | Self::O16S64 | Self::O32S64 | Self::O16x32S32x64 => 64,
-        }
-    }
-
-    pub const fn get_small_size(&self) -> [u8; 2] {
-        [self.get_small_width(), self.get_small_height()]
-    }
-
-    pub const fn get_large_size(&self) -> [u8; 2] {
-        [self.get_large_width(), self.get_large_height()]
-    }
-
-    pub const fn get_size(&self, is_large: bool) -> [u8; 2] {
-        if is_large {
-            self.get_large_size()
-        } else {
-            self.get_small_size()
-        }
-    }
-}
-
-impl save_state::InSaveState for ObjectSize {
-    fn serialize(&self, state: &mut SaveStateSerializer) {
-        self.to_upper_bits().serialize(state)
-    }
-
-    fn deserialize(&mut self, state: &mut SaveStateDeserializer) {
-        let mut n: u8 = 0;
-        n.deserialize(state);
-        *self = Self::from_upper_bits(n)
     }
 }
 
@@ -1400,8 +1448,8 @@ impl RemapMode {
     pub fn new(val: u8) -> Self {
         core::num::NonZeroU8::new(val & 3)
             .map(|v| Self {
-                mask: (1 << (val + 7)) - 1,
-                shift: val | 4,
+                mask: (1 << (v.get() + 7)) - 1,
+                shift: v.get() | 4,
             })
             .unwrap_or_default()
     }

@@ -300,7 +300,15 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         for (i, d) in data.as_mut().iter_mut().enumerate() {
             let addr = addr.wrapping_add(i as u8);
             *d = match addr {
-                0x34..=0x3f => self.ppu.read_register(addr).unwrap_or(self.open_bus),
+                0x34..=0x3f => {
+                    let val = self.ppu.read_register(addr).unwrap_or(self.open_bus);
+                    if addr < 0x3b || addr == 0x3e {
+                        self.ppu.open_bus1 = val
+                    } else {
+                        self.ppu.open_bus2 = val
+                    }
+                    val
+                }
                 0x40..=0x7f => {
                     // APU Ports 2140h-2143h are mirrored to 2144h..217Fh
                     self.smp.read_output_port(addr)
