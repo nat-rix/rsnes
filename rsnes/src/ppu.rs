@@ -1056,7 +1056,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if cgram_addr == 0 {
             None
         } else {
-            Some(self.cgram.read16(cgram_addr).into())
+            Some(if self.direct_color_mode {
+                Color {
+                    r: (cgram_addr & 7) << 2,
+                    g: (cgram_addr & 0x38) >> 1,
+                    b: (cgram_addr & 0xc0) >> 3,
+                }
+            } else {
+                self.cgram.read16(cgram_addr).into()
+            })
         }
     }
 
@@ -1122,13 +1130,21 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if palette_idx == 0 {
             return None;
         }
-        let cg_addr = if self.bg_mode.num == 0 {
-            (tile.palette_nr << 2) | palette_idx | (nr << 5) as u8
+        let color = if self.direct_color_mode && bits == 8 {
+            Color {
+                r: ((palette_idx & 7) << 2) | ((tile.palette_nr & 1) << 1),
+                g: ((palette_idx & 0x38) >> 1) | (tile.palette_nr & 2),
+                b: ((palette_idx & 0xc0) >> 3) | (tile.palette_nr & 4),
+            }
         } else {
-            (tile.palette_nr << bits) | palette_idx
+            let cg_addr = if self.bg_mode.num == 0 {
+                (tile.palette_nr << 2) | palette_idx | (nr << 5) as u8
+            } else {
+                (tile.palette_nr << bits) | palette_idx
+            };
+            self.cgram.read16(cg_addr).into()
         };
-        let color = self.cgram.read16(cg_addr);
-        Some(color.into())
+        Some(color)
     }
 
     pub fn fetch_screen(
