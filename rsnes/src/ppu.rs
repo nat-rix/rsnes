@@ -435,11 +435,11 @@ pub struct ObjCacheEntry {
 impl ObjCacheEntry {
     const EMPTY: Self = Self {
         palette_addr: 0,
-        prio: 0xff,
+        prio: 0,
     };
 
     pub fn write(&mut self, val: Self) {
-        if self.prio == 0xff || val.prio > self.prio {
+        if val.prio >= self.prio {
             *self = val
         }
     }
@@ -1300,7 +1300,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         let y = (y & 0xff) as u8;
         let mut objs_in_line = 0;
         let mut tiles_in_line = 0;
-        'obj_loop: for obj in self.oam.objs {
+        self.oam.objs.iter_mut().for_each(|obj| obj.used = false);
+        for obj in &mut self.oam.objs {
             let size = self.obj_size[usize::from(obj.is_large)];
             if (-i16::from(size[0]) >= obj.x && obj.x != -256)
                 || obj.x >= 256
@@ -1311,15 +1312,22 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             if objs_in_line >= 32 {
                 self.overflow_flags |= 0x40;
-                break 'obj_loop;
+                break;
             }
+            obj.used = true;
+        }
+        'obj_loop: for obj in self.oam.objs.into_iter().rev() {
+            if !obj.used {
+                continue;
+            }
+            let size = self.obj_size[usize::from(obj.is_large)];
             objs_in_line += 1;
             let y = y.wrapping_sub(obj.y);
             let y = if obj.is_yflip() { size[1] - y - 1 } else { y };
-            for tile_id in 0..size[0] >> 3 {
+            'tile_loop: for tile_id in 0..size[0] >> 3 {
                 let left = obj.x + i16::from(tile_id << 3);
                 if left < -7 || left >= 256 {
-                    continue;
+                    continue 'tile_loop;
                 }
                 if tiles_in_line >= 34 {
                     self.overflow_flags |= 0x80;

@@ -7,6 +7,8 @@ pub struct Object {
     pub tile_nr: u8,
     pub attrs: u8,
     pub is_large: bool,
+
+    pub used: bool,
 }
 
 impl Object {
@@ -17,6 +19,7 @@ impl Object {
             tile_nr: 0,
             attrs: 0,
             is_large: false,
+            used: false,
         }
     }
 
