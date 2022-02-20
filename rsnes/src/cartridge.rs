@@ -627,15 +627,6 @@ impl Cartridge {
         let map = &mut self.mapping;
         match self.header.rom_type {
             RomType::LoRom | RomType::LoRomSA1 => {
-                map!(map @ 0x00:0x8000 .. 0x7d:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
-                map!(map @ 0x80:0x8000 .. 0xff:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
-                if self.ram.len() == 0 {
-                    map!(map @ 0x40:0x0000 .. 0x7d:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
-                    map!(map @ 0xc0:0x0000 .. 0xff:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
-                } else {
-                    map!(map @ 0x70:0x0000 .. 0x7d:0x7fff => Sram | Sram [0xf<<15:0xffff]);
-                    map!(map @ 0xf0:0x0000 .. 0xff:0x7fff => Sram | Sram [0xf<<15:0xffff]);
-                }
                 if let Some(dsp) = &self.dsp {
                     match (dsp.version(), self.rom.len() >> 20, self.ram.len() >> 10) {
                         (DspVersion::Dsp1 | DspVersion::Dsp1B | DspVersion::Dsp4, _, 0) => {
@@ -652,6 +643,15 @@ impl Cartridge {
                         }
                         _ => todo!("Could not guess any NEC-DSP memory mapping"),
                     }
+                }
+                map!(map @ 0x00:0x8000 .. 0x7d:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
+                map!(map @ 0x80:0x8000 .. 0xff:0xffff => Rom | Ignore [0x7f<<15:0x7fff]);
+                if self.ram.len() == 0 {
+                    map!(map @ 0x40:0x0000 .. 0x7d:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
+                    map!(map @ 0xc0:0x0000 .. 0xff:0x7fff => Rom | Ignore [0x7f<<15:0x7fff]);
+                } else {
+                    map!(map @ 0x70:0x0000 .. 0x7d:0x7fff => Sram | Sram [0xf<<15:0xffff]);
+                    map!(map @ 0xf0:0x0000 .. 0xff:0x7fff => Sram | Sram [0xf<<15:0xffff]);
                 }
             }
             RomType::HiRom => {
