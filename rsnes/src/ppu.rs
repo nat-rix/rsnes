@@ -1150,6 +1150,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         } else {
             let cg_addr = if self.bg_mode.num == 0 {
                 (tile.palette_nr << 2) | palette_idx | (nr << 5) as u8
+            } else if bits == 8 {
+                palette_idx
             } else {
                 (tile.palette_nr << bits) | palette_idx
             };
