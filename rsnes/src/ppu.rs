@@ -1307,8 +1307,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             let size = self.obj_size[usize::from(obj.is_large)];
             if (-i16::from(size[0]) >= obj.x && obj.x != -256)
                 || obj.x >= 256
-                || !((obj.y..=obj.y.saturating_add(size[1] - 1)).contains(&y)
-                    || i16::from(y) < i16::from(obj.y) + i16::from(size[1]) - 256)
+                || y.wrapping_sub(obj.y) >= size[1]
             {
                 continue;
             }
@@ -1355,7 +1354,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         if self.force_blank {
             self.frame_buffer.mut_pixels()[n..n + 256].fill([0; 4])
         } else {
-            self.refill_obj_cache(y);
+            self.refill_obj_cache(y - 1);
             self.mode7_settings.tmpy = (y & 0xff) as u8;
             if self.mode7_settings.y_mirror {
                 self.mode7_settings.tmpy ^= 0xff;
