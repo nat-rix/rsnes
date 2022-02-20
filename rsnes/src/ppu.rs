@@ -1170,9 +1170,9 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         y: u16,
         mainscreen: bool,
         subscreen: bool,
-    ) -> ([Color; 2], bool) {
+    ) -> (Color, Option<Color>, bool) {
         let [mut main_found, mut sub_found] = [false; 2];
-        let [mut main, mut sub] = [Color::new(0, 0, 0), self.color_math.color];
+        let (mut main, mut sub) = (Color::new(0, 0, 0), None);
         let mut layer_color_math = None;
         for draw_ly_idx in 0..self.draw_layers.size {
             let draw_ly = &self.draw_layers.arr[usize::from(draw_ly_idx)];
@@ -1214,7 +1214,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 }
                 if is_sub {
                     sub_found = true;
-                    sub = color;
+                    sub = Some(color);
                     if main_found || !mainscreen {
                         break;
                     }
@@ -1225,7 +1225,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             main = self.cgram.main_screen_backdrop().into()
         }
         (
-            [main, sub],
+            main,
+            sub,
             layer_color_math.unwrap_or_else(|| self.color_math.backdrop),
         )
     }
@@ -1249,19 +1250,20 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             0 | 3 => i == 0,
             _ => (i == 2) ^ in_window(),
         });
-        let ([main, sub], color_math) = self.fetch_screen(
+        let (main, sub, color_math) = self.fetch_screen(
             x,
             y,
             main_enable,
             color_enable && self.color_math.add_subscreen,
         );
         let color = if color_math && color_enable {
+            let sub_or_backdrop = sub.unwrap_or(self.color_math.color);
             let mut color = if self.color_math.subtract_color {
-                main - sub
+                main - sub_or_backdrop
             } else {
-                main + sub
+                main + sub_or_backdrop
             };
-            if self.color_math.half_color && main_enable {
+            if self.color_math.half_color && main_enable && sub.is_some() {
                 color = color.half();
             }
             color.map(|c| c.clamp(0, 0x1f))
