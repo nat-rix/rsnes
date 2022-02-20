@@ -1006,7 +1006,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             if xflip {
                 plane = u16::from_le_bytes(plane.to_le_bytes().map(u8::reverse_bits));
             }
-            tile |= u64::from(plane) << (i << 4)
+            for x in 0..8 {
+                tile |= u64::from((plane & 1) | ((plane >> 7) & 2)) << ((i << 1) | (x << 3));
+                plane >>= 1;
+            }
         }
         tile
     }
@@ -1033,16 +1036,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     }
 
     fn decode_tile(tile: u64, x: u16) -> u8 {
-        let dx = ((x ^ 7) & 7) as u8;
-        let mut color = 0;
-        for (i, b) in ((tile >> dx) & 0x01_01_01_01_01_01_01_01)
-            .to_le_bytes()
-            .iter()
-            .enumerate()
-        {
-            color |= b << i
-        }
-        color
+        tile.to_be_bytes()[usize::from(x & 7)]
     }
 
     fn fetch_bg7_tile(&mut self, x: u8, nr: u8, prio: bool) -> Option<Color> {
