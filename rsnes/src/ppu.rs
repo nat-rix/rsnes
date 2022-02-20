@@ -125,10 +125,21 @@ impl Color {
         Self { r, g, b }
     }
 
-    pub fn to_rgba8(self, brightness: u8) -> [u8; 4] {
-        let Color { r, g, b } =
-            self.map(|c| (((c as u16 * (brightness + 1) as u16) >> 1) & 0xff) as u8);
-        [r, g, b, 255]
+    pub const fn to_rgba8(self) -> [u8; 4] {
+        [self.r, self.g, self.b, 255]
+    }
+
+    pub fn to_rgba8_with_brightness(self, brightness: u8) -> [u8; 4] {
+        if brightness == 0 {
+            [0; 4]
+        } else {
+            let b = u16::from(brightness.clamp(0, 15));
+            self.map(|c| {
+                let v = u16::from(c.clamp(0, 0x1f)) * b;
+                ((v + (v << 4)) / 31) as u8
+            })
+            .to_rgba8()
+        }
     }
 
     pub fn map<F: FnMut(u8) -> u8>(self, mut f: F) -> Self {
@@ -415,15 +426,20 @@ pub struct Bg {
     cached_tile: Option<CachedTile>,
 }
 
-#[derive(Debug, Clone, Copy, Default, InSaveState)]
+#[derive(Debug, Clone, Copy, InSaveState)]
 pub struct ObjCacheEntry {
     palette_addr: u8,
     prio: u8,
 }
 
 impl ObjCacheEntry {
+    const EMPTY: Self = Self {
+        palette_addr: 0,
+        prio: 0xff,
+    };
+
     pub fn write(&mut self, val: Self) {
-        if val.prio > self.prio {
+        if self.prio == 0xff || val.prio > self.prio {
             *self = val
         }
     }
@@ -667,7 +683,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             obj_size: OBJ_SIZES[0],
             obj_tile_addr: [0; 2],
             obj_layer: Layer::new(),
-            obj_cache: [Default::default(); 256],
+            obj_cache: [ObjCacheEntry::EMPTY; 256],
             overflow_flags: 0,
             color_math: ColorMath::new(),
             direct_color_mode: false,
@@ -726,7 +742,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                         | ((self.is_pal as u8) << 4),
                 )
             }
-            _ => todo!("r 21{:02x}", addr),
+            _ => unreachable!(),
         }
     }
 
@@ -1029,7 +1045,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         color
     }
 
-    fn fetch_bg7_tile(&mut self, x: u8) -> Option<Color> {
+    fn fetch_bg7_tile(&mut self, x: u8, nr: u8, prio: bool) -> Option<Color> {
         let x = if self.mode7_settings.x_mirror { !x } else { x };
 
         let v = [
@@ -1053,7 +1069,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             .wrapping_add(v[0] & 7)
             .wrapping_add((v[1] & 7) << 3);
         let cgram_addr = self.vram.read(pixel_addr).to_le_bytes()[1];
-        if cgram_addr == 0 {
+        if cgram_addr == 0 || (nr == 1 && (cgram_addr & 0x80 == 0) == prio) {
             None
         } else {
             Some(if self.direct_color_mode {
@@ -1069,9 +1085,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     }
 
     pub fn fetch_bg_tile(&mut self, x: u8, y: u16, nr: u8, bits: u8, prio: bool) -> Option<Color> {
-        if self.bg_mode.num == 7 && nr == 0 {
-            return self.fetch_bg7_tile(x);
+        if self.bg_mode.num == 7 {
+            return self.fetch_bg7_tile(x, nr, prio);
         }
+        // TODO: implement offset-per-tile
         let bg = &self.bgs[usize::from(nr)];
         let x = (x as i16 + (((bg.scroll[0] << 6) as i16) >> 6)) as u16 & 0x3ff;
         let y = (y as i16 + (((bg.scroll[1] << 6) as i16) >> 6)) as u16 & 0x3ff;
@@ -1174,14 +1191,13 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             if !is_main && !is_sub {
                 continue;
             }
-            let layer_color_math_ = ly.color_math;
-            let mut obj_color_math = true;
+            let mut layer_color_math_ = ly.color_math;
             if let Some(color) = match draw_ly {
                 &DrawLayer::Bg { nr, bits, prio } => self.fetch_bg_tile(x, y, nr, bits, prio),
                 &DrawLayer::Sprite { prio } => {
                     let entry = self.obj_cache[usize::from(x)];
                     if prio == entry.prio && entry.palette_addr != 0 {
-                        obj_color_math = entry.palette_addr & 0x40 > 0;
+                        layer_color_math_ &= entry.palette_addr & 0x40 > 0;
                         Some(self.cgram.read16(entry.palette_addr).into())
                     } else {
                         None
@@ -1191,7 +1207,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 if is_main {
                     main_found = true;
                     main = color;
-                    layer_color_math = Some(layer_color_math_ && obj_color_math);
+                    layer_color_math = Some(layer_color_math_);
                     if sub_found || !subscreen {
                         break;
                     }
@@ -1252,7 +1268,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         } else {
             main
         };
-        color.to_rgba8(self.brightness)
+        color.to_rgba8_with_brightness(self.brightness)
     }
 
     fn draw_obj_8x8_tile(&mut self, obj: &Object, row: u8, tile_x: u8, tile_y: u8, size: [u8; 2]) {
@@ -1284,10 +1300,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
     }
 
     fn refill_obj_cache(&mut self, y: u16) {
-        self.obj_cache.fill(ObjCacheEntry {
-            palette_addr: 0,
-            prio: 0,
-        });
+        self.obj_cache.fill(ObjCacheEntry::EMPTY);
         let y = (y & 0xff) as u8;
         let mut objs_in_line = 0;
         let mut tiles_in_line = 0;
@@ -1295,7 +1308,7 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             let size = self.obj_size[usize::from(obj.is_large)];
             if (-i16::from(size[0]) >= obj.x && obj.x != -256)
                 || obj.x >= 256
-                || !((obj.y..obj.y.saturating_add(size[1])).contains(&y)
+                || !((obj.y..=obj.y.saturating_add(size[1] - 1)).contains(&y)
                     || i16::from(y) < i16::from(obj.y) + i16::from(size[1]) - 256)
             {
                 continue;
@@ -1305,11 +1318,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                 break 'obj_loop;
             }
             objs_in_line += 1;
-            let yp = y.wrapping_sub(obj.y);
-            let yp = if obj.is_yflip() { size[1] - yp - 1 } else { yp };
+            let y = y.wrapping_sub(obj.y);
+            let y = if obj.is_yflip() { size[1] - y - 1 } else { y };
             for tile_id in 0..size[0] >> 3 {
                 let left = obj.x + i16::from(tile_id << 3);
-                if left + 7 < 0 || left >= 256 {
+                if left < -7 || left >= 256 {
                     continue;
                 }
                 if tiles_in_line >= 34 {
@@ -1317,10 +1330,9 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
                     break 'obj_loop;
                 }
                 tiles_in_line += 1;
-                self.draw_obj_8x8_tile(&obj, yp, tile_id, yp >> 3, size);
+                self.draw_obj_8x8_tile(&obj, y, tile_id, y >> 3, size);
             }
         }
-        // TODO
     }
 
     pub fn draw_scanline(&mut self) {
