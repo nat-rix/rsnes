@@ -113,6 +113,14 @@ impl Oam {
         self.priority = value & 0x80 > 0;
     }
 
+    pub fn get_first_sprite(&self) -> u8 {
+        if self.priority {
+            ((self.addr_inc >> 1) & 0x7f) as u8
+        } else {
+            0
+        }
+    }
+
     pub fn write(&mut self, value: u8) {
         let addr = self.addr_inc;
         if addr & 1 == 0 {

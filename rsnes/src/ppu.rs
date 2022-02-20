@@ -435,14 +435,8 @@ pub struct ObjCacheEntry {
 impl ObjCacheEntry {
     const EMPTY: Self = Self {
         palette_addr: 0,
-        prio: 0,
+        prio: 0xff,
     };
-
-    pub fn write(&mut self, val: Self) {
-        if val.prio >= self.prio {
-            *self = val
-        }
-    }
 }
 
 impl Bg {
@@ -1288,10 +1282,11 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             if (0..=255).contains(&gx) {
                 let palette_idx = Self::decode_tile(tile, x.into());
                 if palette_idx > 0 {
-                    self.obj_cache[gx as usize].write(ObjCacheEntry {
+                    let entry = &mut self.obj_cache[gx as usize];
+                    *entry = ObjCacheEntry {
                         palette_addr: 0x80 | (palette_nr << 4) | palette_idx,
                         prio,
-                    });
+                    };
                 };
             }
         }
@@ -1302,8 +1297,10 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         let y = (y & 0xff) as u8;
         let mut objs_in_line = 0;
         let mut tiles_in_line = 0;
-        self.oam.objs.iter_mut().for_each(|obj| obj.used = false);
-        for obj in &mut self.oam.objs {
+        let firstsprite = self.oam.get_first_sprite();
+        for obj_id in 0..128 {
+            let obj = &mut self.oam.objs[usize::from(obj_id + firstsprite) & 0x7f];
+            obj.used = false;
             let size = self.obj_size[usize::from(obj.is_large)];
             if (-i16::from(size[0]) >= obj.x && obj.x != -256)
                 || obj.x >= 256
@@ -1317,7 +1314,8 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
             }
             obj.used = true;
         }
-        'obj_loop: for obj in self.oam.objs.into_iter().rev() {
+        'obj_loop: for obj in 0..128 {
+            let obj = self.oam.objs[!usize::from(obj + firstsprite) & 0x7f];
             if !obj.used {
                 continue;
             }
