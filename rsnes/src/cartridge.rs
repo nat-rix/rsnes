@@ -529,7 +529,7 @@ fn copy_rom(dst: &mut [u8], src: &[u8]) {
         let right_part = src_rest.next_power_of_two();
         let count = dst_rest / right_part;
         let mut n = left_part;
-        for i in 0..count {
+        for _ in 0..count {
             copy_rom(&mut dst[n..n + right_part], &src[left_part..]);
             n += right_part;
         }

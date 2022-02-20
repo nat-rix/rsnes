@@ -39,6 +39,7 @@ impl Stack {
     }
 }
 
+#[allow(dead_code)]
 pub mod status {
     /// Output pin P0
     pub const P0: u16 = 0x0001;
@@ -262,7 +263,10 @@ impl Dsp {
             macro_rules! set_carry {
                 ($e:expr) => {{
                     let (r, ov) = $e;
-                    overflow_check = true;
+                    #[allow(unused_assignments)]
+                    {
+                        overflow_check = true;
+                    }
                     carry |= ov;
                     r
                 }};
