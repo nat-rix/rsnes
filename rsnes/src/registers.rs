@@ -89,7 +89,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             0x4211 => {
                 // TIMEUP - The IRQ flag
                 self.shall_irq = false;
-                Some(self.irq_bit.take() | (self.open_bus & 0x7f))
+                Some(core::mem::take(&mut self.cpu.irq_bit) | (self.open_bus & 0x7f))
             }
             0x4212 => {
                 // HVBJOY - PPU status

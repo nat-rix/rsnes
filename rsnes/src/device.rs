@@ -4,7 +4,7 @@ use crate::{
     backend::{AudioBackend, FrameBuffer},
     cartridge::Cartridge,
     controller::ControllerPorts,
-    cpu::{Cpu, Status},
+    cpu::Cpu,
     dma::Dma,
     ppu::Ppu,
     registers::MathRegisters,
@@ -163,7 +163,6 @@ pub struct Device<B: AudioBackend, FB: FrameBuffer> {
     pub(crate) shall_irq: bool,
     pub(crate) shall_nmi: bool,
     pub(crate) nmi_vblank_bit: Cell<bool>,
-    pub(crate) irq_bit: Cell<u8>,
     pub(crate) math_registers: MathRegisters,
     pub(crate) is_pal: bool,
 }
@@ -191,10 +190,15 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
             shall_irq: false,
             shall_nmi: false,
             nmi_vblank_bit: Cell::new(false),
-            irq_bit: Cell::new(0),
             math_registers: MathRegisters::new(),
             is_pal,
         }
+    }
+
+    pub fn with_main_cpu<'a>(
+        &'a mut self,
+    ) -> crate::instr::DeviceAccess<'a, crate::instr::AccessTypeMain, B, FB> {
+        crate::instr::create_device_access(self)
     }
 
     pub fn load_cartridge(&mut self, mut cartridge: Cartridge) {
@@ -206,15 +210,6 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
 
     pub fn reset_program_counter(&mut self) {
         self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(Addr24::new(0, 0xfffc)))
-    }
-
-    /// Fetch a value from the program counter memory region
-    pub fn load<D: Data>(&mut self) -> D {
-        let val = self.read::<D>(self.cpu.regs.pc);
-        let len = core::mem::size_of::<D::Arr>() as u16;
-        // yes, an overflow on addr does not carry the bank
-        self.cpu.regs.pc.addr = self.cpu.regs.pc.addr.wrapping_add(len);
-        val
     }
 
     /// Read a value from the mapped memory at the specified address.
@@ -234,62 +229,6 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         self.write_data(addr, value);
         self.memory_cycles +=
             (self.get_memory_cycle(addr) - 6) * core::mem::size_of::<D::Arr>() as u32;
-    }
-
-    /// Push data on the stack
-    pub fn push<D: Data>(&mut self, val: D) {
-        for d in val.to_bytes().as_ref().iter().rev() {
-            self.write(Addr24::new(0, self.cpu.regs.sp), *d);
-            self.cpu.regs.sp = self.cpu.regs.sp.wrapping_sub(1);
-            if self.cpu.regs.is_emulation {
-                self.cpu.regs.sp = (self.cpu.regs.sp & 0xff) | 256
-            }
-        }
-    }
-
-    /// Pull data from the stack
-    pub fn pull<D: Data>(&mut self) -> D {
-        let mut arr = D::Arr::default();
-        for d in arr.as_mut() {
-            self.cpu.regs.sp = self.cpu.regs.sp.wrapping_add(1);
-            if self.cpu.regs.is_emulation {
-                self.cpu.regs.sp = (self.cpu.regs.sp & 0xff) | 256
-            }
-            *d = self.read(Addr24::new(0, self.cpu.regs.sp));
-        }
-        D::from_bytes(&arr)
-    }
-
-    pub fn nmi(&mut self) -> u32 {
-        self.cpu.in_nmi = true;
-        self.interrupt(if self.cpu.regs.is_emulation {
-            0xfffa
-        } else {
-            0xffea
-        })
-    }
-
-    pub fn irq(&mut self) -> u32 {
-        self.irq_bit.set(0x80);
-        self.interrupt(if self.cpu.regs.is_emulation {
-            0xfffe
-        } else {
-            0xffee
-        })
-    }
-
-    pub fn interrupt(&mut self, vector: u16) -> u32 {
-        if self.cpu.regs.is_emulation {
-            self.push(self.cpu.regs.pc.addr)
-        } else {
-            self.push(self.cpu.regs.pc)
-        }
-        self.push(self.cpu.regs.status.0);
-        self.cpu.regs.status |= Status::IRQ_DISABLE;
-        self.cpu.regs.status &= !Status::DECIMAL;
-        let addr = self.read(Addr24::new(0, vector));
-        self.cpu.regs.pc = Addr24::new(0, addr);
-        48
     }
 }
 

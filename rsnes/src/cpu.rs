@@ -160,6 +160,7 @@ pub struct Cpu {
     pub(crate) nmitimen: u8,
     pub(crate) access_speed: bool,
     pub(crate) in_nmi: bool,
+    pub(crate) irq_bit: u8,
     pub wait_mode: bool,
     pub active: bool,
 }
@@ -181,6 +182,7 @@ impl Cpu {
             nmitimen: 0,
             access_speed: false,
             in_nmi: false,
+            irq_bit: 0,
             wait_mode: false,
             active: true,
         }

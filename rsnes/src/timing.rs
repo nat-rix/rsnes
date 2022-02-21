@@ -126,14 +126,14 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             self.memory_cycles = 0;
             let cycles = (if self.shall_nmi {
                 self.shall_nmi = false;
-                self.nmi()
+                self.with_main_cpu().nmi()
             } else if self.shall_irq && !self.cpu.regs.status.has(Status::IRQ_DISABLE) {
                 self.shall_irq = false;
-                self.irq()
+                self.with_main_cpu().irq()
             } else {
                 // > Internal operation CPU cycles always take 6 master cycles
                 // source: <https://wiki.superfamicom.org/memory-mapping>
-                self.dispatch_instruction() * 6
+                self.with_main_cpu().dispatch_instruction() * 6
             }) + self.memory_cycles;
             self.cpu_ahead_cycles += cycles as i32;
         }
