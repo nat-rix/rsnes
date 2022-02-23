@@ -1,4 +1,4 @@
-#![feature(result_option_inspect)]
+mod config;
 
 use clap::{ErrorKind, Parser};
 use cpal::{
@@ -18,7 +18,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-const MASTER_CYCLES_PER_TICK: u16 = 1;
+const MASTER_CYCLES_PER_TICK: u16 = 2;
 
 #[derive(Parser, Clone)]
 #[clap(
@@ -29,8 +29,8 @@ struct Options {
     input: PathBuf,
     #[clap(short, long)]
     verbose: bool,
-    #[clap(long)]
-    disable_threading: bool,
+    #[clap(short, long, parse(from_os_str))]
+    config: Option<PathBuf>,
 }
 
 macro_rules! error {
@@ -191,6 +191,12 @@ mod shaders {
 fn main() {
     let options = Options::parse();
 
+    let config = config::Config::load(options.config, options.verbose)
+        .unwrap_or_else(|err| error!("config: {err}"));
+    let profile = config.get_default_profile();
+    let [port1_profile, port2_profile] =
+        config.get_controller_profiles(&profile).map(|p| p.cloned());
+
     let cartridge = cartridge_from_file(&options.input);
     if options.verbose {
         println!(
@@ -198,13 +204,17 @@ fn main() {
             cartridge.header()
         );
     }
-    let is_pal = matches!(
-        cartridge.get_country_frame_rate(),
-        rsnes::cartridge::CountryFrameRate::Pal
-    );
+    let is_pal = match profile.region {
+        rsnes::cartridge::CountryFrameRate::Any => matches!(
+            cartridge.get_country_frame_rate(),
+            rsnes::cartridge::CountryFrameRate::Pal
+        ),
+        rsnes::cartridge::CountryFrameRate::Pal => true,
+        rsnes::cartridge::CountryFrameRate::Ntsc => false,
+    };
     if options.verbose {
         println!(
-            "[info] Detected {} mode from cartridge",
+            "[info] Selected {} region",
             if is_pal { "PAL" } else { "NTSC" }
         );
     }
@@ -214,8 +224,10 @@ fn main() {
         audio_backend,
         ArrayFrameBuffer([[0; 4]; rsnes::backend::FRAME_BUFFER_SIZE], true),
         is_pal,
-        !options.disable_threading,
+        profile.threaded,
     );
+    snes.controllers.port1 = config::controller_profile_to_port(port1_profile.as_ref());
+    snes.controllers.port2 = config::controller_profile_to_port(port2_profile.as_ref());
     snes.load_cartridge(cartridge);
 
     let size = winit::dpi::PhysicalSize::new(
@@ -415,59 +427,56 @@ fn main() {
                 DeviceEvent::Key(KeyboardInput {
                     scancode, state, ..
                 }) if focused => {
-                    use rsnes::controller::buttons;
-                    let key: u16 = match scancode {
-                        0x24 => buttons::A,
-                        0x25 => buttons::B,
-                        0x26 => buttons::X,
-                        0x27 => buttons::Y,
-                        0x11 => buttons::UP,
-                        0x1e => buttons::LEFT,
-                        0x1f => buttons::DOWN,
-                        0x20 => buttons::RIGHT,
-                        0x10 => buttons::L,
-                        0x12 => buttons::R,
-                        0x38 => buttons::START,
-                        0x64 => buttons::SELECT,
-                        _ => {
-                            match scancode {
-                                0x2a => shift[0] = state == winit::event::ElementState::Pressed,
-                                0x36 => shift[1] = state == winit::event::ElementState::Pressed,
-                                2..=11 if state == winit::event::ElementState::Pressed => {
-                                    let id = if scancode == 11 { 0 } else { scancode - 1 };
-                                    let state = &mut savestates[id as usize];
-                                    if shift[0] || shift[1] {
-                                        if let Some(state) = state {
-                                            // load save state
-                                            let mut deserializer =
-                                                save_state::SaveStateDeserializer {
-                                                    data: state.iter(),
-                                                };
-                                            snes.deserialize(&mut deserializer);
-                                        }
-                                    } else {
-                                        // store save state
-                                        let mut serializer =
-                                            save_state::SaveStateSerializer { data: vec![] };
-                                        snes.serialize(&mut serializer);
-                                        *state = Some(serializer.data);
-                                    }
-                                }
-                                _ => (),
-                            }
-                            0
+                    let mut handled = false;
+                    for (port_nr, port_cfg) in [port1_profile.as_ref(), port2_profile.as_ref()]
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.map(|p| (i, p)))
+                    {
+                        let controller = &mut if port_nr == 0 {
+                            &mut snes.controllers.port1
+                        } else {
+                            &mut snes.controllers.port2
                         }
-                    };
-                    if key > 0 {
-                        match &mut snes.controllers.port1.controller {
-                            rsnes::controller::Controller::Standard(controller) => {
-                                if let ElementState::Pressed = state {
-                                    controller.pressed_buttons |= key
-                                } else {
-                                    controller.pressed_buttons &= !key
+                        .controller;
+                        if port_cfg.handle_scancode(
+                            scancode,
+                            matches!(state, ElementState::Pressed),
+                            controller,
+                        ) {
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        match scancode {
+                            _ => {
+                                match scancode {
+                                    0x2a => shift[0] = state == winit::event::ElementState::Pressed,
+                                    0x36 => shift[1] = state == winit::event::ElementState::Pressed,
+                                    2..=11 if state == winit::event::ElementState::Pressed => {
+                                        let id = if scancode == 11 { 0 } else { scancode - 1 };
+                                        let state = &mut savestates[id as usize];
+                                        if shift[0] || shift[1] {
+                                            if let Some(state) = state {
+                                                // load save state
+                                                let mut deserializer =
+                                                    save_state::SaveStateDeserializer {
+                                                        data: state.iter(),
+                                                    };
+                                                snes.deserialize(&mut deserializer);
+                                            }
+                                        } else {
+                                            // store save state
+                                            let mut serializer =
+                                                save_state::SaveStateSerializer { data: vec![] };
+                                            snes.serialize(&mut serializer);
+                                            *state = Some(serializer.data);
+                                        }
+                                    }
+                                    _ => (),
                                 }
                             }
-                            _ => (),
                         }
                     }
                 }
