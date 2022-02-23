@@ -35,7 +35,7 @@ struct Options {
 
 macro_rules! error {
     ($($arg:tt)*) => {
-        clap::app_from_crate!().error(ErrorKind::Io, format_args!($($arg)*)).exit()
+        clap::command!().error(ErrorKind::Io, format_args!($($arg)*)).exit()
     };
 }
 
