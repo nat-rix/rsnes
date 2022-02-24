@@ -422,6 +422,19 @@ fn main() {
     let mut focused = true;
     let mut update_screen_size = true;
 
+    let has_mouse = [port1_profile.as_ref(), port2_profile.as_ref()]
+        .into_iter()
+        .filter_map(|v| v)
+        .any(|c| c.is_mouse());
+    if has_mouse {
+        window.set_cursor_grab(true).unwrap_or_else(|err| {
+            if options.verbose {
+                eprintln!("[warning] cursor grab failed ({err})")
+            }
+        });
+        window.set_cursor_visible(false);
+    }
+
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = ControlFlow::Poll;
         match ev {
@@ -435,7 +448,30 @@ fn main() {
                     surf_config.height = size.height;
                     surf.configure(&device, &surf_config);
                 }
-                WindowEvent::Focused(focus) => focused = focus,
+                WindowEvent::Focused(focus) => {
+                    window.set_cursor_grab(focus).unwrap_or_else(|err| {
+                        if options.verbose {
+                            eprintln!("[warning] cursor grab failed ({err})")
+                        }
+                    });
+                    focused = focus
+                }
+                WindowEvent::MouseInput { button, state, .. } if focused => {
+                    let pressed = matches!(state, ElementState::Pressed);
+                    for (port_nr, port_cfg) in [port1_profile.as_ref(), port2_profile.as_ref()]
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.map(|p| (i, p)))
+                    {
+                        let controller = &mut if port_nr == 0 {
+                            &mut snes.controllers.port1
+                        } else {
+                            &mut snes.controllers.port2
+                        }
+                        .controller;
+                        port_cfg.handle_mouse_button(button, pressed, controller);
+                    }
+                }
                 _ => (),
             },
             Event::DeviceEvent { event, .. } => match event {
@@ -493,6 +529,21 @@ fn main() {
                                 }
                             }
                         }
+                    }
+                }
+                DeviceEvent::MouseMotion { delta: (dx, dy) } if focused => {
+                    for (port_nr, port_cfg) in [port1_profile.as_ref(), port2_profile.as_ref()]
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.map(|p| (i, p)))
+                    {
+                        let controller = &mut if port_nr == 0 {
+                            &mut snes.controllers.port1
+                        } else {
+                            &mut snes.controllers.port2
+                        }
+                        .controller;
+                        port_cfg.handle_mouse_move(dx, dy, controller);
                     }
                 }
                 _ => (),

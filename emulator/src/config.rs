@@ -94,6 +94,10 @@ pub enum ControllerProfile {
     Standard {
         scancodes: ControllerProfileStandardScancodes,
     },
+    Mouse {
+        xspeed: f64,
+        yspeed: f64,
+    },
 }
 
 impl ControllerProfile {
@@ -107,11 +111,27 @@ impl ControllerProfile {
         )?;
         match ty.as_str() {
             "standard" => Self::load_standard(map),
+            "mouse" => Self::load_mouse(map),
             _ => Err(ConfigLoadError::UnknownValue {
                 field: "type",
                 value: ty.clone(),
             }),
         }
+    }
+
+    fn load_mouse(map: &Table) -> Result<Self, ConfigLoadError> {
+        macro_rules! getspeed {
+            ($name:literal) => {{
+                map.get($name)
+                    .map(|val| getval!(val, Float).copied())
+                    .transpose()?
+                    .unwrap_or(1.0)
+            }};
+        }
+        Ok(Self::Mouse {
+            xspeed: getspeed!("xspeed"),
+            yspeed: getspeed!("yspeed"),
+        })
     }
 
     fn load_standard(map: &Table) -> Result<Self, ConfigLoadError> {
@@ -226,7 +246,48 @@ impl ControllerProfile {
                 }
                 handled
             }
+            _ => false,
         }
+    }
+
+    pub fn handle_mouse_button(
+        &self,
+        button: winit::event::MouseButton,
+        is_pressed: bool,
+        controller: &mut rsnes::controller::Controller,
+    ) {
+        match controller {
+            rsnes::controller::Controller::Mouse(mouse) => match button {
+                winit::event::MouseButton::Left => mouse.left_button = is_pressed,
+                winit::event::MouseButton::Right => mouse.right_button = is_pressed,
+                _ => (),
+            },
+            _ => (),
+        }
+    }
+
+    pub fn handle_mouse_move(
+        &self,
+        dx: f64,
+        dy: f64,
+        controller: &mut rsnes::controller::Controller,
+    ) {
+        match self {
+            Self::Mouse { xspeed, yspeed } => match controller {
+                rsnes::controller::Controller::Mouse(mouse) => {
+                    let [dx, dy] = [dx * xspeed, dy * yspeed];
+                    let off =
+                        [dx, dy].map(|v| v.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32);
+                    mouse.add_offset(off)
+                }
+                _ => (),
+            },
+            _ => (),
+        }
+    }
+
+    pub fn is_mouse(&self) -> bool {
+        matches!(self, Self::Mouse { .. })
     }
 }
 
@@ -239,10 +300,11 @@ impl Default for ControllerProfile {
 pub fn controller_profile_to_port(
     profile: Option<&ControllerProfile>,
 ) -> rsnes::controller::ControllerPort {
-    use rsnes::controller::{Controller, ControllerPort, StandardController};
+    use rsnes::controller::{Controller, ControllerPort, Mouse, StandardController};
     ControllerPort::new(match profile {
         None => Controller::None,
         Some(ControllerProfile::Standard { .. }) => Controller::Standard(StandardController::new()),
+        Some(ControllerProfile::Mouse { .. }) => Controller::Mouse(Mouse::default()),
     })
 }
 

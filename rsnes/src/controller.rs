@@ -20,6 +20,7 @@ pub mod buttons {
 pub enum Controller {
     None,
     Standard(StandardController),
+    Mouse(Mouse),
 }
 
 impl Controller {
@@ -29,18 +30,34 @@ impl Controller {
             Self::Standard(StandardController { shift_register, .. }) => {
                 shift_register.get() & 1 > 0
             }
+            Self::Mouse(Mouse { shift_register, .. }) => shift_register.get() & 1 > 0,
         }
     }
 
     pub fn poll_bit_data2(&self) -> bool {
         match self {
-            Self::None | Self::Standard(_) => false,
+            Self::None | Self::Standard(_) | Self::Mouse(_) => false,
         }
     }
 
     pub fn on_strobe(&mut self) {
         match self {
             Self::Standard(cntrl) => cntrl.shift_register.set(cntrl.pressed_buttons),
+            Self::Mouse(mouse) => {
+                let [dx, dy] = mouse.internal_offset.map(|i| i.clamp(-0x7f, 0x7f));
+                mouse.internal_offset[0] = mouse.internal_offset[0].wrapping_sub(dx);
+                mouse.internal_offset[1] = mouse.internal_offset[1].wrapping_sub(dy);
+                let [dx, dy] =
+                    [dx, dy].map(|v| ((v.abs() as u8).reverse_bits() << 1) | (v < 0) as u8);
+                mouse.shift_register.set(
+                    0x8000
+                        | ((mouse.right_button as u32) << 8)
+                        | ((mouse.left_button as u32) << 9)
+                        | ((mouse.speed as u32) << 10)
+                        | ((dy as u32) << 16)
+                        | ((dx as u32) << 24),
+                );
+            }
             Self::None => (),
         }
     }
@@ -51,6 +68,21 @@ impl Controller {
             Self::Standard(StandardController { shift_register, .. }) => {
                 shift_register.set((shift_register.get() >> 1) | 0x8000)
             }
+            Self::Mouse(Mouse { shift_register, .. }) => {
+                shift_register.set((shift_register.get() >> 1) | 0x8000_0000)
+            }
+        }
+    }
+
+    pub fn on_strobe_clock(&mut self) {
+        match self {
+            Self::Mouse(mouse) => {
+                mouse.speed += 1;
+                if mouse.speed >= 3 {
+                    mouse.speed = 0;
+                }
+            }
+            _ => (),
         }
     }
 }
@@ -60,11 +92,13 @@ impl save_state::InSaveState for Controller {
         let n: u8 = match self {
             Self::None => 0,
             Self::Standard(..) => 1,
+            Self::Mouse(..) => 2,
         };
         n.serialize(state);
         match self {
             Self::None => (),
             Self::Standard(v) => v.serialize(state),
+            Self::Mouse(v) => v.serialize(state),
         }
     }
 
@@ -78,7 +112,34 @@ impl save_state::InSaveState for Controller {
                 cntrl.deserialize(state);
                 Self::Standard(cntrl)
             }
+            2 => {
+                let mut mouse = Mouse::default();
+                mouse.deserialize(state);
+                Self::Mouse(mouse)
+            }
             _ => panic!("unexpected discriminant value {}", n),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, InSaveState)]
+pub struct Mouse {
+    shift_register: Cell<u32>,
+    speed: u8,
+    pub left_button: bool,
+    pub right_button: bool,
+    pub internal_offset: [i32; 2],
+}
+
+impl Mouse {
+    pub fn add_offset(&mut self, off: [i32; 2]) {
+        for (i, c) in off.into_iter().enumerate() {
+            let c = match self.speed {
+                1 => c.saturating_add(c >> 1),
+                2 => c << 1,
+                _ => c,
+            };
+            self.internal_offset[i] = self.internal_offset[i].saturating_add(c);
         }
     }
 }
@@ -124,9 +185,12 @@ impl ControllerPort {
         }
     }
 
-    pub fn read_port_data(&self) -> u8 {
+    pub fn read_port_data(&mut self) -> u8 {
         let bit1 = self.controller.poll_bit_data1();
         let bit2 = self.controller.poll_bit_data2();
+        if !self.strobe {
+            self.controller.on_strobe_clock();
+        }
         self.controller.on_clock();
         (bit1 as u8) | ((bit2 as u8) << 1)
     }
