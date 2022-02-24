@@ -19,7 +19,7 @@ Super Street Fighter II.
 
 In the default configuration, controller port 1 is connected to a
 standard controller and port 2 is left unconnected.
-This keyboard keys will drive controller 1
+These keyboard keys will drive controller 1:
 
 | Keyboard key on QWERTY | Controller key       |
 |------------------------|----------------------|

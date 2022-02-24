@@ -42,13 +42,13 @@ default-profile = "default"
         port1 = "two-players-1"
         port2 = "two-players-2"
         region = "auto"
-        threaded = false
+        threaded = true
 
     # This profile has the name "only-mouse" and only connects a mouse to port 1.
     [profiles.only-mouse]
         port1 = "mouse"
         region = "auto"
-        threaded = false
+        threaded = true
 
     # This profile has the name "default-with-mouse" and connects a standard
     # controller to port 1 and a mouse to port 2.
@@ -56,7 +56,7 @@ default-profile = "default"
         port1 = "default"
         port2 = "mouse"
         region = "auto"
-        threaded = false
+        threaded = true
 
 # A listing of customizable `controller-profiles` (see DEFINITIONS)
 [controller-profiles]
@@ -119,7 +119,7 @@ default-profile = "default"
         scancodes.R = 0x26      # QWERTY `L`
 
     # This controller profile has the name "mouse" and is designed
-    # for use with any games supporting the SNES mouse.
+    # for use with games supporting the SNES mouse.
     [controller-profiles.mouse]
         type = "mouse"
 
@@ -127,7 +127,7 @@ default-profile = "default"
         # e.g. A multiplier of 2.0 means that every movement of your mouse
         #      will move the in-game cursor twice as much.
         # You can also use negative values to invert a mouse axis.
-        # This defaults to 1.0
+        # This defaults to 1.0.
         # Note: this is a `type="mouse"`-only option
         xspeed = 0.3
         yspeed = 0.3
