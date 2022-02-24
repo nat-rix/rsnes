@@ -62,6 +62,7 @@ This repository is a workspace consisting of two crates
   (located in `/emulator/`)
 
 ⚠️ Please note that the `rsnes` API is neither tested nor documented (well) ⚠️
+
 ⚠️ Also note, that `rsnes-emulator` is only tested on Linux/X11 ⚠️
 
 ## Features
