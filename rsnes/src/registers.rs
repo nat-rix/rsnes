@@ -68,6 +68,7 @@ impl MathRegisters {
 
 impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B, FB> {
     pub fn read_internal_register(&mut self, id: u16) -> Option<u8> {
+        assert!(id >= 0x4000 && id <= 0x43ff);
         match id {
             0x4016 => {
                 // JOYSER0 - NES-style Joypad access
@@ -119,7 +120,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.dma.read(id)
             }
             0x4000..=0x4015 | 0x4018..=0x41ff | 0x4200..=0x420f | 0x4220..=0x42ff => None,
-            _ => todo!("internal register 0x{:04x} read", id),
+            _ => unreachable!(),
         }
     }
 
@@ -128,6 +129,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
     }
 
     pub fn write_internal_register(&mut self, id: u16, val: u8) {
+        assert!(id >= 0x4000 && id <= 0x43ff);
         match id {
             0x4016 => {
                 // JOYSER0 - NES-style Joypad access
@@ -203,7 +205,7 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.dma.write(id, val)
             }
             0x4000..=0x4015 | 0x4017..=0x41ff | 0x420e..=0x42ff => (),
-            _ => todo!("internal register 0x{:04x} written", id),
+            _ => unreachable!(),
         }
     }
 }
