@@ -1043,15 +1043,15 @@ impl<FB: crate::backend::FrameBuffer> Ppu<FB> {
         .map(|(c, p)| c.wrapping_add(p as i16 as i32 * i32::from(x)));
 
         let v = v.map(|c| (((c as u32) >> 8) & 0xffff) as u16);
-        let tile_nr = if self.mode7_settings.wrap || !v.iter().any(|&c| c > 0x3ff) {
+        let char_nr = if self.mode7_settings.wrap || !v.iter().any(|&c| c > 0x3ff) {
             let tile_nrs = v.map(|c| (c >> 3) & 0x7f);
-            tile_nrs[0] + (tile_nrs[1] << 7)
+            let tile_nr = tile_nrs[0] + (tile_nrs[1] << 7);
+            self.vram.read(tile_nr).to_le_bytes()[0]
         } else if self.mode7_settings.fill {
             0
         } else {
             return None;
         };
-        let char_nr = self.vram.read(tile_nr).to_le_bytes()[0];
         let char_addr = u16::from(char_nr) << 6;
         let pixel_addr = char_addr
             .wrapping_add(v[0] & 7)
