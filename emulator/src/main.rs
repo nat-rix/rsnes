@@ -25,12 +25,21 @@ const MASTER_CYCLES_PER_TICK: u16 = 2;
     version = clap::crate_version!(),
 )]
 struct Options {
+    /// Game cartridge file to load (e.g. *.sfc and *.smc files)
     #[clap(parse(from_os_str))]
     input: PathBuf,
+
+    /// Print extra information that may spam your stdout
     #[clap(short, long)]
     verbose: bool,
+
+    /// Use a provided configuration file
     #[clap(short, long, parse(from_os_str))]
     config: Option<PathBuf>,
+
+    /// Use a specified profile of your configuration
+    #[clap(short, long)]
+    profile: Option<String>,
 }
 
 macro_rules! error {
@@ -193,7 +202,13 @@ fn main() {
 
     let config = config::Config::load(options.config, options.verbose)
         .unwrap_or_else(|err| error!("config: {err}"));
-    let profile = config.get_default_profile();
+    let profile = if let Some(name) = &options.profile {
+        config
+            .get_profile(name)
+            .unwrap_or_else(|| error!("profile `{name}` is not defined"))
+    } else {
+        config.get_default_profile()
+    };
     let [port1_profile, port2_profile] =
         config.get_controller_profiles(&profile).map(|p| p.cloned());
 

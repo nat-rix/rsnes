@@ -418,6 +418,10 @@ impl Config {
             .find(|path| path.is_file())
     }
 
+    pub fn get_profile(&self, name: &str) -> Option<&Profile> {
+        self.profiles.get(name)
+    }
+
     pub fn get_default_profile(&self) -> &Profile {
         self.profiles.get(&self.default_profile).unwrap()
     }
