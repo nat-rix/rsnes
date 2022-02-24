@@ -1,0 +1,133 @@
+### ====================================================
+### +++   RSNES EXAMPLE CONFIGURATION FILE           +++
+### ====================================================
+###
+### This file documents possible and recommended configuration options.
+###
+### DEFINITIONS:
+### - `profile` is a set of global configuration options, the user may select
+### - `controller-profile` is a set of configuration options concerning
+###   a controller, that may be selected by a `profile`
+
+# Selects the fallback profile, when no profile is selected via `--profile <PROFILE>`.
+# Note that this option must be included in every configuration file.
+default-profile = "default"
+
+# A listing of customizable `profiles` (see DEFINITIONS)
+[profiles]
+
+    # This profile has the name "default" and connects a standard controller
+    # to port 1 and nothing to port 2.
+    [profiles.default]
+        # Connects the controller specified in `controller-profiles.default`
+        # to controller port 1.
+        port1 = "default"
+
+        # This option is intentionally left empty, to leave port2 unconnected.
+        # port2 = "..."
+
+        # Selects the SNES region. Possible values are:
+        # - "auto" automatically obtain the region from cartridge informations
+        # - "pal"  use [PAL](https://en.wikipedia.org/wiki/PAL) region
+        # - "ntsc" use [NTSC](https://en.wikipedia.org/wiki/NTSC) region
+        region = "auto"
+
+        # Enable multi-threading support. This is intended to give a speedup
+        # on multi-core processors, but may sometimes lead to major slowdowns.
+        threaded = true
+
+    # This profile has the name "two-players" and connects standard controllers
+    # to both ports.
+    [profiles.two-players]
+        port1 = "two-players-1"
+        port2 = "two-players-2"
+        region = "auto"
+        threaded = false
+
+    # This profile has the name "only-mouse" and only connects a mouse to port 1.
+    [profiles.only-mouse]
+        port1 = "mouse"
+        region = "auto"
+        threaded = false
+
+    # This profile has the name "default-with-mouse" and connects a standard
+    # controller to port 1 and a mouse to port 2.
+    [profiles.default-with-mouse]
+        port1 = "default"
+        port2 = "mouse"
+        region = "auto"
+        threaded = false
+
+# A listing of customizable `controller-profiles` (see DEFINITIONS)
+[controller-profiles]
+
+    # This controller profile has the name "default" and is designed
+    # for use with standard single-player games.
+    [controller-profiles.default]
+        # Selects the controller type. Following options are possible:
+        # - "standard" the standard joypad
+        # - "mouse"    the [SNES Mouse](https://en.wikipedia.org/wiki/Super_NES_Mouse)
+        #              (see controller-profiles.mouse)
+        type = "standard"
+
+        # The scancode options specify a mapping of physical keyboard scancodes
+        # to buttons of the standard joypad controller.
+        # Note: this is a `type="standard"`-only option
+        scancodes.A = 0x24      # QWERTY `J`
+        scancodes.B = 0x25      # QWERTY `K`
+        scancodes.X = 0x26      # QWERTY `L`
+        scancodes.Y = 0x27      # QWERTY `;`
+        scancodes.Up = 0x11     # QWERTY `W`
+        scancodes.Left = 0x1e   # QWERTY `A`
+        scancodes.Down = 0x1f   # QWERTY `S`
+        scancodes.Right = 0x20  # QWERTY `D`
+        scancodes.L = 0x10      # QWERTY `Q`
+        scancodes.R = 0x12      # QWERTY `E`
+        scancodes.Start = 0x38  # QWERTY `Left Alt`
+        scancodes.Select = 0x64 # QWERTY `Right Alt`
+
+    # This controller profile has the name "two-players-1" and is designed
+    # for use as player 1 with standard two-player games.
+    [controller-profiles.two-players-1]
+        type = "standard"
+        scancodes.A = 0x13      # QWERTY `R`
+        scancodes.B = 0x14      # QWERTY `T`
+        scancodes.X = 0x15      # QWERTY `Y`
+        scancodes.Y = 0x16      # QWERTY `U`
+        scancodes.Up = 0x11     # QWERTY `W`
+        scancodes.Left = 0x1e   # QWERTY `A`
+        scancodes.Down = 0x1f   # QWERTY `S`
+        scancodes.Right = 0x20  # QWERTY `D`
+        scancodes.L = 0x10      # QWERTY `Q`
+        scancodes.R = 0x12      # QWERTY `E`
+        scancodes.Start = 0x38  # QWERTY `Left Alt`
+        scancodes.Select = 0x64 # QWERTY `Right Alt`
+
+    # This controller profile has the name "two-players-2" and is designed
+    # for use as player 2 with standard two-player games.
+    [controller-profiles.two-players-2]
+        type = "standard"
+        scancodes.A = 0x32      # QWERTY `M`
+        scancodes.B = 0x33      # QWERTY `,`
+        scancodes.X = 0x34      # QWERTY `.`
+        scancodes.Y = 0x35      # QWERTY `/`
+        scancodes.Up = 0x67     # QWERTY `Up`
+        scancodes.Left = 0x69   # QWERTY `Left`
+        scancodes.Down = 0x6c   # QWERTY `Down`
+        scancodes.Right = 0x6a  # QWERTY `Right`
+        scancodes.L = 0x25      # QWERTY `K`
+        scancodes.R = 0x26      # QWERTY `L`
+
+    # This controller profile has the name "mouse" and is designed
+    # for use with any games supporting the SNES mouse.
+    [controller-profiles.mouse]
+        type = "mouse"
+
+        # Set the correspondent movement multiplier.
+        # e.g. A multiplier of 2.0 means that every movement of your mouse
+        #      will move the in-game cursor twice as much.
+        # You can also use negative values to invert a mouse axis.
+        # This defaults to 1.0
+        # Note: this is a `type="mouse"`-only option
+        xspeed = 0.3
+        yspeed = 0.3

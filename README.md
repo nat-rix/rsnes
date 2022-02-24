@@ -50,6 +50,9 @@ it into one of these paths:
 - `$HOME/.config/rsnes.toml`
 - `/etc/rsnes.toml`
 
+See `emulator/example.toml` for
+[documentation](https://github.com/NatrixAeria/rsnes/blob/main/emulator/example.toml).
+
 ## Structure
 
 This repository is a workspace consisting of two crates
