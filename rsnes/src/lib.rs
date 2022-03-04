@@ -9,7 +9,6 @@ mod instr;
 pub mod oam;
 pub mod ppu;
 mod registers;
-pub mod sa1;
 pub mod smp;
 pub mod spc700;
 mod timing;

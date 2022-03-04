@@ -201,6 +201,12 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         crate::instr::create_device_access(self)
     }
 
+    pub fn with_sa1_cpu<'a>(
+        &'a mut self,
+    ) -> crate::instr::DeviceAccess<'a, crate::enhancement::sa1::AccessTypeSa1, B, FB> {
+        crate::instr::create_device_access(self)
+    }
+
     pub fn load_cartridge(&mut self, mut cartridge: Cartridge) {
         cartridge.set_region(self.is_pal);
         self.cartridge = Some(cartridge);
@@ -209,7 +215,12 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
     }
 
     pub fn reset_program_counter(&mut self) {
-        self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(Addr24::new(0, 0xfffc)))
+        let addr = Addr24::new(0, 0xfffc);
+        self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(addr));
+        if self.cartridge.as_ref().unwrap().has_sa1() {
+            let vector = self.with_sa1_cpu().read::<u16>(addr);
+            self.cartridge.as_mut().unwrap().sa1_mut().cpu_mut().regs.pc = Addr24::new(0, vector);
+        }
     }
 
     /// Read a value from the mapped memory at the specified address.

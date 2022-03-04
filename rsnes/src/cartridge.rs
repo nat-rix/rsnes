@@ -9,8 +9,7 @@ use std::convert::TryInto;
 
 use crate::{
     device::{Addr24, Data},
-    enhancement::{Dsp, DspVersion},
-    sa1::Sa1,
+    enhancement::{sa1::Sa1, Dsp, DspVersion},
     timing::Cycles,
 };
 use save_state::{SaveStateDeserializer, SaveStateSerializer};
@@ -626,7 +625,7 @@ impl Cartridge {
     fn setup_memory_mappings(&mut self) {
         let map = &mut self.mapping;
         match self.header.rom_type {
-            RomType::LoRom | RomType::LoRomSA1 => {
+            RomType::LoRom => {
                 if let Some(dsp) = &self.dsp {
                     match (dsp.version(), self.rom.len() >> 20, self.ram.len() >> 10) {
                         (DspVersion::Dsp1 | DspVersion::Dsp1B | DspVersion::Dsp4, _, 0) => {
@@ -654,6 +653,7 @@ impl Cartridge {
                     map!(map @ 0xf0:0x0000 .. 0xff:0x7fff => Sram | Sram [0xf<<15:0xffff]);
                 }
             }
+            RomType::LoRomSA1 => (),
             RomType::HiRom => {
                 map!(map @ 0x00:0x8000 .. 0x3f:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
                 map!(map @ 0x40:0x0000 .. 0x7d:0xffff => Rom | Ignore [0x3f<<16:0xffff]);
@@ -690,16 +690,25 @@ impl Cartridge {
     }
 
     pub fn read_byte(&mut self, addr: Addr24) -> Option<u8> {
-        if let Some((index, MappingEntry { read, .. })) = self.mapping.find(addr) {
-            Some(read.get()(self, index))
+        if let Some(sa1) = &mut self.sa1 {
+            sa1.read::<false>(addr)
+                .unwrap_or_else(|addr| Some(self.read_rom(addr)))
         } else {
-            None
+            if let Some((index, MappingEntry { read, .. })) = self.mapping.find(addr) {
+                Some(read.get()(self, index))
+            } else {
+                None
+            }
         }
     }
 
     pub fn write_byte(&mut self, addr: Addr24, val: u8) {
-        if let Some((index, MappingEntry { write, .. })) = self.mapping.find(addr) {
-            write.get()(self, index, val)
+        if let Some(sa1) = &mut self.sa1 {
+            sa1.write::<false>(addr, val)
+        } else {
+            if let Some((index, MappingEntry { write, .. })) = self.mapping.find(addr) {
+                write.get()(self, index, val)
+            }
         }
     }
 
@@ -737,7 +746,7 @@ impl Cartridge {
         self.ram[addr] = val
     }
 
-    fn read_rom(&mut self, addr: u32) -> u8 {
+    pub fn read_rom(&mut self, addr: u32) -> u8 {
         self.rom[self.get_rom_addr(addr)]
     }
 
@@ -801,5 +810,15 @@ impl Cartridge {
         if let Some(dsp) = &mut self.dsp {
             dsp.refresh()
         }
+    }
+
+    pub fn has_sa1(&self) -> bool {
+        self.sa1.is_some()
+    }
+
+    pub fn sa1_mut(&mut self) -> &mut Sa1 {
+        self.sa1
+            .as_mut()
+            .expect("unexpectedly queried sa1-chip in a non-sa1 cartridge")
     }
 }

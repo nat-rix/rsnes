@@ -166,7 +166,7 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             regs: Regs {
                 a: 0,
@@ -174,7 +174,7 @@ impl Cpu {
                 y: 0,
                 sp: 0x100,
                 dp: 0,
-                pc: Addr24::default(),
+                pc: Addr24::new(0, 0),
                 db: 0,
                 status: Status::RESET_DEFAULT,
                 is_emulation: true,
