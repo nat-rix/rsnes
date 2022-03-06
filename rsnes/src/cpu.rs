@@ -11,6 +11,8 @@ use crate::device::Addr24;
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 use save_state_macro::*;
 
+pub const RESET_VECTOR_ADDR: Addr24 = Addr24::new(0, 0xfffc);
+
 /// Structure containing the processor registers
 #[derive(Debug, Clone, InSaveState)]
 pub struct Regs {

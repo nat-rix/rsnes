@@ -215,7 +215,7 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
     }
 
     pub fn reset_program_counter(&mut self) {
-        let addr = Addr24::new(0, 0xfffc);
+        let addr = crate::cpu::RESET_VECTOR_ADDR;
         self.cpu.regs.pc = Addr24::new(0, self.read::<u16>(addr));
         if self.cartridge.as_ref().unwrap().has_sa1() {
             let vector = self.with_sa1_cpu().read::<u16>(addr);

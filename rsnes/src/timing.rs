@@ -47,6 +47,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
                 self.run_cpu::<N>();
             }
         }
+        if self.cartridge.as_ref().unwrap().has_sa1() {
+            self.with_sa1_cpu().run_cpu::<N>();
+        }
         if self.new_frame {
             self.dma.hdma_ahead_cycles = self.reset_hdma();
         }

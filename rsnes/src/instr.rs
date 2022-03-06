@@ -45,6 +45,8 @@ macro_rules! compare_memory {
 pub trait AccessType<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> {
     fn read<D: Data>(device: &mut Device<B, FB>, addr: Addr24) -> D;
     fn write<D: Data>(device: &mut Device<B, FB>, addr: Addr24, val: D);
+    fn cpu(device: &Device<B, FB>) -> &Cpu;
+    fn cpu_mut(device: &mut Device<B, FB>) -> &mut Cpu;
 }
 
 pub struct AccessTypeMain;
@@ -58,6 +60,14 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> AccessTyp
 
     fn write<D: Data>(device: &mut Device<B, FB>, addr: Addr24, val: D) {
         device.write::<D>(addr, val)
+    }
+
+    fn cpu(device: &Device<B, FB>) -> &Cpu {
+        &device.cpu
+    }
+
+    fn cpu_mut(device: &mut Device<B, FB>) -> &mut Cpu {
+        &mut device.cpu
     }
 }
 
@@ -77,7 +87,7 @@ pub struct DeviceAccess<
     T: AccessType<B, FB>,
     B: crate::backend::AudioBackend,
     FB: crate::backend::FrameBuffer,
->(&'a mut Device<B, FB>, core::marker::PhantomData<T>);
+>(pub &'a mut Device<B, FB>, core::marker::PhantomData<T>);
 
 impl<
         'a,
@@ -87,11 +97,11 @@ impl<
     > DeviceAccess<'a, T, B, FB>
 {
     pub fn cpu(&self) -> &Cpu {
-        &self.0.cpu
+        T::cpu(self.0)
     }
 
     pub fn cpu_mut(&mut self) -> &mut Cpu {
-        &mut self.0.cpu
+        T::cpu_mut(self.0)
     }
 
     pub fn read<D: Data>(&mut self, addr: Addr24) -> D {

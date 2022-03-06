@@ -816,6 +816,12 @@ impl Cartridge {
         self.sa1.is_some()
     }
 
+    pub fn sa1_ref(&self) -> &Sa1 {
+        self.sa1
+            .as_ref()
+            .expect("unexpectedly queried sa1-chip in a non-sa1 cartridge")
+    }
+
     pub fn sa1_mut(&mut self) -> &mut Sa1 {
         self.sa1
             .as_mut()
