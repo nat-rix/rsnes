@@ -449,11 +449,14 @@ fn main() {
                     surf.configure(&device, &surf_config);
                 }
                 WindowEvent::Focused(focus) => {
-                    window.set_cursor_grab(focus).unwrap_or_else(|err| {
-                        if options.verbose {
-                            eprintln!("[warning] cursor grab failed ({err})")
-                        }
-                    });
+                    if has_mouse {
+                        window.set_cursor_grab(true).unwrap_or_else(|err| {
+                            if options.verbose {
+                                eprintln!("[warning] cursor grab failed ({err})")
+                            }
+                        });
+                        window.set_cursor_visible(false);
+                    }
                     focused = focus
                 }
                 WindowEvent::MouseInput { button, state, .. } if focused => {
