@@ -45,6 +45,128 @@ impl Block {
     }
 }
 
+#[derive(Debug, Clone, InSaveState)]
+struct Vectors {
+    vectors: [u16; 3],
+    overrides: [u16; 2],
+}
+
+impl Vectors {
+    pub const fn new() -> Self {
+        Self {
+            vectors: [0; 3],
+            overrides: [0; 2],
+        }
+    }
+
+    pub fn set_vector(&mut self, id: u16, val: u8) {
+        let vector = &mut self.vectors[usize::from((id.wrapping_sub(3) >> 1) & 3)];
+        let mut arr = vector.to_le_bytes();
+        arr[usize::from(!id & 1)] = val;
+        *vector = u16::from_le_bytes(arr);
+    }
+
+    pub fn set_override(&mut self, id: u16, val: u8) {
+        let vector = &mut self.overrides[usize::from(id >> 1) & 1];
+        let mut arr = vector.to_le_bytes();
+        arr[usize::from(id & 1)] = val;
+        *vector = u16::from_le_bytes(arr);
+    }
+
+    pub const fn get_reset(&self) -> u16 {
+        self.vectors[0]
+    }
+
+    pub const fn get_nmi(&self) -> u16 {
+        self.vectors[1]
+    }
+
+    pub const fn get_irq(&self) -> u16 {
+        self.vectors[2]
+    }
+
+    pub const fn get_override_nmi(&self) -> u16 {
+        self.overrides[0]
+    }
+
+    pub const fn get_override_irq(&self) -> u16 {
+        self.overrides[1]
+    }
+}
+
+#[derive(Debug, Clone, Copy, InSaveState)]
+pub struct DmaDirection(u8);
+
+impl DmaDirection {
+    pub const fn new(val: u8) -> Self {
+        Self(val)
+    }
+
+    pub const fn is_src_rom(&self) -> bool {
+        self.0 & 3 == 0
+    }
+
+    pub const fn is_src_bwram(&self) -> bool {
+        self.0 & 3 == 1
+    }
+
+    pub const fn is_src_iram(&self) -> bool {
+        self.0 & 3 == 2
+    }
+
+    pub const fn is_dst_bwram(&self) -> bool {
+        self.0 & 4 > 0
+    }
+}
+
+#[derive(Debug, Clone, InSaveState)]
+pub struct DmaInfo {
+    enable: bool,
+    direction: DmaDirection,
+    is_automatic: bool,
+    char_conversion: bool,
+    priority: bool,
+    color_bits: u8,
+    vram_width: u8,
+    terminate: bool,
+}
+
+impl DmaInfo {
+    pub const fn new() -> Self {
+        Self {
+            enable: false,
+            direction: DmaDirection::new(0),
+            is_automatic: false,
+            char_conversion: false,
+            priority: false,
+            color_bits: 8,
+            vram_width: 1,
+            terminate: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, InSaveState)]
+pub struct Timer {
+    // 1: horizontal
+    // 2: vertical
+    interrupt: u8,
+    is_linear: bool,
+    h: u16,
+    v: u16,
+}
+
+impl Timer {
+    pub const fn new() -> Self {
+        Self {
+            interrupt: 0,
+            is_linear: false,
+            h: 0,
+            v: 0,
+        }
+    }
+}
+
 #[derive(Debug, DefaultByNew, Clone, InSaveState)]
 pub struct Sa1 {
     iram: [u8; IRAM_SIZE],
@@ -54,12 +176,12 @@ pub struct Sa1 {
     ahead_cycles: i32,
     shall_nmi: bool,
     shall_irq: bool,
-    reset_vector_override: u16,
-    irq_enable: bool,
-    char_dma_irq_enable: bool,
+    vectors: Vectors,
     snes_control_flags: u8,
     control_flags: u8,
     bwram_map: [u8; 2],
+    dma: DmaInfo,
+    timer: Timer,
 
     // SA-1-side interrupt flags
     // 0x10: NMI from SNES
@@ -69,6 +191,13 @@ pub struct Sa1 {
     sa1_interrupt_enable: u8,
     sa1_interrupt_acknowledge: u8,
     sa1_interrupt_trigger: u8,
+
+    // SNES-side interrupt flags
+    // 0x20: IRQ from Character conversion DMA
+    // 0x80: IRQ from SA-1
+    snes_interrupt_enable: u8,
+    snes_interrupt_acknowledge: u8,
+    snes_interrupt_trigger: u8,
 }
 
 impl Sa1 {
@@ -86,16 +215,20 @@ impl Sa1 {
             ahead_cycles: 0,
             shall_nmi: false,
             shall_irq: false,
-            reset_vector_override: 0,
-            irq_enable: false,
-            char_dma_irq_enable: false,
+            vectors: Vectors::new(),
             snes_control_flags: 0,
             control_flags: 0x20,
             bwram_map: [0; 2],
+            dma: DmaInfo::new(),
+            timer: Timer::new(),
 
             sa1_interrupt_enable: 0,
             sa1_interrupt_acknowledge: 0,
             sa1_interrupt_trigger: 0,
+
+            snes_interrupt_enable: 0,
+            snes_interrupt_acknowledge: 0,
+            snes_interrupt_trigger: 0,
         }
     }
 
@@ -136,9 +269,16 @@ impl Sa1 {
                 // SCNT - SNES Control flags
                 // TODO: IRQ from Character Conversion DMA
                 // TODO: IRQ from SA-1 to SNES
-                self.snes_control_flags & 0x5f
+                (self.snes_control_flags & 0x5f) | (self.snes_interrupt_trigger & 0xa0)
             }
-            _ => todo!("read SA-1 io port {id:04x}"),
+            (0x2301, SA1) => {
+                // CFR - SA-1 Control flags
+                (self.control_flags & 0xf) | self.sa1_interrupt_trigger
+            }
+            _ => todo!(
+                "read SA-1 io port {id:04x} from {} SA-1",
+                ["outside", "inside"][INTERNAL as usize]
+            ),
         }
     }
 
@@ -149,7 +289,7 @@ impl Sa1 {
             (0x2200, SNES) => {
                 // CCNT - Control SA-1 from SNES
                 if (replace(&mut self.control_flags, val) & !val) & 0x20 > 0 {
-                    self.cpu.regs.pc = Addr24::new(0, self.reset_vector_override)
+                    self.cpu.regs.pc = Addr24::new(0, self.vectors.get_reset())
                 }
                 let en = val & 0x90;
                 self.sa1_interrupt_acknowledge &= !(en & self.sa1_interrupt_enable);
@@ -157,31 +297,38 @@ impl Sa1 {
             }
             (0x2201, SNES) => {
                 // SIE - Enable interrupt
-                let irq_enable = val & 0x80 > 0;
-                let char_dma_irq_enable = val & 0x20 > 0;
-
-                if !replace(&mut self.irq_enable, irq_enable) && irq_enable {
-                    todo!("SA-1 irq handling")
+                let irq = !replace(&mut self.snes_interrupt_enable, val)
+                    & val
+                    & self.snes_interrupt_trigger;
+                if irq & 0x80 > 0 {
+                    self.snes_interrupt_acknowledge &= 0x7f;
+                    self.shall_irq = true;
                 }
-                if !replace(&mut self.char_dma_irq_enable, char_dma_irq_enable)
-                    && char_dma_irq_enable
-                {
-                    todo!("SA-1 char dma irq handling")
+                if irq & 0x20 > 0 {
+                    self.snes_interrupt_acknowledge &= !0x20;
+                    self.shall_irq = true;
                 }
             }
             (0x2202, SNES) => {
                 // SIC - Clear interrupt
-                // TODO
+                self.snes_interrupt_acknowledge = val;
+                self.snes_interrupt_trigger &= !val;
+                self.shall_irq &= self.snes_interrupt_trigger & 0xa0 > 0;
             }
-            (0x2203 | 0x2204, SNES) => {
-                // CRV - Reset vector
-                let mut vec = self.reset_vector_override.to_le_bytes();
-                vec[usize::from(!id & 1)] = val;
-                self.reset_vector_override = u16::from_le_bytes(vec);
+            (0x2203..=0x2208, SNES) => {
+                // CRV/CNV/CIV - Interrupt vectors
+                self.vectors.set_vector(id, val)
             }
             (0x2209, SA1) => {
                 // SCNT - Control SNES from SA-1
                 self.snes_control_flags = val;
+                if val & 0x80 > 0 {
+                    self.snes_interrupt_trigger |= 0x80;
+                    if self.snes_interrupt_enable & 0x80 > 0 {
+                        self.snes_interrupt_acknowledge &= 0x7f;
+                        self.shall_irq = true;
+                    }
+                }
             }
             (0x220a, SA1) => {
                 // CIE - SNES Enable Interrupt
@@ -193,6 +340,15 @@ impl Sa1 {
                 // CIC - SA-1 Interrupt Acknowledge
                 self.sa1_interrupt_acknowledge = val & 0xf0;
                 self.sa1_interrupt_trigger &= !self.sa1_interrupt_acknowledge;
+            }
+            (0x220c..=0x220f, SA1) => {
+                // SNV/SIV - SNES override interrupt vectors
+                self.vectors.set_override(id, val)
+            }
+            (0x2210, SA1) => {
+                // TMC - Timer Control
+                self.timer.interrupt = val & 3;
+                self.timer.is_linear = val & 0x80 > 0;
             }
             (0x2220..=0x2223, SNES) => {
                 // CXB/DXB/EXB/FXB - Set Bank ROM mapping
@@ -206,7 +362,27 @@ impl Sa1 {
                 // Write Protection Registers
                 // TODO: no emulator known to me is implementing this. Check why
             }
-            _ => todo!("write SA-1 io port {id:04x}"),
+            (0x2230, SA1) => {
+                // DCNT - DMA Control
+                self.dma.direction = DmaDirection::new(val);
+                self.dma.is_automatic = val & 0x10 > 0;
+                self.dma.char_conversion = val & 0x20 > 0;
+                self.dma.priority = val & 0x40 > 0;
+                self.dma.enable = val & 0x80 > 0;
+            }
+            (0x2231, _) => {
+                // CDMA - Character Conversion DMA Parameters
+                // TODO: what happens, when `color_bits = 1`?
+                // TODO: what happens, when `vram_width = 64 or 128`?
+                self.dma.color_bits = 1 << (!val & 3);
+                self.dma.vram_width = 1 << ((val >> 2) & 7);
+                self.dma.terminate = val & 0x80 > 0;
+            }
+            (0x2261 | 0x2262, _) => (), // Undocumented
+            _ => todo!(
+                "write SA-1 io port {id:04x} from {} SA-1",
+                ["outside", "inside"][INTERNAL as usize]
+            ),
         }
     }
 
