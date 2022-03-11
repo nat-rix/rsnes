@@ -130,7 +130,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> Device<B,
             let cycles = (if self.shall_nmi {
                 self.shall_nmi = false;
                 self.with_main_cpu().nmi()
-            } else if self.shall_irq && !self.cpu.regs.status.has(Status::IRQ_DISABLE) {
+            } else if (self.shall_irq || self.get_irq_pin())
+                && !self.cpu.regs.status.has(Status::IRQ_DISABLE)
+            {
                 self.shall_irq = false;
                 self.with_main_cpu().irq()
             } else {

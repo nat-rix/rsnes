@@ -198,6 +198,7 @@ pub struct Sa1 {
     snes_interrupt_enable: u8,
     snes_interrupt_acknowledge: u8,
     snes_interrupt_trigger: u8,
+    snes_irq_pin: bool,
 }
 
 impl Sa1 {
@@ -229,6 +230,7 @@ impl Sa1 {
             snes_interrupt_enable: 0,
             snes_interrupt_acknowledge: 0,
             snes_interrupt_trigger: 0,
+            snes_irq_pin: false,
         }
     }
 
@@ -239,6 +241,10 @@ impl Sa1 {
 
     pub fn cpu_mut(&mut self) -> &mut Cpu {
         &mut self.cpu
+    }
+
+    pub fn irq_pin(&self) -> bool {
+        self.snes_irq_pin
     }
 
     pub fn lorom_addr(&self, addr: Addr24) -> u32 {
@@ -302,18 +308,18 @@ impl Sa1 {
                     & self.snes_interrupt_trigger;
                 if irq & 0x80 > 0 {
                     self.snes_interrupt_acknowledge &= 0x7f;
-                    self.shall_irq = true;
+                    self.snes_irq_pin = true;
                 }
                 if irq & 0x20 > 0 {
                     self.snes_interrupt_acknowledge &= !0x20;
-                    self.shall_irq = true;
+                    self.snes_irq_pin = true;
                 }
             }
             (0x2202, SNES) => {
                 // SIC - Clear interrupt
                 self.snes_interrupt_acknowledge = val;
                 self.snes_interrupt_trigger &= !val;
-                self.shall_irq &= self.snes_interrupt_trigger & 0xa0 > 0;
+                self.snes_irq_pin &= self.snes_interrupt_trigger & 0xa0 > 0;
             }
             (0x2203..=0x2208, SNES) => {
                 // CRV/CNV/CIV - Interrupt vectors
@@ -326,7 +332,7 @@ impl Sa1 {
                     self.snes_interrupt_trigger |= 0x80;
                     if self.snes_interrupt_enable & 0x80 > 0 {
                         self.snes_interrupt_acknowledge &= 0x7f;
-                        self.shall_irq = true;
+                        self.snes_irq_pin = true;
                     }
                 }
             }

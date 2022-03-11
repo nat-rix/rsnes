@@ -207,6 +207,13 @@ impl<B: AudioBackend, FB: FrameBuffer> Device<B, FB> {
         crate::instr::create_device_access(self)
     }
 
+    pub fn get_irq_pin(&self) -> bool {
+        match &self.cartridge {
+            Some(cart) if cart.has_sa1() => cart.sa1_ref().irq_pin(),
+            _ => false,
+        }
+    }
+
     pub fn load_cartridge(&mut self, mut cartridge: Cartridge) {
         cartridge.set_region(self.is_pal);
         self.cartridge = Some(cartridge);
