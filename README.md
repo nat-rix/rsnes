@@ -51,7 +51,7 @@ it into one of these paths:
 - `/etc/rsnes.toml`
 
 See `emulator/example.toml` for
-[documentation](https://github.com/NatrixAeria/rsnes/blob/main/emulator/example.toml).
+[documentation](https://github.com/nat-rix/rsnes/blob/main/emulator/example.toml).
 
 ## Structure
 
