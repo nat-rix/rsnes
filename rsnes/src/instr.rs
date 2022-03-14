@@ -47,6 +47,9 @@ pub trait AccessType<B: crate::backend::AudioBackend, FB: crate::backend::FrameB
     fn write<D: Data>(device: &mut Device<B, FB>, addr: Addr24, val: D);
     fn cpu(device: &Device<B, FB>) -> &Cpu;
     fn cpu_mut(device: &mut Device<B, FB>) -> &mut Cpu;
+    fn is_main() -> bool {
+        false
+    }
 }
 
 pub struct AccessTypeMain;
@@ -68,6 +71,10 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> AccessTyp
 
     fn cpu_mut(device: &mut Device<B, FB>) -> &mut Cpu {
         &mut device.cpu
+    }
+
+    fn is_main() -> bool {
+        true
     }
 }
 
@@ -2952,22 +2959,50 @@ impl<
         self.dispatch_instruction_with(pc, op)
     }
 
+    pub fn get_nmi_vector(&mut self) -> u16 {
+        if !T::is_main() {
+            let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+            if let Some(vector) = sa1.get_override_nmi() {
+                return vector;
+            }
+        }
+        self.read(Addr24::new(
+            0,
+            if self.cpu().regs.is_emulation {
+                0xfffa
+            } else {
+                0xffea
+            },
+        ))
+    }
+
+    pub fn get_irq_vector(&mut self) -> u16 {
+        if !T::is_main() {
+            let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+            if let Some(vector) = sa1.get_override_irq() {
+                return vector;
+            }
+        }
+        self.read(Addr24::new(
+            0,
+            if self.cpu().regs.is_emulation {
+                0xfffe
+            } else {
+                0xffee
+            },
+        ))
+    }
+
     pub fn nmi(&mut self) -> u32 {
         self.cpu_mut().in_nmi = true;
-        self.interrupt(if self.cpu().regs.is_emulation {
-            0xfffa
-        } else {
-            0xffea
-        })
+        let vector = self.get_nmi_vector();
+        self.interrupt(vector)
     }
 
     pub fn irq(&mut self) -> u32 {
         self.cpu_mut().irq_bit = 0x80;
-        self.interrupt(if self.cpu().regs.is_emulation {
-            0xfffe
-        } else {
-            0xffee
-        })
+        let vector = self.get_irq_vector();
+        self.interrupt(vector)
     }
 
     pub fn interrupt(&mut self, vector: u16) -> u32 {
@@ -2979,8 +3014,7 @@ impl<
         self.push(self.cpu().regs.status.0);
         self.cpu_mut().regs.status |= Status::IRQ_DISABLE;
         self.cpu_mut().regs.status &= !Status::DECIMAL;
-        let addr = self.read(Addr24::new(0, vector));
-        self.cpu_mut().regs.pc = Addr24::new(0, addr);
+        self.cpu_mut().regs.pc = Addr24::new(0, vector);
         48
     }
 }

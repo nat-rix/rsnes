@@ -243,8 +243,24 @@ impl Sa1 {
         &mut self.cpu
     }
 
-    pub fn irq_pin(&self) -> bool {
+    pub const fn irq_pin(&self) -> bool {
         self.snes_irq_pin
+    }
+
+    pub const fn get_override_nmi(&self) -> Option<u16> {
+        if self.snes_control_flags & 0x10 > 0 {
+            Some(self.vectors.get_override_nmi())
+        } else {
+            None
+        }
+    }
+
+    pub const fn get_override_irq(&self) -> Option<u16> {
+        if self.snes_control_flags & 0x40 > 0 {
+            Some(self.vectors.get_override_irq())
+        } else {
+            None
+        }
     }
 
     pub fn lorom_addr(&self, addr: Addr24) -> u32 {
@@ -294,7 +310,7 @@ impl Sa1 {
         match (id, INTERNAL) {
             (0x2200, SNES) => {
                 // CCNT - Control SA-1 from SNES
-                if (replace(&mut self.control_flags, val) & !val) & 0x20 > 0 {
+                if replace(&mut self.control_flags, val) & !val & 0x20 > 0 {
                     self.cpu.regs.pc = Addr24::new(0, self.vectors.get_reset())
                 }
                 let en = val & 0x90;
@@ -358,7 +374,7 @@ impl Sa1 {
             }
             (0x2220..=0x2223, SNES) => {
                 // CXB/DXB/EXB/FXB - Set Bank ROM mapping
-                self.blocks[usize::from(id & 4)] = Block::new((id & 4) as u8, val);
+                self.blocks[usize::from(id & 3)] = Block::new((id & 3) as u8, val);
             }
             (0x2224, SNES) | (0x2225, SA1) => {
                 // BMAPS / BMAP - Set BW-Ram mapping
@@ -498,7 +514,7 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
             // > WAI/HALT stops the CPU until an exception (usually an IRQ or NMI) request occurs
             // > in case of IRQs this works even if IRQs are disabled (via I=1).
             // source: FullSNES
-            if sa1.cpu.wait_mode || sa1.control_flags & 0x60 > 0 {
+            if sa1.cpu.wait_mode || sa1.control_flags & 0x60 != 0 {
                 sa1.cpu.wait_mode &= !sa1.shall_nmi && !sa1.shall_irq;
                 sa1.ahead_cycles += 1;
                 return;
