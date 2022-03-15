@@ -178,6 +178,76 @@ impl Timer {
     }
 }
 
+#[derive(Debug, Clone, InSaveState)]
+pub struct Arithmetics {
+    mode: u8,
+    ops: [u16; 2],
+    res: u64,
+    ov: bool,
+}
+
+impl Arithmetics {
+    pub const fn new() -> Self {
+        Self {
+            mode: 0,
+            ops: [0; 2],
+            res: 0,
+            ov: false,
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: u8) {
+        self.mode = mode & 3;
+        if mode & 2 > 0 {
+            self.res = 0;
+        }
+    }
+
+    pub fn set_op(&mut self, id: u16, val: u8) {
+        let id = usize::from(id.wrapping_sub(1) & 3);
+        let op = &mut self.ops[id >> 1];
+        let mut bytes = op.to_le_bytes();
+        bytes[id & 1] = val;
+        *op = u16::from_le_bytes(bytes);
+        if id == 3 {
+            self.update_calculation();
+        }
+    }
+
+    pub fn update_calculation(&mut self) {
+        if self.mode == 1 {
+            // divide
+            self.res = if self.ops[1] == 0 {
+                0
+            } else {
+                let (div, rem) = if self.ops[0] < 0x8000 {
+                    // unsigned / unsigned
+                    (self.ops[0] / self.ops[1], self.ops[0] % self.ops[1])
+                } else {
+                    // signed / unsigned
+                    let (a, b) = (!self.ops[0], self.ops[1]);
+                    (!(a / b), b.wrapping_sub(a % b).wrapping_sub(1))
+                };
+                (u64::from(rem) << 16) | u64::from(div)
+            };
+            self.ops[0] = 0;
+        } else {
+            // multiply
+            let res = i32::from(self.ops[0] as i16) * i32::from(self.ops[1] as i16);
+            if self.mode == 0 {
+                // non-accumulative
+                self.res = u64::from(res as u32)
+            } else {
+                // accumulative
+                self.res = self.res.wrapping_add(i64::from(res) as u64);
+                self.ov = (self.res & !0xff_ffff_ffffu64) > 0;
+                self.res &= 0xff_ffff_ffff;
+            }
+        }
+        self.ops[1] = 0;
+    }
+}
+
 #[derive(Debug, DefaultByNew, Clone, InSaveState)]
 pub struct Sa1 {
     iram: [u8; IRAM_SIZE],
@@ -195,6 +265,7 @@ pub struct Sa1 {
     bwram_2bits: bool,
     dma: DmaInfo,
     timer: Timer,
+    arithmetics: Arithmetics,
 
     // SA-1-side interrupt flags
     // 0x10: NMI from SNES
@@ -237,6 +308,7 @@ impl Sa1 {
             bwram_2bits: false,
             dma: DmaInfo::new(),
             timer: Timer::new(),
+            arithmetics: Arithmetics::new(),
 
             sa1_interrupt_enable: 0,
             sa1_interrupt_acknowledge: 0,
@@ -366,6 +438,14 @@ impl Sa1 {
                 // CFR - SA-1 Control flags
                 (self.control_flags & 0xf) | self.sa1_interrupt_trigger
             }
+            (0x2306..=0x230a, SA1) => {
+                // MR - Arithmetics result
+                self.arithmetics.res.to_le_bytes()[usize::from(id - 0x2306)]
+            }
+            (0x230b, SA1) => {
+                // OF - Arithmetics overflow flag
+                (self.arithmetics.ov as u8) << 7
+            }
             _ => todo!(
                 "read SA-1 io port {id:04x} from {} SA-1",
                 ["outside", "inside"][INTERNAL as usize]
@@ -486,6 +566,14 @@ impl Sa1 {
             (0x223f, SA1) => {
                 // BBF - BW-Ram bitmap mode
                 self.bwram_2bits = val & 0x80 > 0;
+            }
+            (0x2250, SA1) => {
+                // MCNT - Arithmetics Control
+                self.arithmetics.set_mode(val);
+            }
+            (0x2251..=0x2254, SA1) => {
+                // MA/MB - Arithmetics operators
+                self.arithmetics.set_op(id, val);
             }
             (0x2261 | 0x2262, _) => (), // Undocumented
             _ => todo!(
