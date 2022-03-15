@@ -154,6 +154,8 @@ pub struct Timer {
     is_linear: bool,
     h: u16,
     v: u16,
+    hmax: u16,
+    vmax: u16,
 }
 
 impl Timer {
@@ -163,7 +165,16 @@ impl Timer {
             is_linear: false,
             h: 0,
             v: 0,
+            hmax: 0,
+            vmax: 0,
         }
+    }
+
+    pub fn set_max(&mut self, val: u8, is_high: bool, is_h: bool) {
+        let hv = if is_h { &mut self.h } else { &mut self.v };
+        let mut bytes = hv.to_le_bytes();
+        bytes[usize::from(is_high)] = val;
+        *hv = u16::from_le_bytes(bytes) & 0x1f;
     }
 }
 
@@ -180,6 +191,8 @@ pub struct Sa1 {
     snes_control_flags: u8,
     control_flags: u8,
     bwram_map: [u8; 2],
+    bwram_map_bits: bool,
+    bwram_2bits: bool,
     dma: DmaInfo,
     timer: Timer,
 
@@ -220,6 +233,8 @@ impl Sa1 {
             snes_control_flags: 0,
             control_flags: 0x20,
             bwram_map: [0; 2],
+            bwram_map_bits: false,
+            bwram_2bits: false,
             dma: DmaInfo::new(),
             timer: Timer::new(),
 
@@ -281,6 +296,60 @@ impl Sa1 {
             0xf0..=0xff => self.blocks[3].hirom(addr),
             _ => unreachable!(),
         }
+    }
+
+    fn read_bwram_bits_with<const A1: u8, const A2: u8, const M1: u32, const M2: u8>(
+        &self,
+        addr: u32,
+    ) -> u8 {
+        let val = self.bwram[(addr >> A2) as usize];
+        (val >> ((addr & M1) << A1)) & M2
+    }
+
+    fn write_bwram_bits_with<const A1: u8, const A2: u8, const M1: u32, const M2: u8>(
+        &mut self,
+        addr: u32,
+        val: u8,
+    ) {
+        let r = &mut self.bwram[(addr >> A2) as usize];
+        let s = (addr & M1) << A1;
+        *r = (*r & !(M2 << s)) | ((val & M2) << s)
+    }
+
+    fn read_bwram_bits(&self, addr: u32) -> u8 {
+        if self.bwram_2bits {
+            self.read_bwram_bits_with::<1, 2, 3, 3>(addr)
+        } else {
+            self.read_bwram_bits_with::<2, 1, 1, 15>(addr)
+        }
+    }
+
+    fn write_bwram_bits(&mut self, addr: u32, val: u8) {
+        if self.bwram_2bits {
+            self.write_bwram_bits_with::<1, 2, 3, 3>(addr, val)
+        } else {
+            self.write_bwram_bits_with::<2, 1, 1, 15>(addr, val)
+        }
+    }
+
+    fn get_bwram_small<const INTERNAL: bool>(&self, addr: Addr24) -> u32 {
+        (u32::from(self.bwram_map[INTERNAL as usize]) << 13) | u32::from(addr.addr & 0x1fff)
+    }
+
+    fn read_bwram_small<const INTERNAL: bool>(&self, addr: Addr24) -> u8 {
+        let addr = self.get_bwram_small::<INTERNAL>(addr);
+        if INTERNAL && self.bwram_map_bits {
+            return self.read_bwram_bits(addr);
+        }
+        self.bwram[(addr & 0x3_ffff) as usize]
+    }
+
+    fn write_bwram_small<const INTERNAL: bool>(&mut self, addr: Addr24, val: u8) {
+        let addr = self.get_bwram_small::<INTERNAL>(addr);
+        if INTERNAL && self.bwram_map_bits {
+            return self.write_bwram_bits(addr, val);
+        }
+        self.bwram[(addr & 0x3_ffff) as usize] = val
     }
 
     pub fn read_io<const INTERNAL: bool>(&mut self, id: u16) -> u8 {
@@ -372,13 +441,27 @@ impl Sa1 {
                 self.timer.interrupt = val & 3;
                 self.timer.is_linear = val & 0x80 > 0;
             }
+            (0x2211, SA1) => {
+                // CTR - Reset Timer
+                self.timer.h = 0;
+                self.timer.v = 0;
+            }
+            (0x2212..=0x2215, SA1) => {
+                // HVNC/VCNT - Set Timer maximum
+                self.timer.set_max(val, id & 1 > 0, id & 2 > 0)
+            }
             (0x2220..=0x2223, SNES) => {
                 // CXB/DXB/EXB/FXB - Set Bank ROM mapping
                 self.blocks[usize::from(id & 3)] = Block::new((id & 3) as u8, val);
             }
-            (0x2224, SNES) | (0x2225, SA1) => {
-                // BMAPS / BMAP - Set BW-Ram mapping
-                self.bwram_map[INTERNAL as usize] = val & 0x1f;
+            (0x2224, SNES) => {
+                // BMAPS - Set SNES-side BW-Ram mapping
+                self.bwram_map[0] = val & 0x1f;
+            }
+            (0x2225, SA1) => {
+                // BMAP - Set SA1-side BW-Ram mapping
+                self.bwram_map[1] = val & 0x7f;
+                self.bwram_map_bits = val & 0x80 > 0;
             }
             (0x2226..=0x222a, _) => {
                 // Write Protection Registers
@@ -400,6 +483,10 @@ impl Sa1 {
                 self.dma.vram_width = 1 << ((val >> 2) & 7);
                 self.dma.terminate = val & 0x80 > 0;
             }
+            (0x223f, SA1) => {
+                // BBF - BW-Ram bitmap mode
+                self.bwram_2bits = val & 0x80 > 0;
+            }
             (0x2261 | 0x2262, _) => (), // Undocumented
             _ => todo!(
                 "write SA-1 io port {id:04x} from {} SA-1",
@@ -416,19 +503,19 @@ impl Sa1 {
                 }
                 0x2200..=0x23ff => Ok(Some(self.read_io::<INTERNAL>(addr.addr))),
                 0x3000..=0x37ff => Ok(Some(self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)])),
-                0x6000..=0x7fff => Ok(Some(
-                    self.bwram[(u32::from(addr.addr & 0x1fff)
-                        | (u32::from(self.bwram_map[INTERNAL as usize]) << 13))
-                        as usize],
-                )),
+                0x6000..=0x7fff => Ok(Some(self.read_bwram_small::<INTERNAL>(addr))),
                 0x8000..=0xffff => Err(self.lorom_addr(addr)),
                 _ => Ok(None),
             }
         } else if addr.bank & 0x80 == 0 {
-            Ok(if addr.bank & 0x30 == 0 {
-                Some(self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)])
-            } else {
-                None
+            Ok(match addr.bank & 0x30 {
+                0x00 => {
+                    Some(self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)])
+                }
+                0x20 => Some(
+                    self.read_bwram_bits((u32::from(addr.bank & 15) << 16) | u32::from(addr.bank)),
+                ),
+                _ => None,
             })
         } else {
             Err(self.hirom_addr(addr))
@@ -443,16 +530,19 @@ impl Sa1 {
                 }
                 0x2200..=0x23ff => self.write_io::<INTERNAL>(addr.addr, val),
                 0x3000..=0x37ff => self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val,
-                0x6000..=0x7fff => {
-                    self.bwram[(u32::from(addr.addr & 0x1fff)
-                        | (u32::from(self.bwram_map[INTERNAL as usize]) << 13))
-                        as usize] = val
-                }
+                0x6000..=0x7fff => self.write_bwram_small::<INTERNAL>(addr, val),
                 _ => (),
             }
         } else if addr.bank & 0x80 == 0 {
-            if addr.bank & 0x30 == 0 {
-                self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)] = val
+            match addr.bank & 0x30 {
+                0x00 => {
+                    self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)] = val
+                }
+                0x20 => self.write_bwram_bits(
+                    (u32::from(addr.bank & 15) << 16) | u32::from(addr.bank),
+                    val,
+                ),
+                _ => (),
             }
         }
     }
