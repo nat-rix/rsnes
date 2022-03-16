@@ -303,6 +303,7 @@ pub struct Sa1 {
     dma: DmaInfo,
     varlen: VarLen,
     timer: Timer,
+    memory_cycles: u32,
     arithmetics: Arithmetics,
 
     // SA-1-side interrupt flags
@@ -335,7 +336,7 @@ impl Sa1 {
                 Block::new(3, 3), // Set Super MMC Bank F
             ],
             cpu: Cpu::new(),
-            ahead_cycles: 0,
+            ahead_cycles: 80,
             shall_nmi: false,
             shall_irq: false,
             vectors: Vectors::new(),
@@ -347,6 +348,7 @@ impl Sa1 {
             dma: DmaInfo::new(),
             varlen: VarLen::new(),
             timer: Timer::new(),
+            memory_cycles: 0,
             arithmetics: Arithmetics::new(),
 
             sa1_interrupt_enable: 0,
@@ -522,6 +524,7 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
                 sa1.ahead_cycles += 1;
                 return;
             }
+            sa1.memory_cycles = 0;
             let cycles = if sa1.shall_nmi {
                 sa1.shall_nmi = false;
                 self.nmi()
@@ -531,7 +534,8 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
             } else {
                 self.dispatch_instruction() * 6
             };
-            self.sa1_mut().ahead_cycles += cycles as i32;
+            let sa1 = self.sa1_mut();
+            self.sa1_mut().ahead_cycles += ((cycles + sa1.memory_cycles) >> 2).max(1) as i32;
         }
     }
 }
@@ -761,15 +765,20 @@ impl Cartridge {
 
     pub fn sa1_read<const INTERNAL: bool>(&mut self, addr: Addr24) -> Option<u8> {
         let sa1 = self.sa1_mut();
+        sa1.memory_cycles += 12;
         if addr.bank & 0x40 == 0 {
             match addr.addr {
                 0x0000..=0x07ff if INTERNAL => {
                     Some(sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)])
                 }
-                0x2200..=0x23ff => Some(self.sa1_read_io::<INTERNAL>(addr.addr)),
+                0x2200..=0x23ff => {
+                    sa1.memory_cycles -= 6;
+                    Some(self.sa1_read_io::<INTERNAL>(addr.addr))
+                }
                 0x3000..=0x37ff => Some(sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)]),
                 0x6000..=0x7fff => Some(sa1.read_bwram_small::<INTERNAL>(addr)),
                 0x8000..=0xffff => {
+                    sa1.memory_cycles -= 6;
                     let addr = sa1.lorom_addr(addr);
                     Some(self.read_rom(addr))
                 }
@@ -786,6 +795,7 @@ impl Cartridge {
                 _ => None,
             }
         } else {
+            sa1.memory_cycles -= 6;
             let addr = sa1.hirom_addr(addr);
             Some(self.read_rom(addr))
         }
@@ -793,12 +803,16 @@ impl Cartridge {
 
     pub fn sa1_write<const INTERNAL: bool>(&mut self, addr: Addr24, val: u8) {
         let sa1 = self.sa1_mut();
+        sa1.memory_cycles += 12;
         if addr.bank & 0x40 == 0 {
             match addr.addr {
                 0x0000..=0x07ff if INTERNAL => {
                     sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val
                 }
-                0x2200..=0x23ff => self.sa1_write_io::<INTERNAL>(addr.addr, val),
+                0x2200..=0x23ff => {
+                    sa1.memory_cycles -= 6;
+                    self.sa1_write_io::<INTERNAL>(addr.addr, val)
+                }
                 0x3000..=0x37ff => sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val,
                 0x6000..=0x7fff => sa1.write_bwram_small::<INTERNAL>(addr, val),
                 _ => (),
