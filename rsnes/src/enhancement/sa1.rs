@@ -8,6 +8,7 @@
 //! - <https://problemkaputt.de/fullsnes.htm>
 
 use crate::{
+    cartridge::Cartridge,
     cpu::Cpu,
     device::{Addr24, Data, Device},
     instr::{AccessType, DeviceAccess},
@@ -248,6 +249,42 @@ impl Arithmetics {
     }
 }
 
+#[derive(Debug, Clone, InSaveState)]
+pub struct VarLen {
+    bits: u8,
+    auto_increment: bool,
+    addr: Addr24,
+    bit_nr: u8,
+}
+
+impl VarLen {
+    pub const fn new() -> Self {
+        Self {
+            bits: 16,
+            auto_increment: false,
+            addr: Addr24::new(0, 0),
+            bit_nr: 0,
+        }
+    }
+
+    pub fn increment(&mut self) {
+        let nr = self.bit_nr.wrapping_add(self.bits);
+        self.addr.addr = self.addr.addr.wrapping_add((nr >> 3).into());
+        self.bit_nr = nr & 7;
+    }
+
+    pub fn set_mode(&mut self, mode: u8) {
+        self.bits = mode & 15;
+        if self.bits == 0 {
+            self.bits = 16
+        }
+        self.auto_increment = mode & 0x80 > 0;
+        if !self.auto_increment {
+            self.increment()
+        }
+    }
+}
+
 #[derive(Debug, DefaultByNew, Clone, InSaveState)]
 pub struct Sa1 {
     iram: [u8; IRAM_SIZE],
@@ -264,6 +301,7 @@ pub struct Sa1 {
     bwram_map_bits: bool,
     bwram_2bits: bool,
     dma: DmaInfo,
+    varlen: VarLen,
     timer: Timer,
     arithmetics: Arithmetics,
 
@@ -307,6 +345,7 @@ impl Sa1 {
             bwram_map_bits: false,
             bwram_2bits: false,
             dma: DmaInfo::new(),
+            varlen: VarLen::new(),
             timer: Timer::new(),
             arithmetics: Arithmetics::new(),
 
@@ -423,217 +462,6 @@ impl Sa1 {
         }
         self.bwram[(addr & 0x3_ffff) as usize] = val
     }
-
-    pub fn read_io<const INTERNAL: bool>(&mut self, id: u16) -> u8 {
-        const SA1: bool = true;
-        const SNES: bool = false;
-        match (id, INTERNAL) {
-            (0x2300, SNES) => {
-                // SCNT - SNES Control flags
-                // TODO: IRQ from Character Conversion DMA
-                // TODO: IRQ from SA-1 to SNES
-                (self.snes_control_flags & 0x5f) | (self.snes_interrupt_trigger & 0xa0)
-            }
-            (0x2301, SA1) => {
-                // CFR - SA-1 Control flags
-                (self.control_flags & 0xf) | self.sa1_interrupt_trigger
-            }
-            (0x2306..=0x230a, SA1) => {
-                // MR - Arithmetics result
-                self.arithmetics.res.to_le_bytes()[usize::from(id - 0x2306)]
-            }
-            (0x230b, SA1) => {
-                // OF - Arithmetics overflow flag
-                (self.arithmetics.ov as u8) << 7
-            }
-            _ => todo!(
-                "read SA-1 io port {id:04x} from {} SA-1",
-                ["outside", "inside"][INTERNAL as usize]
-            ),
-        }
-    }
-
-    pub fn write_io<const INTERNAL: bool>(&mut self, id: u16, val: u8) {
-        const SA1: bool = true;
-        const SNES: bool = false;
-        match (id, INTERNAL) {
-            (0x2200, SNES) => {
-                // CCNT - Control SA-1 from SNES
-                if replace(&mut self.control_flags, val) & !val & 0x20 > 0 {
-                    self.cpu.regs.pc = Addr24::new(0, self.vectors.get_reset())
-                }
-                let en = val & 0x90;
-                self.sa1_interrupt_acknowledge &= !(en & self.sa1_interrupt_enable);
-                self.sa1_interrupt_trigger |= en;
-            }
-            (0x2201, SNES) => {
-                // SIE - Enable interrupt
-                let irq = !replace(&mut self.snes_interrupt_enable, val)
-                    & val
-                    & self.snes_interrupt_trigger;
-                if irq & 0x80 > 0 {
-                    self.snes_interrupt_acknowledge &= 0x7f;
-                    self.snes_irq_pin = true;
-                }
-                if irq & 0x20 > 0 {
-                    self.snes_interrupt_acknowledge &= !0x20;
-                    self.snes_irq_pin = true;
-                }
-            }
-            (0x2202, SNES) => {
-                // SIC - Clear interrupt
-                self.snes_interrupt_acknowledge = val;
-                self.snes_interrupt_trigger &= !val;
-                self.snes_irq_pin &= self.snes_interrupt_trigger & 0xa0 > 0;
-            }
-            (0x2203..=0x2208, SNES) => {
-                // CRV/CNV/CIV - Interrupt vectors
-                self.vectors.set_vector(id, val)
-            }
-            (0x2209, SA1) => {
-                // SCNT - Control SNES from SA-1
-                self.snes_control_flags = val;
-                if val & 0x80 > 0 {
-                    self.snes_interrupt_trigger |= 0x80;
-                    if self.snes_interrupt_enable & 0x80 > 0 {
-                        self.snes_interrupt_acknowledge &= 0x7f;
-                        self.snes_irq_pin = true;
-                    }
-                }
-            }
-            (0x220a, SA1) => {
-                // CIE - SNES Enable Interrupt
-                self.sa1_interrupt_acknowledge &=
-                    !(!self.sa1_interrupt_enable & val & self.sa1_interrupt_trigger);
-                self.sa1_interrupt_enable = val & 0xf0;
-            }
-            (0x220b, SA1) => {
-                // CIC - SA-1 Interrupt Acknowledge
-                self.sa1_interrupt_acknowledge = val & 0xf0;
-                self.sa1_interrupt_trigger &= !self.sa1_interrupt_acknowledge;
-            }
-            (0x220c..=0x220f, SA1) => {
-                // SNV/SIV - SNES override interrupt vectors
-                self.vectors.set_override(id, val)
-            }
-            (0x2210, SA1) => {
-                // TMC - Timer Control
-                self.timer.interrupt = val & 3;
-                self.timer.is_linear = val & 0x80 > 0;
-            }
-            (0x2211, SA1) => {
-                // CTR - Reset Timer
-                self.timer.h = 0;
-                self.timer.v = 0;
-            }
-            (0x2212..=0x2215, SA1) => {
-                // HVNC/VCNT - Set Timer maximum
-                self.timer.set_max(val, id & 1 > 0, id & 2 > 0)
-            }
-            (0x2220..=0x2223, SNES) => {
-                // CXB/DXB/EXB/FXB - Set Bank ROM mapping
-                self.blocks[usize::from(id & 3)] = Block::new((id & 3) as u8, val);
-            }
-            (0x2224, SNES) => {
-                // BMAPS - Set SNES-side BW-Ram mapping
-                self.bwram_map[0] = val & 0x1f;
-            }
-            (0x2225, SA1) => {
-                // BMAP - Set SA1-side BW-Ram mapping
-                self.bwram_map[1] = val & 0x7f;
-                self.bwram_map_bits = val & 0x80 > 0;
-            }
-            (0x2226..=0x222a, _) => {
-                // Write Protection Registers
-                // TODO: no emulator known to me is implementing this. Check why
-            }
-            (0x2230, SA1) => {
-                // DCNT - DMA Control
-                self.dma.direction = DmaDirection::new(val);
-                self.dma.is_automatic = val & 0x10 > 0;
-                self.dma.char_conversion = val & 0x20 > 0;
-                self.dma.priority = val & 0x40 > 0;
-                self.dma.enable = val & 0x80 > 0;
-            }
-            (0x2231, _) => {
-                // CDMA - Character Conversion DMA Parameters
-                // TODO: what happens, when `color_bits = 1`?
-                // TODO: what happens, when `vram_width = 64 or 128`?
-                self.dma.color_bits = 1 << (!val & 3);
-                self.dma.vram_width = 1 << ((val >> 2) & 7);
-                self.dma.terminate = val & 0x80 > 0;
-            }
-            (0x223f, SA1) => {
-                // BBF - BW-Ram bitmap mode
-                self.bwram_2bits = val & 0x80 > 0;
-            }
-            (0x2250, SA1) => {
-                // MCNT - Arithmetics Control
-                self.arithmetics.set_mode(val);
-            }
-            (0x2251..=0x2254, SA1) => {
-                // MA/MB - Arithmetics operators
-                self.arithmetics.set_op(id, val);
-            }
-            (0x2261 | 0x2262, _) => (), // Undocumented
-            _ => todo!(
-                "write SA-1 io port {id:04x} from {} SA-1",
-                ["outside", "inside"][INTERNAL as usize]
-            ),
-        }
-    }
-
-    pub fn read<const INTERNAL: bool>(&mut self, addr: Addr24) -> Result<Option<u8>, u32> {
-        if addr.bank & 0x40 == 0 {
-            match addr.addr {
-                0x0000..=0x07ff if INTERNAL => {
-                    Ok(Some(self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)]))
-                }
-                0x2200..=0x23ff => Ok(Some(self.read_io::<INTERNAL>(addr.addr))),
-                0x3000..=0x37ff => Ok(Some(self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)])),
-                0x6000..=0x7fff => Ok(Some(self.read_bwram_small::<INTERNAL>(addr))),
-                0x8000..=0xffff => Err(self.lorom_addr(addr)),
-                _ => Ok(None),
-            }
-        } else if addr.bank & 0x80 == 0 {
-            Ok(match addr.bank & 0x30 {
-                0x00 => {
-                    Some(self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)])
-                }
-                0x20 => Some(
-                    self.read_bwram_bits((u32::from(addr.bank & 15) << 16) | u32::from(addr.bank)),
-                ),
-                _ => None,
-            })
-        } else {
-            Err(self.hirom_addr(addr))
-        }
-    }
-
-    pub fn write<const INTERNAL: bool>(&mut self, addr: Addr24, val: u8) {
-        if addr.bank & 0x40 == 0 {
-            match addr.addr {
-                0x0000..=0x07ff if INTERNAL => {
-                    self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val
-                }
-                0x2200..=0x23ff => self.write_io::<INTERNAL>(addr.addr, val),
-                0x3000..=0x37ff => self.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val,
-                0x6000..=0x7fff => self.write_bwram_small::<INTERNAL>(addr, val),
-                _ => (),
-            }
-        } else if addr.bank & 0x80 == 0 {
-            match addr.bank & 0x30 {
-                0x00 => {
-                    self.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)] = val
-                }
-                0x20 => self.write_bwram_bits(
-                    (u32::from(addr.bank & 15) << 16) | u32::from(addr.bank),
-                    val,
-                ),
-                _ => (),
-            }
-        }
-    }
 }
 
 pub struct AccessTypeSa1;
@@ -644,12 +472,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> AccessTyp
     fn read<D: Data>(device: &mut Device<B, FB>, mut addr: Addr24) -> D {
         let mut arr: D::Arr = Default::default();
         let mut open_bus = device.open_bus;
+        let cartridge = device.cartridge.as_mut().unwrap();
         for v in arr.as_mut() {
-            let sa1 = device.cartridge.as_mut().unwrap().sa1_mut();
-            let res = Sa1::read::<true>(sa1, addr);
-            *v = res
-                .map(|v| v.unwrap_or(open_bus))
-                .unwrap_or_else(|addr| device.cartridge.as_mut().unwrap().read_rom(addr));
+            *v = cartridge.sa1_read::<true>(addr).unwrap_or(open_bus);
             open_bus = *v;
             addr.addr = addr.addr.wrapping_add(1);
         }
@@ -657,9 +482,9 @@ impl<B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer> AccessTyp
     }
 
     fn write<D: Data>(device: &mut Device<B, FB>, mut addr: Addr24, val: D) {
-        let sa1 = device.cartridge.as_mut().unwrap().sa1_mut();
+        let cartridge = device.cartridge.as_mut().unwrap();
         for &v in val.to_bytes().as_ref().iter() {
-            sa1.write::<true>(addr, v);
+            cartridge.sa1_write::<true>(addr, v);
             addr.addr = addr.addr.wrapping_add(1);
         }
     }
@@ -707,6 +532,288 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
                 self.dispatch_instruction() * 6
             };
             self.sa1_mut().ahead_cycles += cycles as i32;
+        }
+    }
+}
+
+impl Cartridge {
+    fn read_varlen_part(&self, addr: Addr24) -> u8 {
+        const FALLBACK: u8 = 0xff;
+        if addr.bank & 0x40 == 0 {
+            match addr.addr {
+                0x0000..=0x07ff | 0x3000..=0x37ff => {
+                    self.sa1_ref().iram[usize::from(addr.addr) & (IRAM_SIZE - 1)]
+                }
+                0x6000..=0x7fff => self.sa1_ref().read_bwram_small::<true>(addr),
+                0x8000..=0xffff => self.read_rom(self.sa1_ref().lorom_addr(addr)),
+                _ => FALLBACK,
+            }
+        } else if addr.bank & 0x80 == 0 {
+            if addr.bank & 0x30 == 0 {
+                self.sa1_ref().bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)]
+            } else {
+                FALLBACK
+            }
+        } else {
+            self.read_rom(self.sa1_ref().hirom_addr(addr))
+        }
+    }
+
+    fn read_varlen(&mut self, is_high: bool) -> u8 {
+        let mut addr = self.sa1_ref().varlen.addr;
+        if is_high {
+            addr.addr = addr.addr.wrapping_add(1);
+        }
+        let val1 = self.read_varlen_part(addr);
+        let val = if self.sa1_ref().varlen.bit_nr & 7 == 0 {
+            val1
+        } else {
+            addr.addr = addr.addr.wrapping_add(1);
+            let val2 = self.read_varlen_part(addr);
+            ((u16::from_le_bytes([val1, val2]) >> self.sa1_ref().varlen.bit_nr) & 0xff) as u8
+        };
+        if is_high && self.sa1_ref().varlen.auto_increment {
+            self.sa1_mut().varlen.increment();
+        }
+        val
+    }
+
+    pub fn sa1_read_io<const INTERNAL: bool>(&mut self, id: u16) -> u8 {
+        let sa1 = self.sa1_mut();
+        const SA1: bool = true;
+        const SNES: bool = false;
+        match (id, INTERNAL) {
+            (0x2300, SNES) => {
+                // SCNT - SNES Control flags
+                // TODO: IRQ from Character Conversion DMA
+                // TODO: IRQ from SA-1 to SNES
+                (sa1.snes_control_flags & 0x5f) | (sa1.snes_interrupt_trigger & 0xa0)
+            }
+            (0x2301, SA1) => {
+                // CFR - SA-1 Control flags
+                (sa1.control_flags & 0xf) | sa1.sa1_interrupt_trigger
+            }
+            (0x2306..=0x230a, SA1) => {
+                // MR - Arithmetics result
+                sa1.arithmetics.res.to_le_bytes()[usize::from(id - 0x2306)]
+            }
+            (0x230b, SA1) => {
+                // OF - Arithmetics overflow flag
+                (sa1.arithmetics.ov as u8) << 7
+            }
+            (0x230c | 0x230d, SA1) => {
+                // VDP - VarLen read port
+                let res = self.read_varlen(id == 0x230d).to_le_bytes()[usize::from(id & 1)];
+                res
+            }
+            _ => todo!(
+                "read SA-1 io port {id:04x} from {} SA-1",
+                ["outside", "inside"][INTERNAL as usize]
+            ),
+        }
+    }
+
+    pub fn sa1_write_io<const INTERNAL: bool>(&mut self, id: u16, val: u8) {
+        let sa1 = self.sa1_mut();
+        const SA1: bool = true;
+        const SNES: bool = false;
+        match (id, INTERNAL) {
+            (0x2200, SNES) => {
+                // CCNT - Control SA-1 from SNES
+                if replace(&mut sa1.control_flags, val) & !val & 0x20 > 0 {
+                    sa1.cpu.regs.pc = Addr24::new(0, sa1.vectors.get_reset())
+                }
+                let en = val & 0x90;
+                sa1.sa1_interrupt_acknowledge &= !(en & sa1.sa1_interrupt_enable);
+                sa1.sa1_interrupt_trigger |= en;
+            }
+            (0x2201, SNES) => {
+                // SIE - Enable interrupt
+                let irq = !replace(&mut sa1.snes_interrupt_enable, val)
+                    & val
+                    & sa1.snes_interrupt_trigger;
+                if irq & 0x80 > 0 {
+                    sa1.snes_interrupt_acknowledge &= 0x7f;
+                    sa1.snes_irq_pin = true;
+                }
+                if irq & 0x20 > 0 {
+                    sa1.snes_interrupt_acknowledge &= !0x20;
+                    sa1.snes_irq_pin = true;
+                }
+            }
+            (0x2202, SNES) => {
+                // SIC - Clear interrupt
+                sa1.snes_interrupt_acknowledge = val;
+                sa1.snes_interrupt_trigger &= !val;
+                sa1.snes_irq_pin &= sa1.snes_interrupt_trigger & 0xa0 > 0;
+            }
+            (0x2203..=0x2208, SNES) => {
+                // CRV/CNV/CIV - Interrupt vectors
+                sa1.vectors.set_vector(id, val)
+            }
+            (0x2209, SA1) => {
+                // SCNT - Control SNES from SA-1
+                sa1.snes_control_flags = val;
+                if val & 0x80 > 0 {
+                    sa1.snes_interrupt_trigger |= 0x80;
+                    if sa1.snes_interrupt_enable & 0x80 > 0 {
+                        sa1.snes_interrupt_acknowledge &= 0x7f;
+                        sa1.snes_irq_pin = true;
+                    }
+                }
+            }
+            (0x220a, SA1) => {
+                // CIE - SNES Enable Interrupt
+                sa1.sa1_interrupt_acknowledge &=
+                    !(!sa1.sa1_interrupt_enable & val & sa1.sa1_interrupt_trigger);
+                sa1.sa1_interrupt_enable = val & 0xf0;
+            }
+            (0x220b, SA1) => {
+                // CIC - SA-1 Interrupt Acknowledge
+                sa1.sa1_interrupt_acknowledge = val & 0xf0;
+                sa1.sa1_interrupt_trigger &= !sa1.sa1_interrupt_acknowledge;
+            }
+            (0x220c..=0x220f, SA1) => {
+                // SNV/SIV - SNES override interrupt vectors
+                sa1.vectors.set_override(id, val)
+            }
+            (0x2210, SA1) => {
+                // TMC - Timer Control
+                sa1.timer.interrupt = val & 3;
+                sa1.timer.is_linear = val & 0x80 > 0;
+            }
+            (0x2211, SA1) => {
+                // CTR - Reset Timer
+                sa1.timer.h = 0;
+                sa1.timer.v = 0;
+            }
+            (0x2212..=0x2215, SA1) => {
+                // HVNC/VCNT - Set Timer maximum
+                sa1.timer.set_max(val, id & 1 > 0, id & 2 > 0)
+            }
+            (0x2220..=0x2223, SNES) => {
+                // CXB/DXB/EXB/FXB - Set Bank ROM mapping
+                sa1.blocks[usize::from(id & 3)] = Block::new((id & 3) as u8, val);
+            }
+            (0x2224, SNES) => {
+                // BMAPS - Set SNES-side BW-Ram mapping
+                sa1.bwram_map[0] = val & 0x1f;
+            }
+            (0x2225, SA1) => {
+                // BMAP - Set SA1-side BW-Ram mapping
+                sa1.bwram_map[1] = val & 0x7f;
+                sa1.bwram_map_bits = val & 0x80 > 0;
+            }
+            (0x2226..=0x222a, _) => {
+                // Write Protection Registers
+                // TODO: no emulator known to me is implementing this. Check why
+            }
+            (0x2230, SA1) => {
+                // DCNT - DMA Control
+                sa1.dma.direction = DmaDirection::new(val);
+                sa1.dma.is_automatic = val & 0x10 > 0;
+                sa1.dma.char_conversion = val & 0x20 > 0;
+                sa1.dma.priority = val & 0x40 > 0;
+                sa1.dma.enable = val & 0x80 > 0;
+            }
+            (0x2231, _) => {
+                // CDMA - Character Conversion DMA Parameters
+                // TODO: what happens, when `color_bits = 1`?
+                // TODO: what happens, when `vram_width = 64 or 128`?
+                sa1.dma.color_bits = 1 << (!val & 3);
+                sa1.dma.vram_width = 1 << ((val >> 2) & 7);
+                sa1.dma.terminate = val & 0x80 > 0;
+            }
+            (0x223f, SA1) => {
+                // BBF - BW-Ram bitmap mode
+                sa1.bwram_2bits = val & 0x80 > 0;
+            }
+            (0x2250, SA1) => {
+                // MCNT - Arithmetics Control
+                sa1.arithmetics.set_mode(val);
+            }
+            (0x2251..=0x2254, SA1) => {
+                // MA/MB - Arithmetics operators
+                sa1.arithmetics.set_op(id, val);
+            }
+            (0x2258, SA1) => {
+                // VBD - VarLen Control
+                sa1.varlen.set_mode(val)
+            }
+            (0x2259 | 0x225a, SA1) => {
+                // VDA - VarLen address
+                let mut bytes = sa1.varlen.addr.addr.to_le_bytes();
+                bytes[usize::from(!id & 1)] = val;
+                sa1.varlen.addr.addr = u16::from_le_bytes(bytes);
+            }
+            (0x225b, SA1) => {
+                // VDA - VarLen address bank
+                sa1.varlen.addr.bank = val;
+                sa1.varlen.bit_nr = 0;
+            }
+            (0x2261 | 0x2262, _) => (), // Undocumented
+            _ => todo!(
+                "write SA-1 io port {id:04x} from {} SA-1",
+                ["outside", "inside"][INTERNAL as usize]
+            ),
+        }
+    }
+
+    pub fn sa1_read<const INTERNAL: bool>(&mut self, addr: Addr24) -> Option<u8> {
+        let sa1 = self.sa1_mut();
+        if addr.bank & 0x40 == 0 {
+            match addr.addr {
+                0x0000..=0x07ff if INTERNAL => {
+                    Some(sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)])
+                }
+                0x2200..=0x23ff => Some(self.sa1_read_io::<INTERNAL>(addr.addr)),
+                0x3000..=0x37ff => Some(sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)]),
+                0x6000..=0x7fff => Some(sa1.read_bwram_small::<INTERNAL>(addr)),
+                0x8000..=0xffff => {
+                    let addr = sa1.lorom_addr(addr);
+                    Some(self.read_rom(addr))
+                }
+                _ => None,
+            }
+        } else if addr.bank & 0x80 == 0 {
+            match addr.bank & 0x30 {
+                0x00 => {
+                    Some(sa1.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)])
+                }
+                0x20 => Some(
+                    sa1.read_bwram_bits((u32::from(addr.bank & 15) << 16) | u32::from(addr.bank)),
+                ),
+                _ => None,
+            }
+        } else {
+            let addr = sa1.hirom_addr(addr);
+            Some(self.read_rom(addr))
+        }
+    }
+
+    pub fn sa1_write<const INTERNAL: bool>(&mut self, addr: Addr24, val: u8) {
+        let sa1 = self.sa1_mut();
+        if addr.bank & 0x40 == 0 {
+            match addr.addr {
+                0x0000..=0x07ff if INTERNAL => {
+                    sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val
+                }
+                0x2200..=0x23ff => self.sa1_write_io::<INTERNAL>(addr.addr, val),
+                0x3000..=0x37ff => sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)] = val,
+                0x6000..=0x7fff => sa1.write_bwram_small::<INTERNAL>(addr, val),
+                _ => (),
+            }
+        } else if addr.bank & 0x80 == 0 {
+            match addr.bank & 0x30 {
+                0x00 => {
+                    sa1.bwram[(usize::from(addr.bank & 3) << 16) | usize::from(addr.addr)] = val
+                }
+                0x20 => sa1.write_bwram_bits(
+                    (u32::from(addr.bank & 15) << 16) | u32::from(addr.bank),
+                    val,
+                ),
+                _ => (),
+            }
         }
     }
 }

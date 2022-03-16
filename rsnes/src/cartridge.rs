@@ -377,7 +377,7 @@ type ReadFunPointer = fn(&mut Cartridge, u32) -> u8;
 impl ReadFunction {
     pub fn get(&self) -> ReadFunPointer {
         const FUNS: [ReadFunPointer; 4] = [
-            Cartridge::read_rom,
+            Cartridge::read_rom_mut,
             Cartridge::read_sram,
             Cartridge::read_dsp_data,
             Cartridge::read_dsp_status,
@@ -690,9 +690,8 @@ impl Cartridge {
     }
 
     pub fn read_byte(&mut self, addr: Addr24) -> Option<u8> {
-        if let Some(sa1) = &mut self.sa1 {
-            sa1.read::<false>(addr)
-                .unwrap_or_else(|addr| Some(self.read_rom(addr)))
+        if self.has_sa1() {
+            self.sa1_read::<false>(addr)
         } else {
             if let Some((index, MappingEntry { read, .. })) = self.mapping.find(addr) {
                 Some(read.get()(self, index))
@@ -703,8 +702,8 @@ impl Cartridge {
     }
 
     pub fn write_byte(&mut self, addr: Addr24, val: u8) {
-        if let Some(sa1) = &mut self.sa1 {
-            sa1.write::<false>(addr, val)
+        if self.has_sa1() {
+            self.sa1_write::<false>(addr, val)
         } else {
             if let Some((index, MappingEntry { write, .. })) = self.mapping.find(addr) {
                 write.get()(self, index, val)
@@ -746,7 +745,11 @@ impl Cartridge {
         self.ram[addr] = val
     }
 
-    pub fn read_rom(&mut self, addr: u32) -> u8 {
+    pub fn read_rom_mut(&mut self, addr: u32) -> u8 {
+        self.read_rom(addr)
+    }
+
+    pub fn read_rom(&self, addr: u32) -> u8 {
         self.rom[self.get_rom_addr(addr)]
     }
 
