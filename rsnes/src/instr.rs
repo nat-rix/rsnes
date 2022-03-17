@@ -2960,10 +2960,15 @@ impl<
     }
 
     pub fn get_nmi_vector(&mut self) -> u16 {
-        if !T::is_main() {
-            let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
-            if let Some(vector) = sa1.get_override_nmi() {
-                return vector;
+        if self.0.cartridge.as_ref().unwrap().has_sa1() {
+            if T::is_main() {
+                let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+                if let Some(vector) = sa1.get_override_nmi() {
+                    return vector;
+                }
+            } else {
+                let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+                return sa1.get_nmi_vector();
             }
         }
         self.read(Addr24::new(
@@ -2977,10 +2982,15 @@ impl<
     }
 
     pub fn get_irq_vector(&mut self) -> u16 {
-        if !T::is_main() {
-            let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
-            if let Some(vector) = sa1.get_override_irq() {
-                return vector;
+        if self.0.cartridge.as_ref().unwrap().has_sa1() {
+            if T::is_main() {
+                let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+                if let Some(vector) = sa1.get_override_irq() {
+                    return vector;
+                }
+            } else {
+                let sa1 = self.0.cartridge.as_ref().unwrap().sa1_ref();
+                return sa1.get_irq_vector();
             }
         }
         self.read(Addr24::new(

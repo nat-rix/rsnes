@@ -18,6 +18,8 @@ use save_state_macro::*;
 
 const IRAM_SIZE: usize = 0x800;
 const BWRAM_SIZE: usize = 0x40000;
+const HEND: u16 = 1364;
+const VEND: [u16; 2] = [262, 312];
 
 #[derive(Debug, Default, Clone, Copy, InSaveState)]
 struct Block {
@@ -157,6 +159,7 @@ pub struct Timer {
     v: u16,
     hmax: u16,
     vmax: u16,
+    vend: u16,
 }
 
 impl Timer {
@@ -168,14 +171,52 @@ impl Timer {
             v: 0,
             hmax: 0,
             vmax: 0,
+            vend: VEND[0],
         }
     }
 
     pub fn set_max(&mut self, val: u8, is_high: bool, is_h: bool) {
-        let hv = if is_h { &mut self.h } else { &mut self.v };
+        let hv = if is_h { &mut self.hmax } else { &mut self.vmax };
         let mut bytes = hv.to_le_bytes();
         bytes[usize::from(is_high)] = val;
-        *hv = u16::from_le_bytes(bytes) & 0x1f;
+        *hv = (u16::from_le_bytes(bytes) & 0x1ff) << 2;
+    }
+
+    fn check_irq(&self, hbef: u16, vbef: u16) -> bool {
+        let mut int = self.interrupt;
+        if self.v == vbef {
+            int &= (hbef + 1..=self.h).contains(&self.hmax) as u8;
+        } else {
+            int &= (self.h >= self.hmax) as u8 | (((self.v == self.vmax) as u8) << 1);
+        }
+        int > 0
+    }
+
+    pub fn tick(&mut self, n: u16) -> bool {
+        if n == 0 {
+            return false;
+        }
+        let (hbef, vbef) = (self.h, self.v);
+        let h = self.h.saturating_add(n);
+        if self.is_linear {
+            if h & 0xf800 > 0 {
+                self.v = (self.v + 1) & 0x1ff;
+            }
+            self.h &= 0x7ff;
+        } else {
+            if h >= HEND {
+                self.h -= HEND;
+                self.v += 1;
+                if self.v >= self.vend {
+                    self.v -= self.vend;
+                }
+            }
+        }
+        self.check_irq(hbef, vbef)
+    }
+
+    pub fn set_region(&mut self, is_pal: bool) {
+        self.vend = VEND[usize::from(is_pal)];
     }
 }
 
@@ -362,6 +403,10 @@ impl Sa1 {
         }
     }
 
+    pub fn set_region(&mut self, is_pal: bool) {
+        self.timer.set_region(is_pal)
+    }
+
     pub fn reset(&mut self) {
         // TODO: correctly implement resetting
         *self = Self::new()
@@ -389,6 +434,14 @@ impl Sa1 {
         } else {
             None
         }
+    }
+
+    pub const fn get_nmi_vector(&self) -> u16 {
+        self.vectors.get_nmi()
+    }
+
+    pub const fn get_irq_vector(&self) -> u16 {
+        self.vectors.get_irq()
     }
 
     pub fn lorom_addr(&self, addr: Addr24) -> u32 {
@@ -537,6 +590,10 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
             let sa1 = self.sa1_mut();
             self.sa1_mut().ahead_cycles += ((cycles + sa1.memory_cycles) >> 2).max(1) as i32;
         }
+        let sa1 = self.sa1_mut();
+        if sa1.timer.tick(N) {
+            sa1.shall_irq = true;
+        }
     }
 }
 
@@ -582,11 +639,11 @@ impl Cartridge {
         val
     }
 
-    pub fn sa1_read_io<const INTERNAL: bool>(&mut self, id: u16) -> u8 {
+    pub fn sa1_read_io<const INTERNAL: bool>(&mut self, id: u16) -> Option<u8> {
         let sa1 = self.sa1_mut();
         const SA1: bool = true;
         const SNES: bool = false;
-        match (id, INTERNAL) {
+        Some(match (id, INTERNAL) {
             (0x2300, SNES) => {
                 // SCNT - SNES Control flags
                 // TODO: IRQ from Character Conversion DMA
@@ -610,11 +667,13 @@ impl Cartridge {
                 let res = self.read_varlen(id == 0x230d).to_le_bytes()[usize::from(id & 1)];
                 res
             }
+            (0x2200..=0x22ff | 0x2301..=0x23ff, SNES)
+            | (0x2200..=0x2300 | 0x230e..=0x23ff, SA1) => return None,
             _ => todo!(
                 "read SA-1 io port {id:04x} from {} SA-1",
                 ["outside", "inside"][INTERNAL as usize]
             ),
-        }
+        })
     }
 
     pub fn sa1_write_io<const INTERNAL: bool>(&mut self, id: u16, val: u8) {
@@ -708,8 +767,16 @@ impl Cartridge {
                 sa1.bwram_map[1] = val & 0x7f;
                 sa1.bwram_map_bits = val & 0x80 > 0;
             }
-            (0x2226..=0x222a, _) => {
-                // Write Protection Registers
+            (0x2226, SNES) | (0x2227, SA1) => {
+                // BW-Ram Write Protection enable
+                // TODO: no emulator known to me is implementing this. Check why
+            }
+            (0x2228, SNES) => {
+                // BW-Ram Write Protection area
+                // TODO: no emulator known to me is implementing this. Check why
+            }
+            (0x2229, SNES) | (0x222a, SA1) => {
+                // I-Ram Write Protection
                 // TODO: no emulator known to me is implementing this. Check why
             }
             (0x2230, SA1) => {
@@ -755,7 +822,19 @@ impl Cartridge {
                 sa1.varlen.addr.bank = val;
                 sa1.varlen.bit_nr = 0;
             }
-            (0x2261 | 0x2262, _) => (), // Undocumented
+            (0x2209..=0x221f | 0x2225 | 0x2227 | 0x222a..=0x2230 | 0x2238..=0x23ff, SNES)
+            | (
+                0x2200..=0x2208
+                | 0x2216..=0x2224
+                | 0x2226
+                | 0x2228
+                | 0x2229
+                | 0x222b..=0x222f
+                | 0x223a..=0x223e
+                | 0x2255..=0x2257
+                | 0x225c..=0x23ff,
+                SA1,
+            ) => (),
             _ => todo!(
                 "write SA-1 io port {id:04x} from {} SA-1",
                 ["outside", "inside"][INTERNAL as usize]
@@ -773,7 +852,7 @@ impl Cartridge {
                 }
                 0x2200..=0x23ff => {
                     sa1.memory_cycles -= 6;
-                    Some(self.sa1_read_io::<INTERNAL>(addr.addr))
+                    self.sa1_read_io::<INTERNAL>(addr.addr)
                 }
                 0x3000..=0x37ff => Some(sa1.iram[usize::from(addr.addr) & (IRAM_SIZE - 1)]),
                 0x6000..=0x7fff => Some(sa1.read_bwram_small::<INTERNAL>(addr)),

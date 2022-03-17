@@ -801,6 +801,9 @@ impl Cartridge {
                 crate::timing::NECDSP_CPU_TIMING_PROPORTION_NTSC
             })
         }
+        if let Some(sa1) = &mut self.sa1 {
+            sa1.set_region(pal)
+        }
     }
 
     pub fn tick(&mut self, n: Cycles) {
