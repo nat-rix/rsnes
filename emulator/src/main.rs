@@ -213,6 +213,7 @@ fn main() {
         config.get_controller_profiles(&profile).map(|p| p.cloned());
 
     let cartridge = cartridge_from_file(&options.input);
+    let title = cartridge.title().to_owned();
     if options.verbose {
         println!(
             "[info] Cartridge header information: {:#?}",
@@ -257,7 +258,7 @@ fn main() {
         .with_resizable(true)
         .with_maximized(false)
         .with_inner_size(size)
-        .with_title(env!("CARGO_PKG_NAME"))
+        .with_title(format!("{} - {}", env!("CARGO_PKG_NAME"), title))
         .build(&event_loop)
         .unwrap_or_else(|err| error!("Failure while creating window ({})", err));
 

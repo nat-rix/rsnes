@@ -728,6 +728,10 @@ impl Cartridge {
         &self.header
     }
 
+    pub fn title(&self) -> &str {
+        &self.header.name
+    }
+
     fn get_sram_addr(&self, addr: u32) -> usize {
         addr as usize & (self.ram.len() - 1)
     }
