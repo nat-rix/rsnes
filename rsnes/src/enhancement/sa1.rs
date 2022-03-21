@@ -21,6 +21,20 @@ const BWRAM_SIZE: usize = 0x40000;
 const HEND: u16 = 1364;
 const VEND: [u16; 2] = [262, 312];
 
+mod dma_modes {
+    /// not running
+    pub const STOPPED: u8 = 0;
+
+    /// normal mode running
+    pub const NORMAL: u8 = 1;
+
+    /// character conversion type 1 (automatic) mode running
+    pub const TYPE1: u8 = 2;
+
+    /// character conversion type 2 (semi-automatic) mode running
+    pub const TYPE2: u8 = 3;
+}
+
 #[derive(Debug, Default, Clone, Copy, InSaveState)]
 struct Block {
     hirom_bank: u8,
@@ -125,6 +139,7 @@ impl DmaDirection {
 #[derive(Debug, Clone, InSaveState)]
 pub struct DmaInfo {
     enable: bool,
+    running: u8,
     direction: DmaDirection,
     is_automatic: bool,
     char_conversion: bool,
@@ -132,12 +147,17 @@ pub struct DmaInfo {
     color_bits: u8,
     vram_width: u8,
     terminate: bool,
+    src: Addr24,
+    dst: Addr24,
+    byte_counter: u16,
+    bit_map_file: [[u8; 8]; 2],
 }
 
 impl DmaInfo {
     pub const fn new() -> Self {
         Self {
             enable: false,
+            running: dma_modes::STOPPED,
             direction: DmaDirection::new(0),
             is_automatic: false,
             char_conversion: false,
@@ -145,6 +165,10 @@ impl DmaInfo {
             color_bits: 8,
             vram_width: 1,
             terminate: false,
+            src: Addr24::new(0, 0),
+            dst: Addr24::new(0, 0),
+            byte_counter: 0,
+            bit_map_file: [[0; 8]; 2],
         }
     }
 }
@@ -157,6 +181,8 @@ pub struct Timer {
     is_linear: bool,
     h: u16,
     v: u16,
+    latched_h: u16,
+    latched_v: u16,
     hmax: u16,
     vmax: u16,
     vend: u16,
@@ -169,6 +195,8 @@ impl Timer {
             is_linear: false,
             h: 0,
             v: 0,
+            latched_h: 0,
+            latched_v: 0,
             hmax: 0,
             vmax: 0,
             vend: VEND[0],
@@ -180,6 +208,16 @@ impl Timer {
         let mut bytes = hv.to_le_bytes();
         bytes[usize::from(is_high)] = val;
         *hv = (u16::from_le_bytes(bytes) & 0x1ff) << 2;
+    }
+
+    pub fn latch(&mut self) {
+        self.latched_h = self.h;
+        self.latched_v = self.v;
+    }
+
+    pub fn get_count_byte(&self, id: u16) -> u8 {
+        (u32::from(self.latched_v) | (u32::from(self.latched_h) << 16)).to_le_bytes()
+            [usize::from(id & 3)]
     }
 
     fn check_irq(&self, hbef: u16, vbef: u16) -> bool {
@@ -564,28 +602,51 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
         self.0.cartridge.as_mut().unwrap().sa1_mut()
     }
 
+    pub fn run_dma_normal(&mut self) {
+        todo!("SA-1 normal dma")
+    }
+
+    pub fn run_dma_character_conversion_type1(&mut self) {
+        todo!("SA-1 character conversion type 1 dma")
+    }
+
+    pub fn run_dma_character_conversion_type2(&mut self) {
+        todo!("SA-1 character conversion type 2 dma")
+    }
+
     pub fn run_cpu<const N: u16>(&mut self) {
         let sa1 = self.sa1_mut();
         let needs_refresh = sa1.ahead_cycles <= 0;
         sa1.ahead_cycles -= i32::from(N);
         if needs_refresh {
-            // > WAI/HALT stops the CPU until an exception (usually an IRQ or NMI) request occurs
-            // > in case of IRQs this works even if IRQs are disabled (via I=1).
-            // source: FullSNES
-            if sa1.cpu.wait_mode || sa1.control_flags & 0x60 != 0 {
-                sa1.cpu.wait_mode &= !sa1.shall_nmi && !sa1.shall_irq;
-                sa1.ahead_cycles += 1;
-                return;
-            }
             sa1.memory_cycles = 0;
-            let cycles = if sa1.shall_nmi {
-                sa1.shall_nmi = false;
-                self.nmi()
-            } else if sa1.shall_irq && !sa1.cpu.regs.status.has(crate::cpu::Status::IRQ_DISABLE) {
-                sa1.shall_irq = false;
-                self.irq()
+            let cycles = if sa1.dma.running != dma_modes::STOPPED {
+                match sa1.dma.running {
+                    dma_modes::NORMAL => self.run_dma_normal(),
+                    dma_modes::TYPE1 => self.run_dma_character_conversion_type1(),
+                    dma_modes::TYPE2 => self.run_dma_character_conversion_type2(),
+                    _ => panic!("unknown dma mode"),
+                }
+                0
             } else {
-                self.dispatch_instruction() * 6
+                // > WAI/HALT stops the CPU until an exception (usually an IRQ or NMI) request occurs
+                // > in case of IRQs this works even if IRQs are disabled (via I=1).
+                // source: FullSNES
+                if sa1.cpu.wait_mode || sa1.control_flags & 0x60 != 0 {
+                    sa1.cpu.wait_mode &= !sa1.shall_nmi && !sa1.shall_irq;
+                    sa1.ahead_cycles += 1;
+                    return;
+                }
+                if sa1.shall_nmi {
+                    sa1.shall_nmi = false;
+                    self.nmi()
+                } else if sa1.shall_irq && !sa1.cpu.regs.status.has(crate::cpu::Status::IRQ_DISABLE)
+                {
+                    sa1.shall_irq = false;
+                    self.irq()
+                } else {
+                    self.dispatch_instruction() * 6
+                }
             };
             let sa1 = self.sa1_mut();
             self.sa1_mut().ahead_cycles += ((cycles + sa1.memory_cycles) >> 2).max(1) as i32;
@@ -654,6 +715,13 @@ impl Cartridge {
                 // CFR - SA-1 Control flags
                 (sa1.control_flags & 0xf) | sa1.sa1_interrupt_trigger
             }
+            (0x2302..=0x2305, SA1) => {
+                // HCR/VCR - Timer read
+                if id == 0x2302 {
+                    sa1.timer.latch();
+                }
+                sa1.timer.get_count_byte(id)
+            }
             (0x2306..=0x230a, SA1) => {
                 // MR - Arithmetics result
                 sa1.arithmetics.res.to_le_bytes()[usize::from(id - 0x2306)]
@@ -664,8 +732,7 @@ impl Cartridge {
             }
             (0x230c | 0x230d, SA1) => {
                 // VDP - VarLen read port
-                let res = self.read_varlen(id == 0x230d).to_le_bytes()[usize::from(id & 1)];
-                res
+                self.read_varlen(id == 0x230d)
             }
             (0x2200..=0x22ff | 0x2301..=0x23ff, SNES)
             | (0x2200..=0x2300 | 0x230e..=0x23ff, SA1) => return None,
@@ -795,9 +862,46 @@ impl Cartridge {
                 sa1.dma.vram_width = 1 << ((val >> 2) & 7);
                 sa1.dma.terminate = val & 0x80 > 0;
             }
+            (0x2232..=0x2234, _) => {
+                // SDA - DMA source address
+                let mut bytes = sa1.dma.src.to_bytes();
+                bytes[usize::from(id - 0x2232)] = val;
+                sa1.dma.src = Addr24::from_bytes(&bytes);
+            }
+            (0x2235..=0x2237, _) => {
+                // SDA - DMA source address
+                let mut bytes = sa1.dma.dst.to_bytes();
+                bytes[usize::from(id - 0x2235)] = val;
+                sa1.dma.dst = Addr24::from_bytes(&bytes);
+                if sa1.dma.enable {
+                    if !sa1.dma.char_conversion {
+                        if let (0x2236, false) | (0x2237, true) =
+                            (id, sa1.dma.direction.is_dst_bwram())
+                        {
+                            sa1.dma.running = dma_modes::NORMAL
+                        }
+                    } else if id == 0x2236 && sa1.dma.is_automatic {
+                        sa1.dma.running = dma_modes::TYPE1
+                    }
+                }
+            }
+            (0x2238 | 0x2239, SA1) => {
+                // DTC - DMA transfer byte counter
+                let mut bytes = sa1.dma.byte_counter.to_le_bytes();
+                bytes[usize::from(id - 0x2238)] = val;
+                sa1.dma.byte_counter = u16::from_le_bytes(bytes);
+            }
             (0x223f, SA1) => {
                 // BBF - BW-Ram bitmap mode
                 sa1.bwram_2bits = val & 0x80 > 0;
+            }
+            (0x2240..=0x224f, SA1) => {
+                // BRF - Character Conversion DMA Bit Map
+                sa1.dma.bit_map_file[usize::from((id >> 3) & 1)][usize::from(id & 0x7)] = val;
+                if id & 7 == 7 && sa1.dma.enable && sa1.dma.char_conversion && !sa1.dma.is_automatic
+                {
+                    sa1.dma.running = dma_modes::TYPE2
+                }
             }
             (0x2250, SA1) => {
                 // MCNT - Arithmetics Control
