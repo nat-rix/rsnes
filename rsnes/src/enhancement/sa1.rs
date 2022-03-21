@@ -9,7 +9,7 @@
 
 use crate::{
     cartridge::Cartridge,
-    cpu::Cpu,
+    cpu::{Cpu, Status},
     device::{Addr24, Data, Device},
     instr::{AccessType, DeviceAccess},
 };
@@ -371,8 +371,6 @@ pub struct Sa1 {
     blocks: [Block; 4],
     cpu: Cpu,
     ahead_cycles: i32,
-    shall_nmi: bool,
-    shall_irq: bool,
     vectors: Vectors,
     snes_control_flags: u8,
     control_flags: u8,
@@ -416,8 +414,6 @@ impl Sa1 {
             ],
             cpu: Cpu::new(),
             ahead_cycles: 80,
-            shall_nmi: false,
-            shall_irq: false,
             vectors: Vectors::new(),
             snes_control_flags: 0,
             control_flags: 0x20,
@@ -480,6 +476,25 @@ impl Sa1 {
 
     pub const fn get_irq_vector(&self) -> u16 {
         self.vectors.get_irq()
+    }
+
+    pub fn shall_nmi(&mut self) -> bool {
+        let nmi = self.control_flags & !self.sa1_interrupt_acknowledge & 0x10 > 0;
+        if nmi {
+            self.sa1_interrupt_trigger |= 0x10;
+            self.sa1_interrupt_acknowledge |= 0x10;
+        }
+        nmi
+    }
+
+    pub fn shall_irq(&mut self) -> bool {
+        if self.cpu.regs.status.has(Status::IRQ_DISABLE) {
+            false
+        } else {
+            let irq = 0xe0 & self.sa1_interrupt_enable & !self.sa1_interrupt_acknowledge;
+            self.sa1_interrupt_trigger |= 1u8 << irq.trailing_zeros();
+            irq > 0
+        }
     }
 
     pub fn lorom_addr(&self, addr: Addr24) -> u32 {
@@ -616,6 +631,9 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
 
     pub fn run_cpu<const N: u16>(&mut self) {
         let sa1 = self.sa1_mut();
+        if !sa1.cpu.active {
+            return;
+        }
         let needs_refresh = sa1.ahead_cycles <= 0;
         sa1.ahead_cycles -= i32::from(N);
         if needs_refresh {
@@ -633,16 +651,13 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
                 // > in case of IRQs this works even if IRQs are disabled (via I=1).
                 // source: FullSNES
                 if sa1.cpu.wait_mode || sa1.control_flags & 0x60 != 0 {
-                    sa1.cpu.wait_mode &= !sa1.shall_nmi && !sa1.shall_irq;
+                    sa1.cpu.wait_mode &= !sa1.shall_nmi() && !sa1.shall_irq();
                     sa1.ahead_cycles += 1;
                     return;
                 }
-                if sa1.shall_nmi {
-                    sa1.shall_nmi = false;
+                if sa1.shall_nmi() {
                     self.nmi()
-                } else if sa1.shall_irq && !sa1.cpu.regs.status.has(crate::cpu::Status::IRQ_DISABLE)
-                {
-                    sa1.shall_irq = false;
+                } else if sa1.shall_irq() {
                     self.irq()
                 } else {
                     self.dispatch_instruction() * 6
@@ -653,7 +668,8 @@ impl<'a, B: crate::backend::AudioBackend, FB: crate::backend::FrameBuffer>
         }
         let sa1 = self.sa1_mut();
         if sa1.timer.tick(N) {
-            sa1.shall_irq = true;
+            sa1.sa1_interrupt_trigger |= 0x40;
+            sa1.sa1_interrupt_acknowledge &= !(sa1.sa1_interrupt_enable & 0x40);
         }
     }
 }
