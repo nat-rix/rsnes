@@ -1,9 +1,10 @@
 # rsnes
-
 <div align='center'>
   <img src='https://user-images.githubusercontent.com/26610181/131219139-4b2c12ca-cc3d-4a72-827c-1c83476a4401.png'
        alt='rsnes logo' width='384cm' align='center'>
 </div>
+
+<br>
 
 A [SNES](https://en.wikipedia.org/wiki/Super_Nintendo_Entertainment_System)
 emulator written in [Rust](https://www.rust-lang.org/)
@@ -20,6 +21,7 @@ Super Street Fighter II.
 In the default configuration, controller port 1 is connected to a
 standard controller and port 2 is left unconnected.
 These keyboard keys will drive controller 1:
+<div align="center">
 
 | Keyboard key on QWERTY | Controller key       |
 |------------------------|----------------------|
@@ -37,6 +39,8 @@ These keyboard keys will drive controller 1:
 | **;** *\**             | **Y**                |
 | 0-9                    | Store Save State 0-9 |
 | Shift + 0-9            | Load Save State 0-9  |
+
+</div>
 
 *\** the button right of *L*
 
@@ -114,3 +118,7 @@ This is a set of features to be implemented in the future (sorted by priority)
 
 Contributions of any kind (bug reports, feature requests, pull requests, …) are
 very welcome.
+
+## License
+
+This project is licensed under the MIT License. See the  [LICENSE](https://github.com/nat-rix/rsnes/blob/main/LICENSE) file for more details.
